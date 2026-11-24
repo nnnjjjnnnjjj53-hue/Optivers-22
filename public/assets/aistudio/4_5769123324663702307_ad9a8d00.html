@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OptiVerse — نموذج تفاعلي</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+:root{--acc:#14B8A6}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:#0B1320;color:#e6edf3;font-family:'Cairo',system-ui,sans-serif}
+body{background:radial-gradient(1200px 600px at 80% -10%,rgba(20,184,166,.13),transparent 60%),radial-gradient(900px 500px at 0% 40%,rgba(56,189,248,.07),transparent 60%),#0B1320;min-height:100vh}
+.glass{background:rgba(255,255,255,.05);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.10)}
+.glass-s{background:rgba(11,19,32,.78);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.09)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.45rem;font-weight:700;border-radius:.9rem;padding:.6rem 1.05rem;transition:.2s;cursor:pointer;font-size:.88rem;border:1px solid transparent;white-space:nowrap;font-family:inherit}
+.btn-p{background:var(--acc);color:#04201c;box-shadow:0 0 26px -6px var(--acc)}
+.btn-p:hover{filter:brightness(1.12);transform:translateY(-1px)}
+.btn-g{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.13);color:#e6edf3}
+.btn-g:hover{background:rgba(255,255,255,.13)}
+.btn-d{background:rgba(239,68,68,.12);color:#fca5a5;border-color:rgba(239,68,68,.3)}
+.btn-sm{padding:.35rem .7rem;font-size:.78rem;border-radius:.7rem}
+.inp{width:100%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.13);border-radius:.8rem;padding:.6rem .9rem;outline:none;color:#fff;font-family:inherit;font-size:.9rem}
+.inp:focus{border-color:var(--acc)}
+select.inp option{background:#0B1320}
+.tx-acc{color:var(--acc)}
+.bg-acc{background:var(--acc)}
+.bd-acc{border-color:var(--acc)}
+.chip{padding:.35rem .85rem;border-radius:999px;font-size:.8rem;font-weight:600;border:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.05);cursor:pointer;transition:.2s;white-space:nowrap}
+.chip.on{background:var(--acc);color:#04201c;border-color:var(--acc)}
+.badge{display:inline-flex;align-items:center;gap:.3rem;padding:.15rem .6rem;border-radius:999px;font-size:.72rem;font-weight:700}
+.b-ok{background:rgba(34,197,94,.15);color:#86efac}.b-warn{background:rgba(245,158,11,.15);color:#fcd34d}.b-bad{background:rgba(239,68,68,.15);color:#fca5a5}.b-info{background:rgba(56,189,248,.15);color:#7dd3fc}.b-acc{background:rgba(20,184,166,.18);color:#5eead4}
+.noscroll::-webkit-scrollbar{display:none}.noscroll{scrollbar-width:none}
+::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:9px}
+@keyframes pulseDot{0%,100%{r:3.2;opacity:1}50%{r:5.5;opacity:.55}}
+@keyframes scan{0%{transform:translateY(40px)}100%{transform:translateY(330px)}}
+@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@keyframes pop{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:none}}
+.fade{animation:fadeUp .35s ease both}.pop{animation:pop .22s ease both}
+.dotp{animation:pulseDot 1.8s ease-in-out infinite}
+.scanline{animation:scan 2.4s ease-in-out infinite alternate}
+.floaty{animation:floaty 4s ease-in-out infinite}
+.gradtx{background:linear-gradient(120deg,#5eead4,#14B8A6 40%,#38bdf8);-webkit-background-clip:text;background-clip:text;color:transparent}
+.grid-bg{background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);background-size:28px 28px}
+input[type=range]{accent-color:var(--acc);width:100%}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useMemo,useEffect,useRef,createContext,useContext}=React;
+const Ctx=createContext();
+const fmt=n=>Number(n).toLocaleString('en-US');
+const Egp=({v})=><span>{fmt(v)} <span className="text-[.75em] opacity-70">ج.م</span></span>;
+
+/* ---------- Icons ---------- */
+const P={
+home:"M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M9 22V12h6v10",
+heart:"M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z",
+bag:"M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z M3 6h18 M16 10a4 4 0 0 1-8 0",
+users:"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M22 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75",
+chart:"M12 20V10 M18 20V4 M6 20v-4",
+check:"M20 6 9 17l-5-5",
+x:"M18 6 6 18 M6 6l12 12",
+plus:"M12 5v14 M5 12h14",
+search:"M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16 M21 21l-4.3-4.3",
+copy:"M9 9h11v11H9z M5 15V4h11",
+share:"M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8 M16 6l-4-4-4 4 M12 2v13",
+camera:"M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8",
+eye:"M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7 M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6",
+spark:"M12 3l1.9 5.8L20 10.7l-5.8 1.9L12 18.5l-1.9-5.9L4.3 10.7l5.8-1.9z M19 3v4 M17 5h4",
+bell:"M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9 M10.3 21a1.94 1.94 0 0 0 3.4 0",
+receipt:"M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1z M8 8h8 M8 12h8",
+gear:"M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M12 2v3 M12 19v3 M2 12h3 M19 12h3 M4.9 4.9l2.1 2.1 M17 17l2.1 2.1 M19.1 4.9 17 7 M7 17l-2.1 2.1",
+store:"M3 9l1-5h16l1 5 M3 9a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0 M5 12v9h14v-9",
+box:"M21 8 12 3 3 8v8l9 5 9-5z M3 8l9 5 9-5 M12 13v8",
+crown:"M2 19l2-11 5 5 3-8 3 8 5-5 2 11z",
+info:"M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20 M12 16v-4 M12 8h.01",
+wallet:"M20 12V8H6a2 2 0 0 1 0-4h12v4 M4 6v12a2 2 0 0 0 2 2h14v-4 M18 12a2 2 0 0 0 0 4h4v-4z",
+pause:"M6 4h4v16H6z M14 4h4v16h-4z",
+play:"M6 4l14 8-14 8z",
+refresh:"M3 12a9 9 0 0 1 15-6.7L21 8 M21 3v5h-5 M21 12a9 9 0 0 1-15 6.7L3 16 M3 21v-5h5",
+enter:"M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4 M10 17l5-5-5-5 M15 12H3",
+cols:"M3 3h18v18H3z M12 3v18",
+glasses:"M6 18a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M18 18a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M10 14h4 M2 14l2-8 M22 14l-2-8",
+scan:"M3 7V5a2 2 0 0 1 2-2h2 M17 3h2a2 2 0 0 1 2 2v2 M21 17v2a2 2 0 0 1-2 2h-2 M7 21H5a2 2 0 0 1-2-2v-2 M7 12h10",
+shield:"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10",
+zap:"M13 2 3 14h9l-1 8 10-12h-9z",
+trend:"M22 7 13.5 15.5l-5-5L2 17 M16 7h6v6",
+link:"M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7 M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7",
+msg:"M21 11.5a8.4 8.4 0 0 1-12.4 7.4L3 21l2-5.4A8.4 8.4 0 1 1 21 11.5z",
+trash:"M3 6h18 M8 6V4h8v2 M19 6l-1 14H6L5 6",edit:"M12 20h9 M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z",
+star:"M12 2l3 7h7l-5.5 4.5 2 7.5L12 17l-6.5 4 2-7.5L2 9h7z",
+lock:"M5 11h14v10H5z M8 11V7a4 4 0 0 1 8 0v4",
+upload:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12",
+sun:"M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M12 2v2 M12 20v2 M4.9 4.9l1.4 1.4 M17.7 17.7l1.4 1.4 M2 12h2 M20 12h2 M4.9 19.1l1.4-1.4 M17.7 6.3l1.4-1.4",
+dollar:"M12 2v20 M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
+dl:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3",
+left:"M15 18l-6-6 6-6",
+rot:"M21 12a9 9 0 1 1-3-6.7 M21 3v6h-6",
+phone:"M7 2h10v20H7z M11 18h2"
+};
+const I=({n,s=18,c=''})=><svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={c}><path d={P[n]||P.info}/></svg>;
+
+/* ---------- Data ---------- */
+const FRAME_COLORS=[['ذهبي','#C9A24B'],['أسود','#1a1a1a'],['فضي','#C0C7D1'],['تركواز','#14B8A6'],['بني','#7a4a2b'],['أزرق','#2b4fa8']];
+const LENS_COLORS=[['رمادي','#475569'],['بني','#8b5a2b'],['أخضر','#166534'],['أزرق','#1d4ed8'],['شفاف','#cfe8ff']];
+const TYPES={aviator:'Aviator',wayfarer:'Wayfarer',rimless:'Rimless',round:'Round',cat:'Cat-Eye'};
+const CATS={sun:'شمسية',med:'طبية',safe:'حماية'};
+const SHAPES={oval:'بيضاوي',round:'دائري',square:'مربع'};
+const PRODUCTS0=[
+ {id:1,name:'أفياتور كلاسيك',type:'aviator',cat:'sun',price:850,frame:'#C9A24B',lens:'#475569',shapes:['oval','square']},
+ {id:2,name:'وايفيرر بلاك',type:'wayfarer',cat:'sun',price:720,frame:'#1a1a1a',lens:'#475569',shapes:['oval','round']},
+ {id:3,name:'ريملس لايت',type:'rimless',cat:'med',price:950,frame:'#C0C7D1',lens:'#cfe8ff',shapes:['oval','round','square']},
+ {id:4,name:'راوند ريترو',type:'round',cat:'med',price:680,frame:'#7a4a2b',lens:'#cfe8ff',shapes:['square','oval']},
+ {id:5,name:'كات آي أنيقة',type:'cat',cat:'sun',price:790,frame:'#14B8A6',lens:'#8b5a2b',shapes:['round','oval']},
+ {id:6,name:'سيف بلو',type:'wayfarer',cat:'safe',price:640,frame:'#2b4fa8',lens:'#cfe8ff',shapes:['round','oval','square']},
+];
+PRODUCTS0.forEach((p,i)=>{p.code='FR-'+(1001+i)});
+const LENS_TYPES0=[{id:'plastic',name:'بلاستيك عادي',en:'Plastic',desc:'خفيفة وأساسية للاستخدام اليومي',price:250,icon:'eye'},{id:'glass',name:'زجاج',en:'Glass',desc:'أعلى وضوح ومقاومة للخدش',price:350,icon:'shield'},{id:'ar',name:'أنتي ريفليكشن',en:'Anti-Reflection',desc:'تقلل الانعكاس والوهج وتحسّن الرؤية ليلاً',price:450,icon:'sun'},{id:'bluecut',name:'بلو كات',en:'Blue Cut',desc:'تحجب جزءاً من الضوء الأزرق للشاشات',price:650,icon:'shield'},{id:'bluectrl',name:'بلو كنترول',en:'Blue Control',desc:'أعلى حماية من الضوء الأزرق مع وضوح الألوان',price:850,icon:'spark'}];
+const BRANDS0=[{id:'best',name:'بيست',en:'Best',price:0},{id:'biven',name:'بيفين',en:'Biven',price:100},{id:'square',name:'سكوير',en:'Square',price:150},{id:'kor',name:'كوري HCL',en:'Korean HCL',price:250},{id:'ita',name:'إيطالي',en:'Italian',price:350},{id:'ger',name:'ألماني بيكسل',en:'German Pixel',price:500}];
+const EXTRAS0=[{id:'scr',name:'مقاومة الخدوش',price:200},{id:'dust',name:'طارد للماء والأتربة',price:250},{id:'fog',name:'مضاد للضباب',price:150}];
+const SHOPS0=[
+ {id:1,name:'دهب للبصريات',city:'القاهرة',plan:'احترافية',days:3,status:'soon',exp:'24 نوفمبر',slug:'dahab-optics',price:1200},
+ {id:2,name:'مودرن أفياتور',city:'الإسكندرية',plan:'احترافية',days:21,status:'active',exp:'12 ديسمبر',slug:'modern-aviator',price:1200},
+ {id:3,name:'رؤية ستور',city:'الجيزة',plan:'أساسية',days:5,status:'soon',exp:'26 نوفمبر',slug:'roya-store',price:600},
+ {id:4,name:'نظرة بلس',city:'المنصورة',plan:'أساسية',days:40,status:'active',exp:'31 ديسمبر',slug:'nazra-plus',price:600},
+ {id:5,name:'عدسات النيل',city:'أسيوط',plan:'أساسية',days:2,status:'soon',exp:'23 نوفمبر',slug:'nile-lenses',price:600},
+ {id:6,name:'بريق للبصريات',city:'طنطا',plan:'احترافية',days:12,status:'active',exp:'3 ديسمبر',slug:'bariq-optics',price:1200},
+ {id:7,name:'أوبتيكا مصر',city:'القاهرة',plan:'أساسية',days:6,status:'soon',exp:'27 نوفمبر',slug:'optica-misr',price:600},
+ {id:8,name:'لمحة للنظارات',city:'الإسماعيلية',plan:'أساسية',days:6,status:'soon',exp:'27 نوفمبر',slug:'lamha',price:600},
+ {id:9,name:'زوايا النظر',city:'بورسعيد',plan:'احترافية',days:18,status:'paused',exp:'9 ديسمبر',slug:'zawaya',price:1200},
+];
+const INQ0=[
+ {id:'#Q-311',kind:'rx',cust:'سارة أحمد',phone:'0111 555 8890',frameName:'ريملس لايت',type:'rimless',frame:'#C0C7D1',lens:'#cfe8ff',lensName:'بلو كات',brandName:'بيفين',extrasTxt:'مقاومة الخدوش',fp:950,lensPrice:650,add:300,price:1900,img:'demo',rxn:1,notes:'نظري ضعيف في العين اليسرى وبشتغل على اللابتوب كتير',pd:'62',status:'new',time:'منذ 25 دقيقة'},
+ {id:'#Q-310',kind:'rx',cust:'كريم حسن',phone:'0122 340 7712',frameName:'وايفيرر بلاك',type:'wayfarer',frame:'#1a1a1a',lens:'#475569',lensName:'أنتي ريفليكشن',brandName:'كوري HCL',extrasTxt:'بدون إضافات',fp:720,lensPrice:450,add:250,price:1420,img:'demo',rxn:2,notes:'',pd:'64',status:'new',time:'منذ ساعة'},
+ {id:'#Q-309',kind:'rx',cust:'يوسف سمير',phone:'0106 221 9087',frameName:'كات آي أنيقة',type:'cat',frame:'#14B8A6',lens:'#8b5a2b',lensName:'بلاستيك عادي',brandName:'بيست',extrasTxt:'طارد للماء والأتربة',fp:790,lensPrice:250,add:250,price:1290,img:null,rxn:0,notes:'مش معايا الكشف دلوقتي، ممكن أجي المحل؟',pd:'',status:'new',time:'منذ 3 ساعات'},
+ {id:'#Q-305',kind:'rx',cust:'منى إبراهيم',phone:'0155 908 1234',frameName:'سيف بلو',type:'wayfarer',frame:'#2b4fa8',lens:'#cfe8ff',lensName:'بلو كنترول',brandName:'ألماني بيكسل',extrasTxt:'مضاد للضباب',fp:640,lensPrice:850,add:650,price:2140,img:'demo',rxn:3,notes:'',pd:'61',status:'confirmed',final:2140,time:'أمس'},
+];
+const faceMatch=(p,shape)=>p.shapes.includes(shape)?90+((p.id*3)%9):68+((p.id*5)%10);
+
+/* ---------- Glasses & Face ---------- */
+const LENS={
+ aviator:{d:"M-36,-15 Q0,-24 36,-15 Q41,14 9,27 Q-30,29 -38,3 Z",w:3,fill:.3},
+ wayfarer:{d:"M-38,-16 L36,-20 Q40,-20 39,-14 L35,12 Q31,24 12,24 L-24,24 Q-38,22 -39,8 Z",w:6.5,fill:.42},
+ rimless:{d:"M0,-22 C28,-22 38,-10 38,2 C38,18 20,25 0,25 C-24,25 -38,16 -38,2 C-38,-12 -22,-22 0,-22Z",w:1,fill:.22},
+ round:{d:"M-30,0 a30,30 0 1 0 60,0 a30,30 0 1 0 -60,0",w:3.5,fill:.3},
+ cat:{d:"M-38,-4 Q-36,-24 -6,-20 Q22,-18 40,-26 Q42,4 34,16 Q26,26 4,26 Q-36,26 -38,-4Z",w:4.5,fill:.34},
+};
+function Glasses({type='aviator',frame='#C9A24B',lens='#475569',yaw=0}){
+ const L=LENS[type]||LENS.aviator;
+ const r=yaw*Math.PI/180, sx=Math.max(Math.cos(r),.32), sh=Math.sin(r);
+ const lensEl=<path d={L.d} fill={lens} fillOpacity={L.fill} stroke={frame} strokeWidth={L.w} strokeLinejoin="round"/>;
+ const bw=type==='wayfarer'?5:type==='rimless'?1.4:3;
+ const bridge=type==='aviator'?<g stroke={frame} strokeWidth="2.4" fill="none"><path d="M-11,-10 Q0,-17 11,-10"/><path d="M-10,-2 Q0,-8 10,-2"/></g>:<path d="M-9,-8 Q0,-15 9,-8" stroke={frame} strokeWidth={bw} fill="none"/>;
+ const ex=84*sx, len=Math.abs(sh)*100+8, tw=type==='rimless'?1.5:type==='wayfarer'?6:3;
+ return <g>
+  <g transform={`scale(${sx} 1)`}>
+   <g transform="translate(47,0)">{lensEl}</g>
+   <g transform="translate(-47,0) scale(-1,1)">{lensEl}</g>
+   {bridge}
+  </g>
+  <g stroke={frame} strokeWidth={tw} strokeLinecap="round" fill="none">
+   <path d={`M${ex},-12 L${ex+(sh>=0?len:8)},-6`}/>
+   <path d={`M${-ex},-12 L${-ex-(sh<0?len:8)},-6`}/>
+  </g>
+ </g>;
+}
+function MiniGlasses({type,frame,lens,w=70}){
+ return <svg viewBox="-110 -34 220 68" width={w} height={w*.31}><Glasses type={type} frame={frame} lens={lens}/></svg>;
+}
+function Face({shape='oval',type,frame,lens,yaw=0,tracking=true,scan=false,pd=true,scale=1}){
+ const r=yaw*Math.PI/180, c=Math.cos(r)*.9+.1, tx=yaw*1.1;
+ const head=shape==='round'?<ellipse cx="150" cy="176" rx="94" ry="102"/>:shape==='square'?<path d="M64,112 Q64,72 150,70 Q236,72 236,112 L234,205 Q230,268 150,286 Q70,268 66,205 Z"/>:<ellipse cx="150" cy="172" rx="80" ry="116"/>;
+ const pts=[[115,150],[185,150],[150,162],[150,205],[72,155],[228,155],[150,289],[88,242],[212,242],[150,72],[120,242],[180,242]];
+ return <svg viewBox="0 0 300 360" className="w-full h-full" style={{overflow:'visible'}}>
+  <defs><linearGradient id="skin" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#f0c6a2"/><stop offset="1" stopColor="#d49c78"/></linearGradient>
+  <linearGradient id="shirt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#134e4a"/><stop offset="1" stopColor="#0b2a2e"/></linearGradient></defs>
+  <path d="M10,362 Q22,300 100,290 L200,290 Q278,300 290,362 Z" fill="url(#shirt)"/>
+  <rect x="124" y="262" width="52" height="40" rx="14" fill="#d49c78"/>
+  <g transform={`translate(${150-150*c+tx*.4} 0) scale(${c} 1)`}>
+   <circle cx="68" cy="176" r="13" fill="#dba883"/><circle cx="232" cy="176" r="13" fill="#dba883"/>
+   <g fill="url(#skin)">{head}</g>
+   <path d="M60,160 Q42,50 150,42 Q258,50 240,160 Q226,96 150,92 Q74,96 60,160Z" fill="#1c1917"/>
+   <g stroke="#1c1917" strokeWidth="4" strokeLinecap="round" fill="none"><path d="M96,134 Q115,126 134,133"/><path d="M166,133 Q185,126 204,134"/></g>
+   <ellipse cx="115" cy="152" rx="13" ry="7" fill="#fff"/><ellipse cx="185" cy="152" rx="13" ry="7" fill="#fff"/>
+   <circle cx="115" cy="152" r="5" fill="#3b2314"/><circle cx="185" cy="152" r="5" fill="#3b2314"/>
+   <path d="M150,158 Q142,196 138,204 Q150,212 162,204" stroke="#b9805e" strokeWidth="3" fill="none" strokeLinecap="round"/>
+   <path d="M124,244 Q150,262 176,244" stroke="#9a4b4b" strokeWidth="4" fill="none" strokeLinecap="round"/>
+  </g>
+  <g transform={`translate(${tx} 0)`}>
+   <g transform="translate(150,152) scale(.76)"><Glasses type={type} frame={frame} lens={lens} yaw={yaw}/></g>
+   {tracking&&<g>
+    {pts.map((p,i)=><circle key={i} cx={p[0]} cy={p[1]} r="3.2" fill="#14B8A6" className="dotp" style={{animationDelay:(i*.15)+'s'}}/>)}
+    <g stroke="rgba(20,184,166,.45)" strokeWidth="1" fill="none"><path d="M115,150L150,162L185,150M72,155L115,150M185,150L228,155M88,242L150,289L212,242M150,72L150,162"/></g>
+    {pd&&<g><path d="M115,124 L185,124 M115,119 L115,129 M185,119 L185,129" stroke="#5eead4" strokeWidth="1.5"/><rect x="118" y="100" width="64" height="18" rx="9" fill="rgba(11,19,32,.85)" stroke="#14B8A6"/><text x="150" y="113" textAnchor="middle" fontSize="10.5" fill="#5eead4" fontWeight="700">PD: 63mm</text></g>}
+   </g>}
+  </g>
+  {scan&&<g className="scanline"><rect x="40" y="0" width="220" height="3" fill="#5eead4" opacity=".9"/><rect x="40" y="-24" width="220" height="24" fill="url(#skin)" opacity="0"/></g>}
+ </svg>;
+}
+function Corners(){return <>{['top-3 right-3 border-t-2 border-r-2','top-3 left-3 border-t-2 border-l-2','bottom-3 right-3 border-b-2 border-r-2','bottom-3 left-3 border-b-2 border-l-2'].map(c=><span key={c} className={'absolute w-6 h-6 rounded-sm bd-acc '+c}/>)}</>;}
+function Viewer3D({p,size='h-64'}){
+ const [yaw,setYaw]=useState(25); const drag=useRef(null);
+ return <div>
+  <div className={'rounded-2xl grid-bg glass relative overflow-hidden touch-none select-none cursor-grab '+size}
+   onPointerDown={e=>{drag.current=e.clientX;e.currentTarget.setPointerCapture(e.pointerId)}}
+   onPointerMove={e=>{if(drag.current!==null){setYaw(y=>Math.max(-70,Math.min(70,y+(e.clientX-drag.current)*.6)));drag.current=e.clientX}}}
+   onPointerUp={()=>drag.current=null}>
+   <Corners/>
+   <svg viewBox="-120 -60 240 120" className="w-full h-full p-3"><Glasses type={p.type} frame={p.frame} lens={p.lens} yaw={yaw}/></svg>
+   <span className="absolute bottom-2 start-3 text-[.7rem] opacity-70 flex items-center gap-1"><I n="rot" s={12}/> اسحب للتدوير 360°</span>
+  </div>
+  <input type="range" min="-70" max="70" value={yaw} onChange={e=>setYaw(+e.target.value)} className="mt-3"/>
+ </div>;
+}
+function Spin({p,w=120}){
+ const [t,setT]=useState(0);
+ useEffect(()=>{const i=setInterval(()=>setT(x=>x+1),90);return()=>clearInterval(i)},[]);
+ return <svg viewBox="-120 -50 240 100" width="100%" style={{maxWidth:w*2}}><Glasses type={p.type} frame={p.frame} lens={p.lens} yaw={Math.sin(t/9)*48}/></svg>;
+}
+function QR({size=150,seed='optiverse'}){
+ const n=25; let h=0; for(const ch of seed) h=(h*31+ch.charCodeAt(0))>>>0;
+ const rnd=()=>(h=(h*1664525+1013904223)>>>0)/4294967296;
+ const fin=(x,y)=>(x<8&&y<8)||(x>n-9&&y<8)||(x<8&&y>n-9);
+ const cells=[]; for(let y=0;y<n;y++)for(let x=0;x<n;x++){if(!fin(x,y)&&rnd()>.52)cells.push(<rect key={x+'-'+y} x={x} y={y} width="1" height="1"/>)}
+ const F=({x,y})=><g><rect x={x} y={y} width="7" height="7"/><rect x={x+1} y={y+1} width="5" height="5" fill="#fff"/><rect x={x+2} y={y+2} width="3" height="3"/></g>;
+ return <svg viewBox="-1 -1 27 27" width={size} height={size} style={{background:'#fff',borderRadius:12,padding:4}} fill="#0B1320">{cells}<F x={0} y={0}/><F x={n-7} y={0}/><F x={0} y={n-7}/></svg>;
+}
+
+/* ---------- UI helpers ---------- */
+function Modal({title,onClose,children,w='max-w-md'}){
+ return <div className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4" style={{background:'rgba(3,8,16,.72)',backdropFilter:'blur(4px)'}} onClick={onClose}>
+  <div className={'pop glass-s w-full '+w+' rounded-t-3xl sm:rounded-3xl p-5 max-h-[92vh] overflow-y-auto'} onClick={e=>e.stopPropagation()}>
+   <div className="flex items-center justify-between mb-4"><h3 className="font-extrabold text-lg">{title}</h3><button className="btn btn-g btn-sm !p-2" onClick={onClose}><I n="x" s={16}/></button></div>
+   {children}
+  </div></div>;
+}
+function Switch({on,onChange}){
+ return <button role="switch" aria-checked={on} onClick={()=>onChange(!on)} className="relative shrink-0 rounded-full transition" style={{width:46,height:26,background:on?'var(--acc)':'rgba(255,255,255,.16)'}}>
+  <span className="absolute rounded-full bg-white transition-all" style={{width:20,height:20,top:3,insetInlineStart:on?23:3}}/></button>;
+}
+function Stat({icon,label,value,sub,tone='b-acc',onClick}){
+ return <div onClick={onClick} className={'glass rounded-2xl p-4 '+(onClick?'cursor-pointer hover:bg-white/10 transition':'')}>
+  <div className="flex items-center justify-between mb-3"><span className="text-xs opacity-70">{label}</span><span className={'w-8 h-8 rounded-xl flex items-center justify-center '+tone}><I n={icon} s={16}/></span></div>
+  <div className="text-2xl font-extrabold">{value}</div>{sub&&<div className="mt-1 text-xs">{sub}</div>}
+ </div>;
+}
+const stBadge=s=>s==='active'?<span className="badge b-ok">نشط</span>:s==='soon'?<span className="badge b-warn">ينتهي قريباً</span>:<span className="badge b-bad">موقوف</span>;
+
+function LineChart({data,labels,h=220}){
+ const [i,setI]=useState(data.length-1);
+ const W=600,H=h,pad=28,max=Math.max(...data)*1.15,min=0;
+ const x=k=>pad+k*(W-pad*2)/(data.length-1), y=v=>H-pad-(v-min)/(max-min)*(H-pad*2);
+ const line=data.map((v,k)=>(k?'L':'M')+x(k)+','+y(v)).join(' ');
+ return <div>
+  <div className="flex items-baseline justify-between mb-2"><div><div className="text-xs opacity-60">{labels[i]}</div><div className="text-xl font-extrabold tx-acc"><Egp v={data[i]}/></div></div>
+   {i>0&&<span className="badge b-ok">{(((data[i]-data[i-1])/data[i-1])*100).toFixed(0)}%+ عن الشهر السابق</span>}</div>
+  <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{touchAction:'none'}}>
+   <defs><linearGradient id="ga" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#14B8A6" stopOpacity=".35"/><stop offset="1" stopColor="#14B8A6" stopOpacity="0"/></linearGradient></defs>
+   {[0,.25,.5,.75,1].map(g=><line key={g} x1={pad} x2={W-pad} y1={pad+g*(H-pad*2)} y2={pad+g*(H-pad*2)} stroke="rgba(255,255,255,.07)"/>)}
+   <path d={line+` L${x(data.length-1)},${H-pad} L${x(0)},${H-pad} Z`} fill="url(#ga)"/>
+   <path d={line} fill="none" stroke="#14B8A6" strokeWidth="3" strokeLinejoin="round"/>
+   {data.map((v,k)=><g key={k} onClick={()=>setI(k)} onMouseEnter={()=>setI(k)} style={{cursor:'pointer'}}>
+    <rect x={x(k)-(W/data.length/2)} y="0" width={W/data.length} height={H} fill="transparent"/>
+    <circle cx={x(k)} cy={y(v)} r={k===i?7:4} fill={k===i?'#14B8A6':'#0B1320'} stroke="#14B8A6" strokeWidth="2.5"/>
+    <text x={x(k)} y={H-6} textAnchor="middle" fontSize="11" fill={k===i?'#5eead4':'#8b9bb0'}>{labels[k]}</text></g>)}
+  </svg></div>;
+}
+function Bars({rows,max}){
+ const m=max||Math.max(...rows.map(r=>r[1]));
+ return <div className="space-y-3">{rows.map(r=><div key={r[0]}><div className="flex justify-between text-xs mb-1"><span>{r[0]}</span><span className="opacity-70">{fmt(r[1])}{r[2]||''}</span></div><div className="h-2.5 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full bg-acc" style={{width:(r[1]/m*100)+'%',transition:'width .6s'}}/></div></div>)}</div>;
+}
+
+/* ---------- Dashboard shell ---------- */
+function Shell({items,active,setActive,title,sub,children,highlight}){
+ return <div className="pt-14 min-h-screen lg:flex">
+  <aside className="hidden lg:block w-64 shrink-0 sticky top-14 h-[calc(100vh-3.5rem)] p-4 glass-s border-y-0 border-s-0 overflow-y-auto">
+   <div className="px-2 pb-4 mb-3 border-b border-white/10"><div className="font-extrabold">{title}</div><div className="text-xs opacity-60">{sub}</div></div>
+   {items.map(it=><button key={it[0]} onClick={()=>setActive(it[0])} className={'w-full flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1 text-sm font-semibold transition text-start '+(active===it[0]?'bg-acc text-[#04201c]':highlight===it[0]?'bg-teal-500/15 text-teal-200 ring-1 ring-teal-400/40 hover:bg-teal-500/25':'hover:bg-white/10 opacity-85')}><I n={it[2]} s={18}/>{it[1]}{it[3]>0&&<span className="ms-auto badge b-bad">{it[3]}</span>}{highlight===it[0]&&active!==it[0]&&<span className="ms-auto badge b-acc !text-[.62rem]">مهم</span>}</button>)}
+  </aside>
+  <div className="lg:hidden sticky top-14 z-30 glass-s overflow-x-auto noscroll"><div className="flex gap-2 p-2 w-max">
+   {items.map(it=><button key={it[0]} onClick={()=>setActive(it[0])} className={'chip flex items-center gap-1.5 '+(active===it[0]?'on':'')}><I n={it[2]} s={14}/>{it[1]}{it[3]>0&&<span className="min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[.62rem] flex items-center justify-center">{it[3]}</span>}</button>)}</div></div>
+  <main className="flex-1 p-4 lg:p-7 min-w-0 fade" key={active}>{children}</main>
+ </div>;
+}
+function Head({t,sub,children}){return <div className="flex flex-wrap items-center justify-between gap-3 mb-5"><div><h2 className="text-xl lg:text-2xl font-extrabold">{t}</h2>{sub&&<p className="text-sm opacity-60">{sub}</p>}</div><div className="flex gap-2 flex-wrap">{children}</div></div>;}
+
+/* ================= LANDING ================= */
+function Landing(){
+ const {go,toast,setModal}=useContext(Ctx);
+ const [k,setK]=useState('aviator');
+ const opts=[['aviator','Aviator','#C9A24B','#475569'],['wayfarer','Wayfarer','#1a1a1a','#334155'],['rimless','Rimless','#C0C7D1','#cfe8ff']];
+ const cur=opts.find(o=>o[0]===k);
+ const feats=[['zap','رفع فوري للموديلات','صوّر النظارة بجوالك وارفعها، ويحوّلها OptiVerse تلقائياً إلى موديل 3D جاهز للتجربة خلال دقائق.'],['spark','ترشيح ذكي لشكل الوجه','نكتشف شكل الوجه (بيضاوي، دائري، مربع) ونقترح الإطارات الأنسب من مخزون المحل مع نسبة تطابق.'],['share','مشاركة الأصدقاء وواتساب','أرسل تجربتك لأصدقائك واطلب رأيهم، ثم أكمل الطلب مباشرة مع المحل عبر واتساب.']];
+ return <div className="pt-14">
+  <header className="max-w-6xl mx-auto px-4 py-5 flex items-center justify-between">
+   <div className="flex items-center gap-2 font-extrabold text-xl"><span className="w-9 h-9 rounded-xl bg-acc text-[#04201c] flex items-center justify-center"><I n="glasses" s={20}/></span>Opti<span className="tx-acc">Verse</span></div>
+   <div className="flex gap-2"><button className="btn btn-g" onClick={()=>setModal('login')}>تسجيل الدخول</button><button className="btn btn-p" onClick={()=>setModal('signup')}>ابدأ الآن مجاناً</button></div>
+  </header>
+  <section className="max-w-6xl mx-auto px-4 pt-6 pb-16 grid lg:grid-cols-2 gap-10 items-center">
+   <div className="fade">
+    <span className="badge b-acc mb-4"><I n="spark" s={13}/> تقنية AR + ذكاء اصطناعي لمحلات النظارات</span>
+    <h1 className="text-4xl lg:text-5xl font-extrabold leading-[1.35] mb-4">اجعل نظارات محلك <span className="gradtx">تنبض بالحياة</span> بتقنية 3D</h1>
+    <p className="opacity-75 leading-8 mb-7 max-w-lg">متجرك الخاص برابط واحد: عملاؤك يجرّبون نظاراتك على وجوههم بالكاميرا، يشاهدونها من كل الزوايا، ويطلبون مباشرة عبر واتساب — وأنت تتحكم في كل شيء من لوحة واحدة.</p>
+    <div className="flex flex-wrap gap-3"><button className="btn btn-p !py-3 !px-6 !text-base" onClick={()=>setModal('signup')}><I n="store" s={18}/> أنشئ متجرك الآن</button><button className="btn btn-g !py-3 !px-6 !text-base" onClick={()=>go('store')}><I n="camera" s={18}/> جرب الكاميرا الحية</button></div>
+    <div className="flex gap-6 mt-8 text-sm opacity-80"><div><b className="text-lg tx-acc">64</b> محل مشترك</div><div><b className="text-lg tx-acc">128K</b> تجربة 3D</div><div><b className="text-lg tx-acc">4.9</b> رضا التجار</div></div>
+   </div>
+   <div className="relative floaty">
+    <div className="absolute -inset-6 rounded-[2rem] blur-3xl opacity-30 bg-acc"/>
+    <div className="relative glass rounded-3xl overflow-hidden">
+     <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/10"><span className="w-2.5 h-2.5 rounded-full bg-red-400"/><span className="w-2.5 h-2.5 rounded-full bg-amber-400"/><span className="w-2.5 h-2.5 rounded-full bg-green-400"/><span className="text-xs opacity-60 mx-auto">OptiVerse AR Studio — مباشر</span></div>
+     <div className="relative grid-bg aspect-[4/4.2] max-h-[430px] mx-auto"><Corners/>
+      <Face shape="oval" type={cur[0]} frame={cur[2]} lens={cur[3]} scan/>
+      <span className="absolute top-3 start-3 badge b-bad"><span className="w-1.5 h-1.5 rounded-full bg-red-400 dotp"/> LIVE</span>
+      <span className="absolute top-3 end-3 badge b-acc">تطابق 98% · بيضاوي</span>
+     </div>
+     <div className="grid grid-cols-3 gap-2 p-3 border-t border-white/10">
+      {opts.map(o=><button key={o[0]} onClick={()=>setK(o[0])} className={'rounded-2xl p-2 flex flex-col items-center gap-1 border transition '+(k===o[0]?'bd-acc bg-teal-500/15':'border-white/10 bg-white/5 hover:bg-white/10')}><MiniGlasses type={o[0]} frame={o[2]} lens={o[3]} w={86}/><span className="text-xs font-bold">{o[1]}</span></button>)}
+     </div>
+    </div>
+   </div>
+  </section>
+  <section className="max-w-6xl mx-auto px-4 pb-16 grid md:grid-cols-3 gap-5">
+   {feats.map((f,i)=><div key={i} className="glass rounded-3xl p-6 hover:-translate-y-1 hover:bg-white/10 transition"><span className="w-12 h-12 rounded-2xl b-acc flex items-center justify-center mb-4"><I n={f[0]} s={24}/></span><h3 className="font-extrabold text-lg mb-2">{f[1]}</h3><p className="text-sm opacity-70 leading-7">{f[2]}</p></div>)}
+  </section>
+  <section className="max-w-6xl mx-auto px-4 pb-16">
+   <h2 className="text-2xl font-extrabold text-center mb-8">باقات بسيطة تناسب حجم محلك</h2>
+   <div className="grid md:grid-cols-2 gap-5 max-w-3xl mx-auto">
+    {[['الباقة الأساسية',600,['حتى 50 نظارة 3D','رابط متجر + QR','طلبات عبر واتساب']],['الباقة الاحترافية',1200,['نظارات غير محدودة','ترشيح الذكاء الاصطناعي','مقارنة Split View + تقارير']]].map((p,i)=><div key={i} className={'rounded-3xl p-6 glass '+(i?'ring-2 ring-teal-400/60':'')}>
+     {i?<span className="badge b-acc mb-2">الأكثر طلباً</span>:null}<h3 className="font-extrabold text-lg">{p[0]}</h3><div className="text-3xl font-extrabold my-3 tx-acc">{fmt(p[1])} <span className="text-sm opacity-70">ج.م / شهرياً</span></div>
+     <ul className="space-y-2 text-sm mb-5">{p[2].map(x=><li key={x} className="flex gap-2 items-center"><I n="check" s={15} c="tx-acc"/>{x}</li>)}</ul><button className={'btn w-full '+(i?'btn-p':'btn-g')} onClick={()=>setModal('signup')}>ابدأ الآن</button></div>)}
+   </div>
+  </section>
+  <footer className="border-t border-white/10 py-6 text-center text-xs opacity-50">© 2026 OptiVerse — نموذج تجريبي بيانات وهمية</footer>
+ </div>;
+}
+
+/* ================= SUPER ADMIN ================= */
+function Admin(){
+ const {shops,setShops,toast,setModal,go,enterShop,extraShops,plans,setPlans}=useContext(Ctx);
+ const [sec,setSec]=useState('over');
+ const [range,setRange]=useState(6);
+ const [q,setQ]=useState(''); const [flt,setFlt]=useState('all');
+ const items=[['over','نظرة عامة والإيرادات','chart'],['shops','إدارة المحلات المشتركة','store'],['plans','الباقات والاشتراكات','crown'],['pay','المدفوعات والفواتير','receipt'],['stats','إحصائيات تقنية الـ 3D','box'],['set','إعدادات النظام والصلاحيات','gear']];
+ const m6=[21500,26800,31200,36900,41100,48500], m12=[9800,12400,14100,16800,18900,21500,26800,31200,36900,41100,48500,52300];
+ const l6=['يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر'], l12=['ديسمبر','يناير','فبراير','مارس','أبريل','مايو',...l6].slice(0,12);
+ const soon=shops.filter(s=>s.status==='soon').length;
+ const rows=shops.filter(s=>(flt==='all'||s.status===flt)&&s.name.includes(q));
+ const Table=({list})=><div className="glass rounded-2xl overflow-x-auto"><table className="w-full text-sm min-w-[720px]"><thead className="text-xs opacity-60"><tr className="border-b border-white/10">{['المحل','المدينة','الباقة','ينتهي في','الحالة','إجراءات'].map(h=><th key={h} className="p-3 text-start font-semibold">{h}</th>)}</tr></thead>
+  <tbody>{list.map(s=><tr key={s.id} className="border-b border-white/5 hover:bg-white/5"><td className="p-3 font-bold">{s.name}</td><td className="p-3 opacity-80">{s.city}</td><td className="p-3"><span className={'badge '+(s.plan==='احترافية'?'b-acc':'b-info')}>{s.plan}</span></td><td className="p-3 opacity-80">{s.exp} <span className="text-xs opacity-60">({s.days} يوم)</span></td><td className="p-3">{stBadge(s.status)}</td>
+   <td className="p-3"><div className="flex gap-1.5 flex-wrap"><button className="btn btn-g btn-sm" onClick={()=>setModal({t:'renew',s})}><I n="refresh" s={13}/> تجديد</button><button className="btn btn-g btn-sm" onClick={()=>{setShops(a=>a.map(x=>x.id===s.id?{...x,status:s.status==='paused'?'active':'paused'}:x));toast(s.status==='paused'?`تم استئناف ${s.name}`:`تم إيقاف ${s.name} مؤقتاً`)}}><I n={s.status==='paused'?'play':'pause'} s={13}/> {s.status==='paused'?'استئناف':'إيقاف مؤقت'}</button><button className="btn btn-p btn-sm" onClick={()=>enterShop(s)}><I n="enter" s={13}/> دخول كمتجر</button></div></td></tr>)}
+  {!list.length&&<tr><td colSpan="6" className="p-8 text-center opacity-60">لا توجد نتائج</td></tr>}</tbody></table></div>;
+ return <Shell items={items} active={sec} setActive={setSec} title="الإدارة العليا" sub="مالك المنصة · OptiVerse">
+  {sec==='over'&&<>
+   <Head t="نظرة عامة والإيرادات" sub="ملخص الأداء — نوفمبر 2026"><button className="btn btn-p" onClick={()=>setModal('addshop')}><I n="plus" s={16}/> إضافة محل يدوياً</button></Head>
+   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+    <Stat icon="dollar" label="إجمالي الإيرادات الشهرية" value={<Egp v={48500}/>} sub={<span className="badge b-ok">+18%</span>}/>
+    <Stat icon="store" label="المحلات النشطة" value={`${64+extraShops} محل`} sub={<span className="opacity-60">من إجمالي 71 مسجّل</span>}/>
+    <Stat icon="eye" label="إجمالي تجارب الـ 3D" value="128,400" sub={<span className="opacity-60">تجربة منذ البداية</span>}/>
+    <Stat icon="bell" tone="b-warn" label="تنبيه" value={`${soon} محلات`} sub={<span className="text-amber-300">اشتراكات تنتهي قريباً: {soon} محلات</span>} onClick={()=>{setFlt('soon');setSec('shops')}}/>
+   </div>
+   <div className="grid lg:grid-cols-3 gap-4 mb-5">
+    <div className="glass rounded-2xl p-5 lg:col-span-2"><div className="flex items-center justify-between mb-3"><h3 className="font-bold">نمو الإيرادات الشهرية</h3><div className="flex gap-1.5"><button className={'chip '+(range===6?'on':'')} onClick={()=>setRange(6)}>6 أشهر</button><button className={'chip '+(range===12?'on':'')} onClick={()=>setRange(12)}>12 شهر</button></div></div><LineChart key={range} data={range===6?m6:m12} labels={range===6?l6:l12}/></div>
+    <div className="glass rounded-2xl p-5"><h3 className="font-bold mb-1">التحكم السريع بالباقات</h3><p className="text-xs opacity-60 mb-4">فعّل أو أوقف الباقات المتاحة للتسجيل</p>
+     {plans.map(p=><div key={p.id} className="flex items-center justify-between p-3 rounded-xl bg-white/5 mb-2.5"><div><div className="font-bold text-sm">{p.name}</div><div className="text-xs opacity-70"><Egp v={p.price}/> / شهر</div></div><Switch on={p.on} onChange={v=>{setPlans(a=>a.map(x=>x.id===p.id?{...x,on:v}:x));toast(v?`تم تفعيل ${p.name}`:`تم إيقاف ${p.name}`)}}/></div>)}
+     <button className="btn btn-g w-full mt-2" onClick={()=>setModal('addshop')}><I n="plus" s={16}/> إضافة محل يدوياً</button></div>
+   </div>
+   <div className="flex items-center justify-between mb-3"><h3 className="font-bold">المحلات المشتركة</h3><button className="btn btn-g btn-sm" onClick={()=>setSec('shops')}>عرض الكل</button></div>
+   <Table list={shops.slice(0,5)}/>
+  </>}
+  {sec==='shops'&&<>
+   <Head t="إدارة المحلات المشتركة" sub={`${64+extraShops} محل نشط`}><button className="btn btn-p" onClick={()=>setModal('addshop')}><I n="plus" s={16}/> إضافة محل</button></Head>
+   <div className="flex flex-wrap gap-2 mb-4"><div className="relative flex-1 min-w-[200px]"><input className="inp ps-10" placeholder="ابحث باسم المحل..." value={q} onChange={e=>setQ(e.target.value)}/><span className="absolute top-1/2 -translate-y-1/2 start-3 opacity-50"><I n="search" s={16}/></span></div>
+    {[['all','الكل'],['active','نشط'],['soon','ينتهي قريباً'],['paused','موقوف']].map(f=><button key={f[0]} className={'chip '+(flt===f[0]?'on':'')} onClick={()=>setFlt(f[0])}>{f[1]}</button>)}</div>
+   <Table list={rows}/>
+  </>}
+  {sec==='plans'&&<>
+   <Head t="الباقات والاشتراكات" sub="عدّل الأسعار وفعّل الباقات"/>
+   <div className="grid md:grid-cols-2 gap-4">{plans.map(p=><div key={p.id} className="glass rounded-2xl p-5"><div className="flex justify-between items-start mb-3"><div><h3 className="font-extrabold text-lg">{p.name}</h3><span className="text-xs opacity-60">{shops.filter(s=>s.plan===(p.id===1?'أساسية':'احترافية')).length*7} مشترك</span></div><Switch on={p.on} onChange={v=>setPlans(a=>a.map(x=>x.id===p.id?{...x,on:v}:x))}/></div>
+    <label className="text-xs opacity-60">السعر الشهري (ج.م)</label><input className="inp my-2" type="number" value={p.price} onChange={e=>setPlans(a=>a.map(x=>x.id===p.id?{...x,price:+e.target.value}:x))}/>
+    <ul className="text-sm space-y-1.5 mt-3 opacity-85">{p.feats.map(f=><li key={f} className="flex gap-2"><I n="check" s={15} c="tx-acc"/>{f}</li>)}</ul><button className="btn btn-p mt-4" onClick={()=>toast('تم حفظ تعديلات الباقة')}>حفظ التعديلات</button></div>)}</div>
+  </>}
+  {sec==='pay'&&<>
+   <Head t="المدفوعات والفواتير" sub="آخر العمليات عبر InstaPay وفودافون كاش"><button className="btn btn-g" onClick={()=>toast('تم تجهيز تقرير المدفوعات (نموذج توضيحي)')}><I n="dl" s={16}/> تصدير</button></Head>
+   <div className="grid grid-cols-3 gap-3 mb-5"><Stat icon="check" label="مُحصّل" value={<Egp v={48500}/>}/><Stat icon="bell" tone="b-warn" label="معلّق" value={<Egp v={4200}/>}/><Stat icon="x" tone="b-bad" label="متأخر" value={<Egp v={1200}/>}/></div>
+   <div className="glass rounded-2xl overflow-x-auto"><table className="w-full text-sm min-w-[560px]"><thead className="text-xs opacity-60"><tr className="border-b border-white/10">{['رقم الفاتورة','المحل','المبلغ','الطريقة','الحالة'].map(h=><th key={h} className="p-3 text-start">{h}</th>)}</tr></thead><tbody>
+    {[['INV-2041','دهب للبصريات',1200,'InstaPay','ok'],['INV-2040','مودرن أفياتور',1200,'Vodafone Cash','ok'],['INV-2039','رؤية ستور',600,'InstaPay','wait'],['INV-2038','عدسات النيل',600,'Vodafone Cash','late'],['INV-2037','بريق للبصريات',1200,'InstaPay','ok']].map(r=><tr key={r[0]} className="border-b border-white/5"><td className="p-3 font-mono text-xs">{r[0]}</td><td className="p-3 font-bold">{r[1]}</td><td className="p-3"><Egp v={r[2]}/></td><td className="p-3 opacity-80">{r[3]}</td><td className="p-3"><span className={'badge '+(r[4]==='ok'?'b-ok':r[4]==='wait'?'b-warn':'b-bad')}>{r[4]==='ok'?'مدفوعة':r[4]==='wait'?'بانتظار التأكيد':'متأخرة'}</span></td></tr>)}</tbody></table></div>
+  </>}
+  {sec==='stats'&&<>
+   <Head t="إحصائيات تقنية الـ 3D" sub="استخدام التجربة الحية عبر المنصة"/>
+   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5"><Stat icon="eye" label="تجارب اليوم" value="1,284"/><Stat icon="box" label="موديلات 3D مرفوعة" value="3,920"/><Stat icon="share" label="مشاركات للأصدقاء" value="9,310"/><Stat icon="msg" label="طلبات واتساب" value="4,775"/></div>
+   <div className="grid lg:grid-cols-2 gap-4"><div className="glass rounded-2xl p-5"><h3 className="font-bold mb-4">الأكثر تجربةً (نوع الإطار)</h3><Bars rows={[['Aviator',41200],['Wayfarer',33800],['Round',22100],['Rimless',17300],['Cat-Eye',9600]]}/></div>
+   <div className="glass rounded-2xl p-5"><h3 className="font-bold mb-4">الأجهزة المستخدمة</h3><Bars rows={[['Android',54,'%'],['iPhone',38,'%'],['كمبيوتر',8,'%']]} max={100}/><h3 className="font-bold mt-6 mb-4">شكل الوجه المكتشف</h3><Bars rows={[['بيضاوي',46,'%'],['دائري',31,'%'],['مربع',23,'%']]} max={100}/></div></div>
+  </>}
+  {sec==='set'&&<>
+   <Head t="إعدادات النظام والصلاحيات" sub="تحكم في المنصة وفريق العمل"/>
+   <div className="grid lg:grid-cols-2 gap-4">
+    <div className="glass rounded-2xl p-5"><h3 className="font-bold mb-3">إعدادات عامة</h3>{[['التسجيل التلقائي للمحلات الجديدة',true],['إشعارات واتساب للتجار',true],['قفل رابط المتجر عند انتهاء الاشتراك',true],['وضع الصيانة',false]].map(r=><SettingRow key={r[0]} label={r[0]} def={r[1]}/>)}</div>
+    <div className="glass rounded-2xl p-5"><h3 className="font-bold mb-3">الصلاحيات</h3><table className="w-full text-sm"><thead className="text-xs opacity-60"><tr><th className="text-start p-2">الدور</th><th>المحلات</th><th>المدفوعات</th><th>الإعدادات</th></tr></thead><tbody>{[['مالك المنصة',1,1,1],['مدير دعم',1,0,0],['محاسب',0,1,0]].map(r=><tr key={r[0]} className="border-t border-white/5"><td className="p-2 font-bold">{r[0]}</td>{r.slice(1).map((v,i)=><td key={i} className="text-center"><PermCell def={!!v}/></td>)}</tr>)}</tbody></table><button className="btn btn-p mt-4" onClick={()=>toast('تم حفظ الصلاحيات')}>حفظ</button></div>
+   </div></>}
+ </Shell>;
+}
+function SettingRow({label,def}){const [v,setV]=useState(def);return <div className="flex items-center justify-between py-3 border-b border-white/5 text-sm"><span>{label}</span><Switch on={v} onChange={setV}/></div>;}
+function PermCell({def}){const [v,setV]=useState(def);return <button onClick={()=>setV(!v)} className={'w-7 h-7 rounded-lg inline-flex items-center justify-center '+(v?'b-acc':'bg-white/5 opacity-50')}>{v?<I n="check" s={15}/>:<I n="lock" s={13}/>}</button>;}
+
+/* ================= SHARED HELPERS ================= */
+const waNum=s=>String(s).replace(/\D/g,'').replace(/^0/,'20');
+const qBadge=s=>s==='new'?<span className="badge b-info">جديد</span>:s==='confirmed'?<span className="badge b-ok">تم تأكيد الملاءمة</span>:<span className="badge b-warn">تم اقتراح عدسة بديلة</span>;
+function Rx({n=1}){
+ const R=[['-2.25','-0.75','180','-2.00','-0.50','175'],['+1.50','-0.50','90','+1.25','-0.25','85'],['-3.00','-1.00','10','-2.75','-0.75','15'],['-1.25','0.00','0','-1.00','0.00','0']][n%4];
+ return <svg viewBox="0 0 300 380" className="w-full block" style={{background:'#f8fafc',borderRadius:10}}>
+  <rect x="0" y="0" width="300" height="56" fill="#0f766e"/>
+  <text x="150" y="26" textAnchor="middle" fontSize="17" fontWeight="800" fill="#fff">مركز الإبصار لفحص النظر</text>
+  <text x="150" y="44" textAnchor="middle" fontSize="10" fill="#ccfbf1">Vision Center — Eye Examination</text>
+  <text x="20" y="84" fontSize="11" fill="#334155">DATE: 12 / 11 / 2026</text>
+  <text x="280" y="84" textAnchor="end" fontSize="11" fill="#334155">PATIENT: ........</text>
+  <g fontSize="12" fill="#0f172a" textAnchor="middle">
+   {['','SPH','CYL','AXIS'].map((h,i)=><text key={i} x={[40,120,185,250][i]} y="122" fontWeight="800" fill="#0f766e">{h}</text>)}
+   <line x1="15" x2="285" y1="132" y2="132" stroke="#94a3b8"/>
+   <text x="40" y="160" fontWeight="800">OD</text>{[0,1,2].map(i=><text key={i} x={[120,185,250][i]} y="160">{R[i]}</text>)}
+   <line x1="15" x2="285" y1="174" y2="174" stroke="#e2e8f0"/>
+   <text x="40" y="202" fontWeight="800">OS</text>{[0,1,2].map(i=><text key={i} x={[120,185,250][i]} y="202">{R[i+3]}</text>)}
+   <line x1="15" x2="285" y1="216" y2="216" stroke="#94a3b8"/>
+   <text x="40" y="250" fontWeight="800">PD</text><text x="120" y="250">63 mm</text>
+   <text x="40" y="282" fontWeight="800">ADD</text><text x="120" y="282">—</text>
+  </g>
+  <rect x="15" y="300" width="270" height="34" rx="6" fill="#ecfeff" stroke="#a5f3fc"/>
+  <text x="150" y="322" textAnchor="middle" fontSize="11" fill="#155e75">ملحوظات: يُنصح بعدسات للاستخدام الدائم</text>
+  <path d="M200,366 q10,-22 20,0 t20,0 t22,-6" stroke="#1e3a8a" strokeWidth="2" fill="none"/>
+  <text x="40" y="364" fontSize="10" fill="#64748b">Dr. signature</text>
+ </svg>;
+}
+function ExamThumb({q,onZoom}){
+ if(!q.img)return <div className="rounded-xl border-2 border-dashed border-white/15 flex flex-col items-center justify-center text-center p-4 text-xs opacity-60 h-full min-h-[140px]"><I n="receipt" s={26}/><span className="mt-1">طلب مباشر — بدون كشف</span></div>;
+ return <button onClick={onZoom} className="relative block w-full rounded-xl overflow-hidden group border border-white/15">{q.img==='demo'?<Rx n={q.rxn||0}/>:<img src={q.img} alt="كشف" className="w-full max-h-64 object-cover"/>}<span className="absolute inset-x-0 bottom-0 bg-black/60 text-[.7rem] py-1 flex items-center justify-center gap-1"><I n="search" s={12}/> اضغط للتكبير</span></button>;
+}
+function ZoomModal({q,onClose}){
+ const [z,setZ]=useState(1.4);
+ return <Modal title={`كشف النظر — ${q.cust}`} onClose={onClose} w="max-w-xl"><div className="rounded-xl overflow-auto max-h-[62vh] bg-slate-100"><div style={{width:(z*100)+'%'}}>{q.img==='demo'?<Rx n={q.rxn||0}/>:<img src={q.img} alt="كشف" className="w-full"/>}</div></div><div className="flex items-center gap-3 mt-4"><I n="search" s={16}/><input type="range" min="1" max="3.5" step="0.1" value={z} onChange={e=>setZ(+e.target.value)}/><span className="text-xs w-10">{Math.round(z*100)}%</span></div></Modal>;
+}
+function BeforeAfter({lens}){
+ const [v,setV]=useState(50);
+ const A={plastic:{g:.5,h:.5},glass:{g:.45,h:.5},ar:{g:0,h:.45},bluecut:{g:.3,h:.14},bluectrl:{g:0,h:.04}}[lens]||{g:.4,h:.4};
+ const Scene=({id,blur,g,h})=><svg viewBox="0 0 400 240" className="w-full block" style={{background:'#bfdbfe'}}>
+  <defs><filter id={'bl'+id}><feGaussianBlur stdDeviation={blur}/></filter><filter id={'gl'+id}><feGaussianBlur stdDeviation="9"/></filter></defs>
+  <g filter={blur?`url(#bl${id})`:undefined}>
+   <rect x="0" y="0" width="400" height="240" fill="#bae6fd"/><rect x="0" y="172" width="400" height="68" fill="#7c5c3b"/>
+   <circle cx="340" cy="52" r="26" fill="#fde68a"/><rect x="300" y="20" width="90" height="70" fill="none" stroke="#e2e8f0" strokeWidth="4"/>
+   <rect x="118" y="66" width="172" height="104" rx="6" fill="#0f172a"/><rect x="126" y="74" width="156" height="88" rx="3" fill="#1e3a8a"/>
+   {[84,98,112,126,140].map((y,i)=><rect key={y} x="136" y={y} width={[100,70,110,60,90][i]} height="6" rx="3" fill="#e0f2fe"/>)}
+   <rect x="96" y="170" width="216" height="8" rx="4" fill="#94a3b8"/><circle cx="56" cy="150" r="22" fill="#16a34a"/><rect x="52" y="168" width="8" height="12" fill="#78350f"/>
+  </g>
+  <ellipse cx="204" cy="116" rx="120" ry="76" fill="#60a5fa" opacity={h} filter={`url(#gl${id})`}/>
+  <circle cx="340" cy="52" r="64" fill="#fff" opacity={g} filter={`url(#gl${id})`}/>
+  <rect x="120" y="70" width="60" height="26" fill="#fff" opacity={g*.7} transform="rotate(-18 150 83)" filter={`url(#gl${id})`}/>
+ </svg>;
+ return <div><div className="relative rounded-2xl overflow-hidden border border-white/15" dir="ltr">
+  <Scene id="b" blur={2.4} g={.85} h={.8}/>
+  <div className="absolute inset-0" style={{clipPath:`inset(0 0 0 ${v}%)`}}><Scene id="a" blur={0} g={A.g} h={A.h}/></div>
+  <div className="absolute top-0 bottom-0 w-0.5 bg-white" style={{left:v+'%'}}><span className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-8 h-8 rounded-full bg-white text-[#0B1320] flex items-center justify-center text-xs font-extrabold">⇆</span></div>
+  <span className="absolute top-2 left-2 badge b-bad">بدون عدسة</span><span className="absolute top-2 right-2 badge b-ok">بالعدسة</span></div>
+  <input type="range" min="0" max="100" value={v} onChange={e=>setV(+e.target.value)} className="mt-3" dir="ltr"/>
+  <p className="text-xs opacity-65 mt-2">اسحب المؤشر لمقارنة الرؤية: الصورة بدون عدسة (غير واضحة، وهج، وضوء أزرق) وبعدها بالعدسة المختارة.</p></div>;
+}
+function VoteModal({p,link,onClose,toast}){
+ const [v,setV]=useState({fire:7,other:2}); const [me,setMe]=useState(null);
+ const tot=v.fire+v.other; const vote=k=>{if(me)return;setMe(k);setV(x=>({...x,[k]:x[k]+1}))};
+ const msg=encodeURIComponent(`شوف نظارة ${p.name} عليا واختار: تحفة عليك 🔥 ولا جرب إطار تاني 🤔\nhttps://${link}`);
+ return <Modal title="شارك مع صحابك اختيار نظارتك" onClose={onClose}>
+  <div className="rounded-2xl glass p-3 flex items-center gap-3 mb-4"><div className="grid-bg rounded-xl p-2"><MiniGlasses type={p.type} frame={p.frame} lens={p.lens} w={90}/></div><div><div className="font-bold">{p.name}</div><div className="text-xs opacity-60">دي الصفحة اللي هتوصل لصاحبك — جرّب التصويت بنفسك</div></div></div>
+  <div className="space-y-2.5">{[['fire','تحفة عليك 🔥'],['other','جرب إطار تاني 🤔']].map(o=><button key={o[0]} onClick={()=>vote(o[0])} className={'relative w-full overflow-hidden rounded-2xl border p-3.5 text-start font-bold '+(me===o[0]?'bd-acc':'border-white/12')}><span className="absolute inset-y-0 start-0 bg-acc opacity-25 transition-all" style={{width:(v[o[0]]/tot*100)+'%'}}/><span className="relative flex justify-between"><span>{o[1]}</span><span className="tx-acc">{v[o[0]]} صوت · {Math.round(v[o[0]]/tot*100)}%</span></span></button>)}</div>
+  {me&&<p className="text-xs text-center opacity-70 mt-2">تم تسجيل صوتك ✓</p>}
+  <div className="grid grid-cols-2 gap-2 mt-4"><button className="btn btn-g" onClick={()=>{try{navigator.clipboard.writeText('https://'+link).then(()=>toast('تم نسخ الرابط ✓')).catch(()=>toast('انسخ الرابط يدوياً'))}catch(e){toast('انسخ الرابط يدوياً')}}}><I n="copy" s={15}/> نسخ الرابط</button><a className="btn btn-p" href={`https://wa.me/?text=${msg}`} target="_blank" rel="noreferrer"><I n="msg" s={15}/> إرسال واتساب</a></div>
+  <div className="p-2.5 rounded-xl bg-white/5 font-mono text-xs mt-3 truncate" dir="ltr">{link}</div></Modal>;
+}
+function ConfirmModal({q,onClose}){
+ const {setInq,toast,shop}=useContext(Ctx);
+ const [price,setPrice]=useState(q.alt?q.price:q.price); const [ok,setOk]=useState(false);
+ const msg=encodeURIComponent(`أهلاً ${q.cust}، ${shop.name} بيأكد لك ملاءمة ${q.frameName} مع ${q.lensName}${q.brandName&&q.brandName!=='—'?' ('+q.brandName+')':''} بعد مراجعة الكشف.\nالسعر النهائي: ${fmt(price)} ج.م ✅`);
+ return <Modal title="تأكيد الملاءمة والسعر النهائي" onClose={onClose}>
+  {!ok?<div className="space-y-3"><div className="text-sm opacity-75">راجعت الكشف وتأكدت إن العدسة مناسبة لقياس العميل؟ حدّد السعر النهائي اللي هيوصل له.</div><label className="text-xs opacity-60">السعر النهائي (ج.م)</label><input className="inp" type="number" value={price} onChange={e=>setPrice(+e.target.value||0)}/><button className="btn btn-p w-full !py-3" onClick={()=>{setInq(a=>a.map(x=>x.id===q.id?{...x,status:'confirmed',final:price}:x));setOk(true);toast('تم تأكيد الملاءمة ✓')}}><I n="check" s={17}/> تأكيد الملاءمة</button></div>
+  :<div className="text-center"><span className="w-16 h-16 rounded-full b-ok inline-flex items-center justify-center mb-3"><I n="check" s={32}/></span><div className="font-extrabold mb-1">تم تأكيد الملاءمة</div><p className="text-sm opacity-70 mb-4">أرسل السعر النهائي للعميل على واتساب</p><a className="btn btn-p w-full !py-3" href={`https://wa.me/${waNum(q.phone)}?text=${msg}`} target="_blank" rel="noreferrer"><I n="msg" s={18}/> إرسال السعر النهائي عبر واتساب</a><button className="btn btn-g w-full mt-2" onClick={onClose}>تم</button></div>}</Modal>;
+}
+function AltModal({q,onClose}){
+ const {setInq,toast,lensTypes}=useContext(Ctx);
+ const opts=lensTypes.filter(l=>l.on!==false&&l.name!==q.lensName);
+ return <Modal title="اقتراح عدسة بديلة" onClose={onClose}><p className="text-sm opacity-70 mb-3">العدسة الحالية: <b>{q.lensName}</b>. اختار بديل مناسب لقياس العميل وهيتحدّث السعر تلقائياً.</p><div className="space-y-2">{opts.map(l=>{const np=q.fp+l.price+q.add;return <button key={l.id} onClick={()=>{setInq(a=>a.map(x=>x.id===q.id?{...x,status:'alt',alt:l.name,altFrom:x.lensName,lensName:l.name,lensPrice:l.price,price:np}:x));toast(`تم اقتراح ${l.name} للعميل ✓`);onClose()}} className="w-full flex items-center gap-3 p-3 rounded-xl border border-white/12 bg-white/5 hover:bg-white/10 text-start"><span className="w-9 h-9 rounded-xl b-acc flex items-center justify-center"><I n={l.icon} s={18}/></span><div className="flex-1"><div className="font-bold text-sm">{l.name}</div><div className="text-xs opacity-60">{l.desc}</div></div><b className="tx-acc text-sm"><Egp v={np}/></b></button>})}</div></Modal>;
+}
+
+/* ================= MERCHANT ================= */
+
+const CAT_META={lens:{empty:'لا توجد أنواع عدسات بعد'},brand:{empty:'لا توجد شركات بعد'},extra:{empty:'لا توجد إضافات بعد'}};
+const eff=x=>Math.round(x.price*(1-(+x.disc||0)/100));
+const D=x=>({...x,orig:x.price,price:eff(x)});
+const Pr=({x})=>x.orig!=null&&x.orig!==x.price?<span><s className="opacity-50 text-[.8em] me-1">{fmt(x.orig)}</s><Egp v={x.price}/><span className="badge b-ok ms-1">-{x.disc}%</span></span>:<Egp v={x.price}/>;
+const STAGES=[['review','تم التأكيد'],['making','جاري التصنيع'],['ready','جاهز للاستلام'],['done','تم التسليم']];
+const Stages=({s})=>{const i=Math.max(0,STAGES.findIndex(x=>x[0]===(s||'review')));return <div className="flex items-start mt-3">{STAGES.map((x,k)=><React.Fragment key={x[0]}><div className="flex flex-col items-center gap-1 flex-1 min-w-0"><span className={'w-7 h-7 rounded-full flex items-center justify-center text-xs font-extrabold '+(k<=i?'bg-acc text-[#04201c]':'bg-white/10')}>{k<i?<I n="check" s={13}/>:k+1}</span><span className={'text-[.62rem] text-center leading-tight '+(k===i?'font-bold':'opacity-50')}>{x[1]}</span></div>{k<3&&<span className={'h-0.5 w-5 mt-3.5 rounded '+(k<i?'bg-acc':'bg-white/15')}/>}</React.Fragment>)}</div>};
+const SALES0=(()=>{const L=[['بلو كات',650],['أنتي ريفليكشن',450],['بلاستيك عادي',250],['زجاج',350],['بلو كنترول',850]],B=[['بيست',0],['بيفين',100],['سكوير',150],['كوري HCL',250],['إيطالي',350],['ألماني بيكسل',500]],n=[9,7,4,3,6],o=[];L.forEach((l,i)=>{for(let k=0;k<n[i];k++){const b=B[(k*(i+2)+i)%6];o.push({lens:l[0],brand:b[0],price:720+l[1]+b[1]})}});return o})();
+const dlCsv=(name,rows)=>{const csv='\ufeff'+rows.map(r=>r.map(c=>'"'+String(c==null?'':c).replace(/"/g,'""')+'"').join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download=name;document.body.appendChild(a);a.click();a.remove()};
+function Reports(){
+ const {inq,toast}=useContext(Ctx);
+ const conf=inq.filter(q=>q.status==='confirmed'&&q.kind==='rx');
+ const rows=[...SALES0,...conf.map(q=>({lens:q.lensName,brand:q.brandName,price:q.final||q.price}))];
+ const tally=k=>Object.entries(rows.reduce((a,r)=>{a[r[k]]=(a[r[k]]||0)+1;return a},{})).sort((a,b)=>b[1]-a[1]);
+ const lensR=tally('lens'),brandR=tally('brand'),rev=rows.reduce((s,r)=>s+r.price,0);
+ const stTxt={new:'جديد',confirmed:'تم التأكيد',alt:'عدسة بديلة'};
+ const expInq=()=>{dlCsv('الكشوفات.csv',[['الرقم','العميل','الموبايل','النظارة','العدسة','الشركة','الإضافات','السعر','الحالة','الوقت'],...inq.map(q=>[q.id,q.cust,q.phone,q.frameName,q.lensName,q.brandName,q.extrasTxt,q.final||q.price,stTxt[q.status]||q.status,q.time])]);toast('تم تصدير الكشوفات ✓')};
+ const expSales=()=>{dlCsv('المبيعات.csv',[['العدسة','الشركة','السعر'],...rows.map(r=>[r.lens,r.brand,r.price])]);toast('تم تصدير المبيعات ✓')};
+ return <>
+  <Head t="التقارير والمبيعات" sub="أداء المحل — شهر نوفمبر 2026"><button className="btn btn-g" onClick={expInq}><I n="dl" s={16}/> تصدير الكشوفات</button><button className="btn btn-p" onClick={expSales}><I n="dl" s={16}/> تصدير المبيعات</button></Head>
+  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+   <Stat icon="dollar" label="إيراد الشهر" value={fmt(rev)+' ج.م'}/><Stat icon="check" label="طلبات مؤكدة" value={rows.length}/><Stat icon="trend" label="متوسط قيمة الطلب" value={fmt(Math.round(rev/Math.max(1,rows.length)))+' ج.م'}/><Stat icon="receipt" label="كشوفات جديدة" value={inq.filter(q=>q.status==='new').length}/></div>
+  <div className="grid lg:grid-cols-2 gap-4"><div className="glass rounded-2xl p-5"><h3 className="font-bold mb-1">أكثر العدسات مبيعاً</h3><p className="text-xs opacity-60 mb-3">الأول: <b className="tx-acc">{lensR[0]&&lensR[0][0]}</b></p><Bars rows={lensR}/></div>
+   <div className="glass rounded-2xl p-5"><h3 className="font-bold mb-1">أكثر الشركات مبيعاً</h3><p className="text-xs opacity-60 mb-3">الأولى: <b className="tx-acc">{brandR[0]&&brandR[0][0]}</b></p><Bars rows={brandR}/></div></div></>;
+}
+function CatCard({kind,title,sub,addLabel,list}){
+ const {setModal,toast,setLensTypes,setBrands,setExtras}=useContext(Ctx);
+ const setter=kind==='lens'?setLensTypes:kind==='brand'?setBrands:setExtras;
+ const toggle=x=>{const on=x.on!==false;setter(a=>a.map(y=>y.id===x.id?{...y,on:!on}:y));toast(on?`تم إخفاء "${x.name}" من واجهة العميل ✓`:`تم إظهار "${x.name}" في متجر العميل ✓`)};
+ return <div className="glass rounded-2xl p-5">
+  <div className="flex items-start justify-between gap-2 mb-2"><div><h3 className="font-bold">{title}</h3><p className="text-xs opacity-60">{sub}</p></div><button className="btn btn-p btn-sm shrink-0" onClick={()=>setModal({t:'catitem',kind})}><I n="plus" s={14}/> {addLabel.replace('+ ','')}</button></div>
+  {!list.length&&<div className="text-center text-sm opacity-60 py-6">{CAT_META[kind].empty}</div>}
+  {list.map(x=>{const on=x.on!==false;return <div key={x.id} className="flex items-center gap-2 py-2.5 border-b border-white/5">
+   <div className={'flex-1 min-w-0 '+(on?'':'opacity-45')}><div className="font-bold text-sm flex items-center gap-1.5 flex-wrap">{x.name}{!on&&<span className="badge b-warn">مخفي</span>}</div>{x.en&&<div className="text-xs opacity-50" dir="ltr" style={{textAlign:'start'}}>{x.en}</div>}</div>
+   <b className={'tx-acc text-sm whitespace-nowrap '+(on?'':'opacity-45')}>{kind==='brand'&&x.price>0?'+':''}<Pr x={D(x)}/></b>
+   <Switch on={on} onChange={()=>toggle(x)}/>
+   <button className="btn btn-g btn-sm !px-2 font-extrabold" title="خصم" onClick={()=>setModal({t:'disc',kind,item:x})}>%</button><button className="btn btn-g btn-sm !p-2" title="تعديل" onClick={()=>setModal({t:'catitem',kind,item:x})}><I n="edit" s={14}/></button>
+   <button className="btn btn-d btn-sm !p-2" title="حذف" onClick={()=>setModal({t:'catdel',kind,item:x})}><I n="trash" s={14}/></button>
+  </div>})}
+ </div>;
+}
+function Merchant(){
+ const {shop,setShop,products,setProducts,inq,setInq,toast,setModal,go,lensTypes,setLensTypes,brands,setBrands,extras,setExtras}=useContext(Ctx);
+ const [sec,setSec]=useState('home'); const [code,setCode]=useState('');
+ const delByCode=()=>{const c=code.trim().toUpperCase();if(!c){toast('اكتب كود النظارة');return}const p=products.find(x=>(x.code||'').toUpperCase()===c);if(!p){toast(`مفيش نظارة بالكود ${c}`);return}if(products.length<2){toast('لازم تفضل نظارة واحدة على الأقل في المتجر');return}setProducts(a=>a.filter(x=>x.id!==p.id));setCode('');toast(`تم حذف "${p.name}" (${p.code}) من الموقع ✓`)};
+ const [ai,setAi]=useState(true); const [fs,setFs]=useState('oval'); const [sent,setSent]=useState({});
+ const newCount=inq.filter(q=>q.status==='new').length;
+ const items=[['home','الرئيسية','home'],['prods','منتجاتي 3D','box'],['inq','الكشوفات الطبية والاستفسارات','receipt',newCount],['lens','إدارة أسعار العدسات والشركات','dollar'],['stats','الإحصائيات','chart'],['rep','التقارير والمبيعات','trend'],['about','حول OptiVerse','info'],['store','إعدادات متجرك للعملاء','store']];
+ const link=`optiverse.com/${shop.slug}`;
+ const copy=()=>{try{navigator.clipboard.writeText('https://'+link).then(()=>toast('تم نسخ الرابط ✓')).catch(()=>toast('الرابط: '+link))}catch(e){toast('الرابط: '+link)}};
+ const radar=[['أفياتور كلاسيك',340,4],['وايفيرر بلاك',298,41],['ريملس لايت',210,38],['كات آي أنيقة',187,5],['سيف بلو',120,29]];
+ const rem=[['أحمد فتحي','0100 777 1212','صيانة النظارة','مرّ 6 شهور على الشراء'],['نادية محمود','0111 220 3344','الكشف السنوي','آخر كشف: نوفمبر 2025'],['هاني رضا','0122 998 7766','الكشف السنوي','الموعد خلال أسبوع'],['ليلى سامي','0155 410 6677','صيانة النظارة','تغيير بدّات الأنف']];
+ return <Shell items={items} active={sec} setActive={setSec} title={shop.name} sub="لوحة تحكم التاجر" highlight="store">
+  {sec==='home'&&<>
+   <Head t={`أهلاً بك، ${shop.name} 👋`} sub="ملخص نشاط متجرك اليوم"><button className="btn btn-p" onClick={()=>go('store')}><I n="eye" s={16}/> معاينة كعميل</button></Head>
+   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5"><Stat icon="eye" label="تجارب اليوم" value="86" sub={<span className="badge b-ok">+12%</span>}/><Stat icon="receipt" tone="b-info" label="استفسارات جديدة" value={newCount} sub={<span className="opacity-60">بانتظار مراجعتك</span>} onClick={()=>setSec('inq')}/><Stat icon="box" label="نظارات 3D" value={products.length}/><Stat icon="dollar" label="مبيعات الشهر" value={<Egp v={38400}/>}/></div>
+   <div className="glass rounded-2xl p-5 mb-5"><div className="flex items-center gap-2 mb-1"><span className="w-9 h-9 rounded-xl b-acc flex items-center justify-center"><I n="spark" s={18}/></span><h3 className="font-bold">رادار التحليلات الذكية</h3></div><p className="text-xs opacity-60 mb-4">أين يتجرّب الناس كثيراً ولا يشترون؟</p>
+    <div className="grid md:grid-cols-2 gap-3 mb-4">
+     <div className="rounded-xl p-3.5 bg-rose-500/10 border border-rose-400/25 text-sm leading-7"><b className="text-rose-300">⚠ الأقل شراءً:</b> «أفياتور كلاسيك» اتجرّبت 340 مرة واتباعت 4 مرات فقط (1.2%). جرّب تعدّل السعر أو تضيف خصم على الإطار.</div>
+     <div className="rounded-xl p-3.5 bg-teal-500/10 border border-teal-400/25 text-sm leading-7"><b className="tx-acc">🔥 الأكثر تجربة:</b> «أفياتور كلاسيك» الأول هذا الأسبوع. و«كات آي أنيقة» (187 تجربة) مبيعاتها ضعيفة — راجع صورها ومقاسها.</div></div>
+    <div className="overflow-x-auto"><table className="w-full text-sm min-w-[460px]"><thead className="text-xs opacity-60"><tr className="border-b border-white/10"><th className="p-2 text-start">الإطار</th><th className="p-2">تجارب</th><th className="p-2">مشتريات</th><th className="p-2 text-start">التحويل</th></tr></thead><tbody>{radar.map(r=>{const c=r[2]/r[1]*100;return <tr key={r[0]} className="border-b border-white/5"><td className="p-2 font-bold">{r[0]}</td><td className="p-2 text-center">{r[1]}</td><td className="p-2 text-center">{r[2]}</td><td className="p-2"><div className="flex items-center gap-2"><div className="flex-1 h-2 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full" style={{width:Math.min(c*3,100)+'%',background:c<5?'#f43f5e':'var(--acc)'}}/></div><span className={'text-xs font-bold '+(c<5?'text-rose-300':'tx-acc')}>{c.toFixed(1)}%</span></div></td></tr>})}</tbody></table></div></div>
+   <div className="glass rounded-2xl p-5"><div className="flex items-center justify-between mb-3"><h3 className="font-bold">تذكير الصيانة والكشف السنوي للعملاء</h3><span className="badge b-warn">{rem.length} عملاء</span></div>
+    <div className="space-y-2.5">{rem.map(r=>{const m=encodeURIComponent(`أهلاً ${r[0]} 👋 ${shop.name} بيفكّرك بموعد ${r[2]} (${r[3]}). تحب نحجزلك ميعاد؟`);return <div key={r[1]} className="flex flex-wrap items-center gap-3 p-3 rounded-xl bg-white/5"><span className="w-10 h-10 rounded-full bg-acc text-[#04201c] font-extrabold flex items-center justify-center">{r[0][0]}</span><div className="flex-1 min-w-[150px]"><div className="font-bold text-sm">{r[0]}</div><div className="text-xs opacity-60">{r[2]} · {r[3]}</div></div>
+     {sent[r[1]]?<span className="badge b-ok"><I n="check" s={12}/> تم الإرسال</span>:<a className="btn btn-p btn-sm" href={`https://wa.me/${waNum(r[1])}?text=${m}`} target="_blank" rel="noreferrer" onClick={()=>{setSent(s=>({...s,[r[1]]:1}));toast('تم فتح واتساب بالتذكير ✓')}}><I n="msg" s={14}/> إرسال تذكير واتساب</a>}</div>})}</div></div>
+  </>}
+  {sec==='prods'&&<>
+   <Head t="منتجاتي 3D" sub={`${products.length} نظارة مرفوعة`}><button className="btn btn-p" onClick={()=>setModal('addprod')}><I n="plus" s={16}/> إضافة نظارة جديدة</button></Head>
+   <div className="glass rounded-2xl p-4 mb-4 flex flex-wrap items-center gap-3"><div className="flex-1 min-w-[200px]"><div className="font-bold text-sm">حذف نظارة بالكود (بعد البيع)</div><div className="text-xs opacity-60">اكتب كود النظارة اللي خرجت من المحل وهتتمسح من الموقع فوراً</div></div><input className="inp !w-40 font-mono" dir="ltr" placeholder="FR-1001" value={code} onChange={e=>setCode(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')delByCode()}}/><button className="btn btn-d" onClick={delByCode}><I n="trash" s={15}/> حذف بالكود</button></div>
+   <div className="glass rounded-2xl p-4 mb-5 flex flex-wrap items-center gap-3"><span className="w-9 h-9 rounded-xl b-acc flex items-center justify-center"><I n="spark" s={18}/></span><div className="flex-1 min-w-[180px]"><div className="font-bold text-sm">أشكال الوجه المناسبة (ذكاء اصطناعي)</div><div className="text-xs opacity-60">أظهر النظارات الأنسب لكل شكل وجه</div></div>
+    {ai&&<div className="flex gap-1.5">{Object.entries(SHAPES).map(s=><button key={s[0]} className={'chip '+(fs===s[0]?'on':'')} onClick={()=>setFs(s[0])}>{s[1]} ({s[0]==='oval'?'Oval':s[0]==='round'?'Round':'Square'})</button>)}</div>}<Switch on={ai} onChange={setAi}/></div>
+   <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">{products.map(p=>{const fit=p.shapes.includes(fs);return <div key={p.id} className={'glass rounded-2xl p-4 transition '+(ai&&!fit?'opacity-45':'')}>
+    <div className="grid-bg rounded-xl cursor-pointer relative" onClick={()=>setModal({t:'view3d',p})}><Spin p={p}/><span className="absolute top-2 start-2 badge b-info"><I n="rot" s={11}/> 3D</span>{ai&&fit&&<span className="absolute top-2 end-2 badge b-ok">مناسبة لوجه {SHAPES[fs]}</span>}</div>
+    <div className="flex justify-between items-start mt-3"><div><div className="font-bold">{p.name}</div><div className="text-xs opacity-60">{TYPES[p.type]} · {CATS[p.cat]}</div><span className="badge b-acc font-mono mt-1" dir="ltr">{p.code}</span></div><div className="font-extrabold tx-acc"><Pr x={D(p)}/></div></div>
+    <div className="flex gap-1.5 mt-3 flex-wrap">{Object.entries(SHAPES).map(s=><span key={s[0]} className={'badge '+(p.shapes.includes(s[0])?'b-acc':'bg-white/5 opacity-40')}>{s[1]}</span>)}</div>
+    <div className="flex gap-2 mt-3"><button className="btn btn-g btn-sm flex-1" onClick={()=>setModal({t:'view3d',p})}><I n="eye" s={13}/> معاينة 3D</button><button className="btn btn-g btn-sm font-extrabold" title="خصم" onClick={()=>setModal({t:'disc',kind:'prod',item:p})}>%</button><button className="btn btn-d btn-sm" onClick={()=>{if(products.length<2){toast('لازم تفضل نظارة واحدة على الأقل');return}setProducts(a=>a.filter(x=>x.id!==p.id));toast('تم حذف النظارة')}}><I n="trash" s={13}/></button></div></div>})}
+    <button onClick={()=>setModal('addprod')} className="rounded-2xl border-2 border-dashed border-white/20 min-h-[260px] flex flex-col items-center justify-center gap-2 opacity-70 hover:opacity-100 hover:border-teal-400 transition"><I n="upload" s={28}/><b>إضافة نظارة جديدة</b><span className="text-xs">ارفع صورة أو ملف GLB</span></button></div>
+  </>}
+  {sec==='inq'&&<>
+   <Head t="الكشوفات الطبية والاستفسارات" sub={`${newCount} طلبات جديدة بانتظار مراجعتك`}/>
+   <div className="space-y-4">{inq.map(q=><div key={q.id} className="glass rounded-2xl p-4">
+    <div className="grid sm:grid-cols-[170px_1fr] gap-4">
+     <ExamThumb q={q} onZoom={()=>setModal({t:'zoom',q})}/>
+     <div className="min-w-0">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2"><div><div className="font-extrabold">{q.cust} <span className="text-xs font-normal opacity-60 font-mono">{q.id}</span></div><div className="text-xs opacity-60" dir="ltr" style={{textAlign:'start'}}>{q.phone} · {q.time}</div></div>{qBadge(q.status)}</div>
+      <div className="rounded-xl bg-white/5 p-3 flex items-center gap-3 mb-2"><div className="grid-bg rounded-lg p-1.5"><MiniGlasses type={q.type} frame={q.frame} lens={q.lens} w={78}/></div><div className="flex-1 text-sm"><div className="font-bold">{q.frameName}</div><div className="text-xs opacity-70">العدسة: {q.lensName}{q.brandName!=='—'&&` · ${q.brandName}`}</div><div className="text-xs opacity-70">الإضافات: {q.extrasTxt}</div></div><div className="text-end"><div className="text-[.7rem] opacity-60">{q.status==='confirmed'?'السعر النهائي':'السعر المبدئي'}</div><b className="tx-acc"><Egp v={q.final||q.price}/></b></div></div>
+      {(q.notes||q.pd)&&<div className="text-xs opacity-75 mb-2">{q.pd&&<span className="badge b-info me-2">PD: {q.pd}</span>}{q.notes}</div>}
+      {q.alt&&<div className="text-xs text-amber-300 mb-2">تم اقتراح «{q.alt}» بدل «{q.altFrom}» — بانتظار رد العميل</div>}
+      <div className="flex flex-wrap gap-2"><button className="btn btn-p btn-sm" onClick={()=>setModal({t:'confirmq',q})}><I n="check" s={14}/> تأكيد الملاءمة وإرسال السعر النهائي عبر واتساب</button>{q.status==='confirmed'&&<select className="inp !w-auto !py-1.5 text-xs" value={q.stage||'review'} onChange={e=>{const v=e.target.value;setInq(a=>a.map(x=>x.id===q.id?{...x,stage:v}:x));toast('تم تحديث حالة الطلب للعميل ✓')}}>{STAGES.map(x=><option key={x[0]} value={x[0]}>{x[1]}</option>)}</select>}{q.kind==='rx'&&<button className="btn btn-g btn-sm" onClick={()=>setModal({t:'altq',q})}><I n="refresh" s={14}/> اقتراح عدسة بديلة</button>}</div>
+     </div></div></div>)}
+    {!inq.length&&<div className="glass rounded-2xl p-10 text-center opacity-70">لا توجد استفسارات بعد</div>}</div>
+  </>}
+  {sec==='lens'&&<>
+   <Head t="إدارة أسعار العدسات والشركات" sub="أي إضافة أو تعديل أو إخفاء بيظهر لعملائك فوراً في خطوات اختيار العدسات"><button className="btn btn-g" onClick={()=>go('store')}><I n="eye" s={16}/> معاينة كعميل</button></Head>
+   <div className="grid lg:grid-cols-2 gap-4"><CatCard kind="lens" title="أنواع العدسات" sub="السعر الأساسي لكل نوع" addLabel="+ إضافة نوع عدسة" list={lensTypes}/>
+    <div className="space-y-4"><CatCard kind="brand" title="الشركات المصنعة" sub="الزيادة على السعر الأساسي" addLabel="+ إضافة شركة جديدة" list={brands}/>
+    <CatCard kind="extra" title="إضافات الحماية" sub="سعر كل إضافة اختيارية" addLabel="+ إضافة ميزة حماية جديدة" list={extras}/></div></div>
+  </>}
+  {sec==='rep'&&<Reports/>}
+  {sec==='stats'&&<><Head t="الإحصائيات" sub="أداء متجرك آخر 30 يوم"/><div className="grid lg:grid-cols-2 gap-4"><div className="glass rounded-2xl p-5"><h3 className="font-bold mb-3">التجارب الأسبوعية</h3><LineChart data={[310,420,390,560,610,720,860]} labels={['أسبوع1','2','3','4','5','6','7']} h={200}/></div><div className="glass rounded-2xl p-5"><h3 className="font-bold mb-4">النظارات الأكثر تجربة</h3><Bars rows={radar.map(r=>[r[0],r[1]])}/></div></div></>}
+  {sec==='about'&&<><Head t="حول OptiVerse" sub="كل ما تحتاج معرفته عن المنصة"/>
+   <div className="glass rounded-2xl p-6 mb-5 leading-8 text-sm opacity-90"><p className="mb-3">OptiVerse منصة SaaS تمنح محلات النظارات متجراً ثلاثي الأبعاد برابط خاص. ترفع نظاراتك فيحوّلها النظام لموديلات تفاعلية، ويجرّبها العميل على وجهه بالكاميرا، ثم يرسل كشف نظره ليراجعه المحل ويؤكد الملاءمة والسعر النهائي عبر واتساب.</p><div className="grid sm:grid-cols-3 gap-3 mt-4">{[['camera','تجربة حية','تتبّع نقاط الوجه وقياس PD'],['spark','ذكاء اصطناعي','ترشيح حسب شكل الوجه ورادار تحليلات'],['msg','استفسار آمن','مراجعة الكشف قبل تأكيد السعر']].map(x=><div key={x[0]} className="rounded-xl bg-white/5 p-3 flex gap-3"><span className="tx-acc"><I n={x[0]} s={22}/></span><div><b>{x[1]}</b><div className="text-xs opacity-70">{x[2]}</div></div></div>)}</div></div>
+   <h3 className="font-bold mb-3">جدول مقارنة الباقات</h3><div className="glass rounded-2xl overflow-x-auto"><table className="w-full text-sm min-w-[480px]"><thead><tr className="border-b border-white/10 text-xs opacity-70"><th className="p-3 text-start">الميزة</th><th className="p-3">الأساسية</th><th className="p-3 tx-acc">الاحترافية</th></tr></thead><tbody>
+   {[['السعر الشهري','600 ج.م','1,200 ج.م'],['عدد النظارات 3D','50','غير محدود'],['تجارب AR شهرياً','2,000','غير محدودة'],['رابط متجر + QR',1,1],['استقبال الكشوفات والاستفسارات',1,1],['ترشيح الذكاء الاصطناعي لشكل الوجه',0,1],['رادار التحليلات الذكية',0,1],['تذكيرات واتساب للعملاء',0,1],['مقارنة Split View',0,1],['الدعم الفني','بريد إلكتروني','واتساب أولوية']].map(r=><tr key={r[0]} className="border-b border-white/5"><td className="p-3 font-semibold">{r[0]}</td>{[r[1],r[2]].map((v,i)=><td key={i} className="p-3 text-center">{v===1?<span className="tx-acc inline-block"><I n="check" s={17}/></span>:v===0?<span className="opacity-30">—</span>:v}</td>)}</tr>)}</tbody></table></div></>}
+  {sec==='store'&&<>
+   <Head t="إعدادات متجرك للعملاء" sub="هذا ما يراه عملاؤك — خصّصه بالكامل"><button className="btn btn-p" onClick={()=>go('store')}><I n="eye" s={16}/> معاينة كعميل</button></Head>
+   <div className="grid lg:grid-cols-2 gap-4">
+    <div className="glass rounded-2xl p-5"><h3 className="font-bold mb-3">رابط المتجر</h3><div className="flex items-center gap-2 p-3 rounded-xl bg-white/5 mb-3"><I n="link" s={18} c="tx-acc"/><span className="font-mono text-sm flex-1 truncate" dir="ltr">{link}</span></div>
+     <div className="flex gap-2 mb-5"><button className="btn btn-g flex-1" onClick={copy}><I n="copy" s={15}/> نسخ</button><button className="btn btn-g flex-1" onClick={()=>setModal({t:'share',link})}><I n="share" s={15}/> مشاركة</button></div>
+     <div className="flex items-center gap-4"><QR seed={shop.slug}/><div><div className="font-bold mb-1">كود QR للمتجر</div><p className="text-xs opacity-60 mb-3">اطبعه وضعه على واجهة المحل</p><button className="btn btn-p btn-sm" onClick={()=>toast('جاري تحميل كود QR... (نموذج توضيحي)')}><I n="dl" s={14}/> تحميل QR</button></div></div></div>
+    <div className="glass rounded-2xl p-5 space-y-4"><h3 className="font-bold">تخصيص الواجهة</h3>
+     <div><label className="text-xs opacity-60">اسم المحل</label><input className="inp mt-1" value={shop.name} onChange={e=>setShop({...shop,name:e.target.value})}/></div>
+     <div><label className="text-xs opacity-60">اللوجو</label><div className="flex gap-2 mt-1 flex-wrap">{['👓','🕶️','✨','👁️','🌟'].map(l=><button key={l} onClick={()=>setShop({...shop,logo:l})} className={'w-11 h-11 rounded-xl text-xl border '+(shop.logo===l?'bd-acc bg-teal-500/20':'border-white/10 bg-white/5')}>{l}</button>)}<button className="btn btn-g" onClick={()=>toast('رفع اللوجو متاح في النسخة الحقيقية')}><I n="upload" s={15}/> رفع</button></div></div>
+     <div><label className="text-xs opacity-60">لون الواجهة</label><div className="flex gap-2 mt-1">{['#14B8A6','#38bdf8','#a78bfa','#f59e0b','#f43f5e'].map(c=><button key={c} onClick={()=>setShop({...shop,color:c})} className="w-9 h-9 rounded-full border-2" style={{background:c,borderColor:shop.color===c?'#fff':'transparent'}}/>)}</div></div>
+     <div><label className="text-xs opacity-60">رقم واتساب الطلبات</label><input className="inp mt-1" dir="ltr" value={shop.wa} onChange={e=>setShop({...shop,wa:e.target.value})}/></div>
+     <div className="flex gap-2"><button className="btn btn-p flex-1" onClick={()=>toast('تم حفظ إعدادات المتجر ✓')}>حفظ</button><button className="btn btn-g flex-1" onClick={()=>go('store')}><I n="eye" s={15}/> معاينة كعميل</button></div></div>
+   </div></>}
+ </Shell>;
+}
+
+/* ================= STOREFRONT ================= */
+function Store(){
+ const {shop,products:productsRaw,fav,setFav,cart,setCart,inq,setInq,toast,setModal,lensTypes,brands,extras}=useContext(Ctx);
+ const products=productsRaw.map(D);
+ const [tab,setTab]=useState('shop');
+ const [cur0,setCur]=useState(productsRaw[0]);
+ const cur=D(productsRaw.find(p=>p.id===cur0.id)||productsRaw[0]);
+ const [cat,setCat]=useState('all');
+ const [face,setFace]=useState('oval'); const [scanning,setScanning]=useState(false);
+ const [camOn,setCamOn]=useState(false); const [track,setTrack]=useState(false);
+ const [yaw,setYaw]=useState(0);
+ const [split,setSplit]=useState(false); const [cmp,setCmp]=useState(products[1]||products[0]);
+ const [step,setStep]=useState(1);
+ const [lt,setLt]=useState('plastic'); const [br,setBr]=useState('best'); const [ex,setEx]=useState([]);
+ const [img,setImg]=useState(null); const [notes,setNotes]=useState(''); const [pd,setPd]=useState(''); const [cname,setCname]=useState(''); const [cphone,setCphone]=useState('');
+ const [fc,setFc]=useState(cur.frame); const [lc,setLc]=useState(cur.lens);
+ useEffect(()=>{setFc(cur.frame);setLc(cur.lens)},[cur.id]);
+ const lensV=lensTypes.filter(l=>l.on!==false).map(D), brandV=brands.filter(b=>b.on!==false).map(D), extrasV=extras.filter(e=>e.on!==false).map(D);
+ const lensObj=lensV.find(l=>l.id===lt)||lensV[0]||{id:'_',name:'غير متاح',en:'',desc:'',price:0,icon:'eye'}; const brObj=brandV.find(b=>b.id===br)||brandV[0]||{id:'_',name:'—',en:'',price:0};
+ const exV=ex.filter(id=>extrasV.some(e=>e.id===id));
+ const extSum=exV.reduce((s,id)=>s+extrasV.find(e=>e.id===id).price,0);
+ const lensP=lensObj.price+brObj.price+extSum; const total=cur.price+lensP;
+ const match=faceMatch(cur,face);
+ const recs=[...products].sort((a,b)=>faceMatch(b,face)-faceMatch(a,face)).slice(0,3);
+ const list=products.filter(p=>cat==='all'||p.cat===cat);
+ const flash=ms=>{setTrack(true);setTimeout(()=>setTrack(false),ms)};
+ const startCam=()=>{setCamOn(true);flash(3000);toast('تم تشغيل الكاميرا ✓')};
+ const rescan=()=>{setScanning(true);flash(2600);setTimeout(()=>{setFace(f=>f==='oval'?'round':f==='round'?'square':'oval');setScanning(false);toast('تم تحليل الوجه ✓')},1500)};
+ const addCart=item=>{setCart(c=>[...c,{...item,key:Date.now()+Math.random()}]);toast('تمت الإضافة إلى السلة ✓')};
+ const cartTotal=cart.reduce((s,i)=>s+i.price,0);
+ const mine=inq.filter(q=>q.mine);
+ const onFile=e=>{const f=e.target.files&&e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>setImg(r.result);r.readAsDataURL(f)};
+ const submitRx=()=>{
+  if(!cname||!cphone){toast('اكتب اسمك ورقم موبايلك أولاً');return}
+  const q={id:'#Q-'+(320+Math.floor(Math.random()*600)),kind:'rx',cust:cname,phone:cphone,frameName:cur.name,type:cur.type,frame:fc,lens:lc,lensName:lensObj.name,brandName:brObj.name,extrasTxt:exV.length?exV.map(id=>extrasV.find(e=>e.id===id).name).join('، '):'بدون إضافات',fp:cur.price,lensPrice:lensObj.price,add:brObj.price+extSum,price:total,img:img,notes:notes,pd:pd,status:'new',time:'الآن',mine:true,rxn:Math.floor(Math.random()*4)};
+  setInq(a=>[q,...a]);setModal({t:'sent',q});setImg(null);setNotes('');setPd('');setStep(1);setEx([]);
+ };
+ const Heart=({p})=><button onClick={e=>{e.stopPropagation();setFav(f=>f.includes(p.id)?f.filter(x=>x!==p.id):[...f,p.id])}} className="w-9 h-9 rounded-full glass-s flex items-center justify-center" style={{color:fav.includes(p.id)?'#f43f5e':'#fff'}}><svg width="18" height="18" viewBox="0 0 24 24" fill={fav.includes(p.id)?'#f43f5e':'none'} stroke="currentColor" strokeWidth="2"><path d={P.heart}/></svg></button>;
+ const nav=[['shop','المتجر','store'],['lens','العدسات','eye'],['fav','المفضلة','heart'],['ord','طلباتي','receipt'],['cart','السلة','bag']];
+ const steps=['نوع العدسة','الشركة المصنعة','إضافات الحماية','الكشف والاستفسار'];
+ return <div className="pt-14 pb-24 min-h-screen" style={{'--acc':shop.color}}>
+  <div className="max-w-5xl mx-auto px-3 sm:px-5">
+   <div className="flex items-center justify-between py-4"><div className="flex items-center gap-3"><span className="w-11 h-11 rounded-2xl bg-acc text-[#04201c] text-xl flex items-center justify-center">{shop.logo}</span><div><div className="font-extrabold leading-tight">{shop.name}</div><div className="text-xs opacity-60">متجر نظارات 3D</div></div></div><button className="btn btn-g btn-sm" onClick={()=>setTab('cart')}><I n="bag" s={15}/> {cart.length}</button></div>
+   <div className="relative overflow-hidden rounded-3xl glass p-5 mb-5 text-center"><div className="absolute -top-16 left-1/2 -translate-x-1/2 w-72 h-32 rounded-full blur-3xl opacity-30 bg-acc"/><div className="relative"><span className="badge b-acc mb-2"><I n="spark" s={12}/> تجربة 3D من بيتك</span><h1 className="text-2xl sm:text-3xl font-extrabold gradtx leading-snug">اختار نظاراتك وأنت في البيت</h1><p className="text-xs sm:text-sm opacity-65 mt-1.5">جرّب على وشك بالكاميرا، شاركها مع صحابك، وابعت كشف نظرك للمحل</p></div></div>
+
+   {tab==='shop'&&<div className="grid lg:grid-cols-2 gap-5 fade">
+    <div>
+     <div className="glass rounded-3xl overflow-hidden">
+      <div className="relative grid-bg" style={{aspectRatio:split?'5/3.2':'4/4.4'}}><Corners/>
+       {!camOn?<div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 gap-3"><span className="w-20 h-20 rounded-full b-acc flex items-center justify-center"><I n="camera" s={36}/></span><div className="font-extrabold text-lg">اسمح بالكاميرا عشان تجرّب النضارات على وشك</div><p className="text-xs opacity-65 max-w-xs leading-6">صورتك بتتعالج على موبايلك بس، وبعد الموافقة هتشوف وشك والنضارة متركّبة عليه.</p><button className="btn btn-p !py-3 !px-7 !text-base" onClick={startCam}><I n="camera" s={18}/> فتح الكاميرا</button><span className="text-[.7rem] opacity-45">(في النموذج: الوجه رسمة توضيحية)</span></div>
+       :<>{split?<div className="grid grid-cols-2 h-full"><div className="border-e border-white/10 relative"><Face shape={face} type={cur.type} frame={cur.frame} lens={cur.lens} yaw={yaw} scan={scanning} tracking={track}/><span className="absolute bottom-1 inset-x-0 text-center text-[.7rem] opacity-80">{cur.name}</span></div><div className="relative"><Face shape={face} type={cmp.type} frame={cmp.frame} lens={cmp.lens} yaw={yaw} scan={scanning} tracking={track}/><span className="absolute bottom-1 inset-x-0 text-center text-[.7rem] opacity-80">{cmp.name}</span></div></div>
+       :<Face shape={face} type={cur.type} frame={fc} lens={lc} yaw={yaw} scan={scanning} tracking={track}/>}
+       <span className="absolute top-3 start-3 badge b-bad"><span className="w-1.5 h-1.5 rounded-full bg-red-400 dotp"/> LIVE</span>
+       <span className="absolute top-3 end-3 badge b-acc">{scanning?'جاري التحليل...':`تطابق ${match}% · شكل الوجه: ${SHAPES[face]}`}</span>
+       <button className="absolute bottom-3 end-3 btn btn-sm glass-s" onClick={rescan}><I n="scan" s={14}/> إعادة المسح</button></>}
+      </div>
+      <div className="glass-s border-x-0 p-3 grid grid-cols-2 gap-2.5">
+       <button className={'btn !py-3 !whitespace-normal text-center leading-5 '+(split?'btn-p':'btn-g')} onClick={()=>{if(!camOn){toast('افتح الكاميرا الأول');return}setSplit(!split)}}><I n="cols" s={18}/> مقارنة الإطارين</button>
+       <button className="btn btn-p !py-3 !whitespace-normal text-center leading-5" onClick={()=>setModal({t:'vote',p:cur,link:`optiverse.com/${shop.slug}?f=${cur.id}`})}><I n="share" s={18}/> شارك مع صحابك اختيار نظارتك</button>
+      </div>
+      <div className="p-3"><div className="flex items-center gap-2 text-xs opacity-70 mb-1"><I n="rot" s={13}/> أدر وجهك لرؤية الإطار من الجانب</div><input type="range" min="-40" max="40" value={yaw} onChange={e=>setYaw(+e.target.value)}/></div>
+      {split&&<div className="px-3 pb-3 flex gap-2 overflow-x-auto noscroll">{products.filter(p=>p.id!==cur.id).map(p=><button key={p.id} onClick={()=>setCmp(p)} className={'chip '+(cmp.id===p.id?'on':'')}>{p.name}</button>)}</div>}
+     </div>
+     <div className="glass rounded-2xl p-4 mt-4"><div className="flex items-center gap-2 font-bold mb-3"><span className="tx-acc"><I n="spark" s={18}/></span> توصيات الذكاء الاصطناعي لوجه {SHAPES[face]}</div>
+      <div className="grid grid-cols-3 gap-2">{recs.map(p=><button key={p.id} onClick={()=>setCur(p)} className={'rounded-xl p-2 text-center border transition '+(cur.id===p.id?'bd-acc bg-white/10':'border-white/10 bg-white/5')}><MiniGlasses type={p.type} frame={p.frame} lens={p.lens} w={80}/><div className="text-[.7rem] font-bold mt-1 truncate">{p.name}</div><div className="text-xs tx-acc font-extrabold">{faceMatch(p,face)}%</div></button>)}</div></div>
+    </div>
+    <div>
+     <div className="flex gap-2 overflow-x-auto noscroll pb-3">{[['all','الكل'],['sun','شمسية'],['med','طبية'],['safe','حماية']].map(c=><button key={c[0]} className={'chip '+(cat===c[0]?'on':'')} onClick={()=>setCat(c[0])}>{c[1]}</button>)}</div>
+     <div className="grid grid-cols-2 gap-3">{list.map(p=><div key={p.id} onClick={()=>setCur(p)} className={'glass rounded-2xl p-3 cursor-pointer transition '+(cur.id===p.id?'ring-2 ring-[var(--acc)]':'hover:bg-white/10')}>
+      <div className="relative grid-bg rounded-xl py-3 flex justify-center"><MiniGlasses type={p.type} frame={p.frame} lens={p.lens} w={120}/><span className="absolute top-1.5 end-1.5"><Heart p={p}/></span></div>
+      <div className="mt-2 font-bold text-sm">{p.name}</div><div className="flex items-center justify-between mt-1"><span className="tx-acc font-extrabold text-sm"><Pr x={p}/></span><span className="badge b-acc">{faceMatch(p,face)}%</span></div>
+      <div className="flex gap-1.5 mt-2"><button className="btn btn-p btn-sm flex-1" onClick={e=>{e.stopPropagation();setCur(p);toast('جرّبتها على وجهك ✓')}}>جرّب</button><button className="btn btn-g btn-sm" onClick={e=>{e.stopPropagation();addCart({name:p.name,desc:'إطار فقط',price:p.price,type:p.type,frame:p.frame,lens:p.lens})}}><I n="plus" s={14}/></button></div></div>)}</div>
+     {!list.length&&<div className="text-center opacity-60 py-10">لا توجد نظارات في هذه الفئة</div>}
+    </div>
+   </div>}
+
+   {tab==='lens'&&<div className="grid lg:grid-cols-5 gap-5 fade">
+    <div className="lg:col-span-2 space-y-4 lg:sticky lg:top-20 self-start">
+     <div className="glass rounded-3xl overflow-hidden"><div className="relative grid-bg aspect-[4/3.4]"><Corners/><Face shape={face} type={cur.type} frame={fc} lens={lc} yaw={yaw} tracking={false}/></div><div className="p-3"><div className="font-bold text-center mb-2">{cur.name} <span className="opacity-60 text-sm">· {TYPES[cur.type]}</span></div>
+      <div className="flex justify-center gap-1.5 mb-2">{FRAME_COLORS.map(c=><button key={c[1]} title={c[0]} onClick={()=>setFc(c[1])} className="w-7 h-7 rounded-full border-2" style={{background:c[1],borderColor:fc===c[1]?'#fff':'rgba(255,255,255,.15)'}}/>)}</div>
+      <div className="flex justify-center gap-1.5">{LENS_COLORS.map(c=><button key={c[1]} title={c[0]} onClick={()=>setLc(c[1])} className="w-7 h-7 rounded-full border-2" style={{background:c[1],borderColor:lc===c[1]?'#fff':'rgba(255,255,255,.15)'}}/>)}</div></div></div>
+     <div className="glass rounded-2xl p-4"><div className="flex justify-between text-sm opacity-70 mb-1"><span>الإطار</span><Egp v={cur.price}/></div><div className="flex justify-between text-sm opacity-70 mb-1"><span>{lensObj.name}</span><Egp v={lensObj.price}/></div><div className="flex justify-between text-sm opacity-70 mb-1"><span>الشركة: {brObj.name}</span><span>+{fmt(brObj.price)}</span></div><div className="flex justify-between text-sm opacity-70 mb-2"><span>الإضافات</span><span>+{fmt(extSum)}</span></div><div className="flex justify-between font-extrabold text-xl border-t border-white/10 pt-3"><span>الإجمالي</span><span className="tx-acc"><Egp v={total}/></span></div></div>
+    </div>
+    <div className="lg:col-span-3">
+     <div className="glass rounded-2xl p-3 mb-4"><div className="flex items-center">{steps.map((s,i)=><React.Fragment key={s}><button onClick={()=>setStep(i+1)} className="flex flex-col items-center gap-1 flex-1 min-w-0"><span className={'w-9 h-9 rounded-full flex items-center justify-center text-sm font-extrabold transition '+(step===i+1?'bg-acc text-[#04201c] shadow-[0_0_18px_-2px_var(--acc)]':step>i+1?'b-acc':'bg-white/10')}>{step>i+1?<I n="check" s={16}/>:i+1}</span><span className={'text-[.65rem] text-center leading-tight '+(step===i+1?'font-bold':'opacity-55')}>{s}</span></button>{i<3&&<span className={'h-0.5 w-4 sm:w-8 rounded '+(step>i+1?'bg-acc':'bg-white/15')}/>}</React.Fragment>)}</div></div>
+     <div className="fade" key={step}>
+     {step===1&&<div className="space-y-2.5"><h3 className="font-extrabold">الخطوة 1: اختار نوع العدسة</h3>{!lensV.length&&<div className="glass rounded-2xl p-4 text-sm text-center opacity-70">غير متاح حالياً — تواصل مع المحل</div>}{lensV.map(l=><button key={l.id} onClick={()=>setLt(l.id)} className={'w-full flex items-center gap-3 p-3.5 rounded-2xl border text-start transition '+(lensObj.id===l.id?'bd-acc bg-white/10':'border-white/10 bg-white/5 hover:bg-white/10')}><span className="w-11 h-11 rounded-xl b-acc flex items-center justify-center"><I n={l.icon} s={21}/></span><div className="flex-1"><div className="font-bold text-sm">{l.name} <span className="text-xs opacity-50" dir="ltr">{l.en}</span></div><div className="text-xs opacity-60">{l.desc}</div></div><div className="font-extrabold tx-acc text-sm"><Pr x={l}/></div></button>)}
+      <button className="btn btn-g w-full !py-3" onClick={()=>setModal({t:'ba',lens:lensObj.id})}><I n="eye" s={18}/> شاهد الفرق بعينك (Before / After)</button></div>}
+     {step===2&&<div><h3 className="font-extrabold mb-2.5">الخطوة 2: الشركة المصنعة</h3><div className="grid grid-cols-2 gap-2.5">{!brandV.length&&<div className="glass rounded-2xl p-4 text-sm text-center opacity-70">غير متاح حالياً — تواصل مع المحل</div>}{brandV.map(b=><button key={b.id} onClick={()=>setBr(b.id)} className={'p-3.5 rounded-2xl border text-start transition '+(brObj.id===b.id?'bd-acc bg-white/10':'border-white/10 bg-white/5 hover:bg-white/10')}><div className="font-bold">{b.name}</div><div className="text-xs opacity-50 mb-2" dir="ltr" style={{textAlign:'start'}}>{b.en}</div><div className="text-xs tx-acc font-bold">{b.price?<span>+<Pr x={b}/></span>:'السعر الأساسي'}</div></button>)}</div><div className="mt-3 text-sm p-3 rounded-xl bg-white/5 flex justify-between"><span>السعر الحالي بعد الاختيار</span><b className="tx-acc"><Egp v={total}/></b></div></div>}
+     {step===3&&<div className="space-y-2.5"><h3 className="font-extrabold">الخطوة 3: إضافات الحماية</h3>{!extrasV.length&&<div className="glass rounded-2xl p-4 text-sm text-center opacity-70">غير متاح حالياً — تواصل مع المحل</div>}{extrasV.map(e=>{const on=exV.includes(e.id);return <button key={e.id} onClick={()=>setEx(x=>on?x.filter(i=>i!==e.id):[...x,e.id])} className={'w-full flex items-center gap-3 p-3.5 rounded-2xl border text-start transition '+(on?'bd-acc bg-white/10':'border-white/10 bg-white/5')}><span className={'w-6 h-6 rounded-md flex items-center justify-center '+(on?'bg-acc text-[#04201c]':'bg-white/10')}>{on&&<I n="check" s={15}/>}</span><span className="flex-1 font-bold text-sm">{e.name}</span><b className="tx-acc text-sm">+<Pr x={e}/></b></button>})}</div>}
+     {step===4&&<div className="space-y-3"><h3 className="font-extrabold">الخطوة 4: أرفق الكشف الطبي</h3>
+      {!img?<div className="grid grid-cols-2 gap-2.5"><label className="rounded-2xl border-2 border-dashed border-white/20 hover:border-teal-400 p-5 text-center cursor-pointer block"><span className="tx-acc inline-block"><I n="upload" s={28}/></span><div className="text-sm font-bold mt-1">ارفع صورة الكشف</div><div className="text-xs opacity-55">من المعرض أو الكاميرا</div><input type="file" accept="image/*" className="hidden" onChange={onFile}/></label><button className="rounded-2xl border border-white/12 bg-white/5 hover:bg-white/10 p-5 text-center" onClick={()=>setImg('demo')}><span className="tx-acc inline-block"><I n="receipt" s={28}/></span><div className="text-sm font-bold mt-1">استخدم كشف تجريبي</div><div className="text-xs opacity-55">لتجربة الشاشة فقط</div></button></div>
+      :<div className="glass rounded-2xl p-3 flex items-center gap-3"><div className="w-24 shrink-0 rounded-lg overflow-hidden">{img==='demo'?<Rx n={1}/>:<img src={img} alt="كشف" className="w-full h-24 object-cover"/>}</div><div className="flex-1 text-sm"><div className="font-bold flex items-center gap-1"><span className="tx-acc"><I n="check" s={16}/></span> تم إرفاق الكشف</div><div className="text-xs opacity-60">سيراجعه صاحب المحل</div></div><button className="btn btn-d btn-sm" onClick={()=>setImg(null)}><I n="trash" s={14}/></button></div>}
+      <div className="grid grid-cols-2 gap-2.5"><input className="inp" placeholder="اسمك" value={cname} onChange={e=>setCname(e.target.value)}/><input className="inp" dir="ltr" placeholder="رقم الموبايل" value={cphone} onChange={e=>setCphone(e.target.value)}/></div>
+      <input className="inp" dir="ltr" placeholder="مقاس PD (اختياري) مثال: 63" value={pd} onChange={e=>setPd(e.target.value)}/>
+      <textarea className="inp" rows="3" placeholder="ملاحظات أو استفسار للمحل..." value={notes} onChange={e=>setNotes(e.target.value)}/>
+      <div className="rounded-xl p-3 bg-amber-500/10 border border-amber-400/25 text-xs leading-6 text-amber-100">صاحب المحل هيراجع الكشف ويأكد لك الملاءمة والسعر النهائي قبل أي دفع — السعر الظاهر دلوقتي مبدئي.</div>
+      <button className="btn w-full !py-3.5 !text-base" style={{background:'#22c55e',color:'#052e16',boxShadow:'0 0 28px -6px #22c55e'}} onClick={submitRx}><I n="msg" s={19}/> إرسال الكشف والاستفسار عبر واتساب (قبل التأكيد)</button>
+      <button className="btn btn-g w-full" onClick={()=>addCart({name:cur.name,desc:`${lensObj.name} · ${brObj.name}`,price:total,type:cur.type,frame:fc,lens:lc})}><I n="bag" s={16}/> أو أضف للسلة بدون كشف</button></div>}
+     </div>
+     <div className="flex justify-between mt-4"><button className="btn btn-g" disabled={step===1} style={{opacity:step===1?.35:1}} onClick={()=>setStep(s=>Math.max(1,s-1))}>السابق</button>{step<4&&<button className="btn btn-p" onClick={()=>setStep(s=>s+1)}>التالي</button>}</div>
+    </div></div>}
+
+   {tab==='fav'&&<div className="fade"><h2 className="font-extrabold text-xl mb-4">المفضلة ({fav.length})</h2>
+    {!fav.length?<Empty icon="heart" t="لا توجد مفضلات بعد" s="اضغط على القلب في أي نظارة لإضافتها" b="تصفح المتجر" on={()=>setTab('shop')}/>:<div className="grid grid-cols-2 md:grid-cols-3 gap-3">{products.filter(p=>fav.includes(p.id)).map(p=><div key={p.id} className="glass rounded-2xl p-3"><div className="relative grid-bg rounded-xl py-3 flex justify-center"><MiniGlasses type={p.type} frame={p.frame} lens={p.lens} w={120}/><span className="absolute top-1.5 end-1.5"><Heart p={p}/></span></div><div className="font-bold text-sm mt-2">{p.name}</div><div className="tx-acc font-extrabold text-sm mb-2"><Egp v={p.price}/></div><button className="btn btn-p btn-sm w-full" onClick={()=>{setCur(p);setTab('shop');toast('جرّبتها على وجهك ✓')}}>جرّب الآن</button></div>)}</div>}</div>}
+
+   {tab==='ord'&&<div className="fade max-w-2xl mx-auto"><h2 className="font-extrabold text-xl mb-4">طلباتي واستفساراتي</h2>
+    {!mine.length?<Empty icon="receipt" t="لا توجد طلبات" s="اختار عدسة وابعت كشفك للمحل" b="اختيار العدسات" on={()=>setTab('lens')}/>:<div className="space-y-3">{mine.map(q=><div key={q.id} className="glass rounded-2xl p-4"><div className="flex justify-between mb-2"><b className="font-mono text-sm">{q.id}</b>{qBadge(q.status)}</div><div className="flex items-center gap-3"><div className="grid-bg rounded-lg p-1.5"><MiniGlasses type={q.type} frame={q.frame} lens={q.lens} w={70}/></div><div className="flex-1 text-sm"><div className="font-bold">{q.frameName}</div><div className="text-xs opacity-65">{q.lensName}{q.brandName!=='—'&&` · ${q.brandName}`}</div></div><div className="text-end"><div className="text-[.68rem] opacity-55">{q.status==='confirmed'?'السعر النهائي':'السعر المبدئي'}</div><b className="tx-acc"><Egp v={q.final||q.price}/></b></div></div>
+     <div className={'mt-3 text-xs rounded-lg p-2.5 '+(q.status==='confirmed'?'bg-emerald-500/10 text-emerald-200':q.status==='alt'?'bg-amber-500/10 text-amber-200':'bg-sky-500/10 text-sky-200')}>{q.status==='new'?'بانتظار مراجعة المحل للكشف وتأكيد الملاءمة.':q.status==='confirmed'?'المحل أكد الملاءمة ✅ — أكمل الاتفاق على واتساب.':`المحل اقترح عدسة بديلة: ${q.alt} — السعر المحدّث ${fmt(q.price)} ج.م.`}</div>{q.status==='confirmed'&&<Stages s={q.stage}/>}</div>)}</div>}</div>}
+
+   {tab==='cart'&&<div className="fade max-w-2xl mx-auto"><h2 className="font-extrabold text-xl mb-4">السلة ({cart.length})</h2>
+    {!cart.length?<Empty icon="bag" t="سلتك فارغة" s="أضف نظارة من المتجر أو من قسم العدسات" b="تصفح المتجر" on={()=>setTab('shop')}/>:<>
+     <div className="space-y-3 mb-4">{cart.map(i=><div key={i.key} className="glass rounded-2xl p-3 flex items-center gap-3"><div className="grid-bg rounded-xl p-2"><MiniGlasses type={i.type} frame={i.frame} lens={i.lens} w={84}/></div><div className="flex-1"><div className="font-bold text-sm">{i.name}</div><div className="text-xs opacity-60">{i.desc}</div><div className="tx-acc font-extrabold text-sm"><Egp v={i.price}/></div></div><button className="btn btn-d btn-sm" onClick={()=>setCart(c=>c.filter(x=>x.key!==i.key))}><I n="trash" s={14}/></button></div>)}</div>
+     <div className="glass rounded-2xl p-4"><div className="flex justify-between font-extrabold text-xl mb-3"><span>الإجمالي</span><span className="tx-acc"><Egp v={cartTotal}/></span></div><button className="btn btn-p w-full !py-3 !text-base" onClick={()=>setModal({t:'checkout',total:cartTotal})}><I n="msg" s={18}/> إتمام الطلب عبر واتساب</button></div></>}</div>}
+  </div>
+
+  <nav className="fixed bottom-0 inset-x-0 z-40 glass-s border-x-0 border-b-0"><div className="max-w-xl mx-auto grid grid-cols-5 px-2 py-1.5">
+   {nav.map(n=><button key={n[0]} onClick={()=>setTab(n[0])} className={'relative flex flex-col items-center gap-0.5 py-1.5 rounded-xl text-[.68rem] font-bold transition '+(tab===n[0]?'tx-acc':'opacity-60')}>
+    <span className="relative"><I n={n[2]} s={22}/>{n[0]==='fav'&&fav.length>0&&<span className="absolute -top-1.5 -end-2 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[.6rem] flex items-center justify-center">{fav.length}</span>}{n[0]==='cart'&&cart.length>0&&<span className="absolute -top-1.5 -end-2 min-w-[16px] h-4 px-1 rounded-full bg-acc text-[#04201c] text-[.6rem] flex items-center justify-center">{cart.length}</span>}</span>{n[1]}
+    {tab===n[0]&&<span className="absolute -bottom-0.5 w-6 h-0.5 rounded-full bg-acc"/>}</button>)}</div></nav>
+ </div>;
+}
+function Empty({icon,t,s,b,on}){return <div className="glass rounded-3xl p-10 text-center"><span className="w-16 h-16 rounded-full b-acc inline-flex items-center justify-center mb-3"><I n={icon} s={30}/></span><div className="font-extrabold text-lg">{t}</div><p className="text-sm opacity-60 mb-4">{s}</p><button className="btn btn-p" onClick={on}>{b}</button></div>;}
+
+/* ================= MODALS ================= */
+function Modals(){
+ const {modal,setModal,toast,go,setShops,setExtra,setProducts,shop,cart,setCart,setInq,setLensTypes,setBrands,setExtras,products}=useContext(Ctx);
+ const [f,setF]=useState({}); const [done,setDone]=useState(null);
+ useEffect(()=>{setF({});setDone(null)},[modal]);
+ if(!modal)return null;
+ const t=typeof modal==='string'?modal:modal.t; const close=()=>setModal(null);
+ const set=k=>e=>setF({...f,[k]:e.target.value});
+ if(t==='login')return <Modal title="تسجيل الدخول" onClose={close}><div className="space-y-3"><input className="inp" placeholder="البريد الإلكتروني أو رقم الموبايل"/><input className="inp" type="password" placeholder="كلمة المرور"/><button className="btn btn-p w-full" onClick={()=>{close();go('merchant');toast('أهلاً بعودتك 👋')}}>دخول كتاجر</button><button className="btn btn-g w-full" onClick={()=>{close();go('admin');toast('تم الدخول كمدير للمنصة')}}>دخول كمدير المنصة</button></div></Modal>;
+ if(t==='signup')return <Modal title="أنشئ متجرك مجاناً" onClose={close}><div className="space-y-3"><input className="inp" placeholder="اسم المحل" value={f.n||''} onChange={set('n')}/><input className="inp" placeholder="رقم واتساب" dir="ltr" value={f.p||''} onChange={set('p')}/><input className="inp" placeholder="المدينة" value={f.c||''} onChange={set('c')}/><button className="btn btn-p w-full !py-3" onClick={()=>{close();go('merchant');toast('تم إنشاء متجرك 🎉 ابدأ برفع نظاراتك')}}>ابدأ الآن</button><p className="text-xs opacity-50 text-center">تجربة مجانية 14 يوماً — بدون بطاقة</p></div></Modal>;
+ if(t==='addshop')return <Modal title="إضافة محل يدوياً" onClose={close}><div className="space-y-3"><input className="inp" placeholder="اسم المحل" value={f.n||''} onChange={set('n')}/><input className="inp" placeholder="المدينة" value={f.c||''} onChange={set('c')}/><select className="inp" value={f.p||'أساسية'} onChange={set('p')}><option>أساسية</option><option>احترافية</option></select><button className="btn btn-p w-full" onClick={()=>{if(!f.n){toast('اكتب اسم المحل أولاً');return}const pro=f.p==='احترافية';setShops(a=>[{id:Date.now(),name:f.n,city:f.c||'القاهرة',plan:f.p||'أساسية',days:30,status:'active',exp:'21 ديسمبر',slug:'new-shop',price:pro?1200:600},...a]);setExtra(x=>x+1);close();toast(`تمت إضافة ${f.n} ✓`)}}>إضافة المحل</button></div></Modal>;
+ if(t==='renew'){const s=modal.s;return <Modal title={`تجديد اشتراك ${s.name}`} onClose={close}><div className="space-y-2 mb-4">{[[1,0],[3,10],[12,20]].map(m=><button key={m[0]} onClick={()=>setF({m:m[0]})} className={'w-full flex justify-between p-3 rounded-xl border '+((f.m||1)===m[0]?'bd-acc bg-white/10':'border-white/10 bg-white/5')}><span>{m[0]===1?'شهر':m[0]===3?'3 أشهر':'سنة'}{m[1]?<span className="badge b-ok ms-2">خصم {m[1]}%</span>:null}</span><b className="tx-acc"><Egp v={Math.round(s.price*m[0]*(1-m[1]/100))}/></b></button>)}</div><button className="btn btn-p w-full" onClick={()=>{const m=f.m||1;setShops(a=>a.map(x=>x.id===s.id?{...x,days:x.days+30*m,status:'active',exp:'تم التجديد'}:x));close();toast(`تم تجديد ${s.name} ✓`)}}>تأكيد التجديد</button></Modal>;}
+ if(t==='addprod')return <Modal title="إضافة نظارة جديدة" onClose={close}><div className="space-y-3"><div className="rounded-2xl border-2 border-dashed border-white/20 p-6 text-center cursor-pointer hover:border-teal-400" onClick={()=>toast('رفع الصور/GLB متاح في النسخة الحقيقية')}><span className="tx-acc inline-block"><I n="upload" s={28}/></span><div className="text-sm font-bold mt-1">ارفع صورة أو ملف GLB</div><div className="text-xs opacity-60">سيتحول تلقائياً إلى موديل 3D</div></div>
+  <input className="inp" placeholder="اسم النظارة" value={f.n||''} onChange={set('n')}/><div className="grid grid-cols-2 gap-2"><select className="inp" value={f.t||'aviator'} onChange={set('t')}>{Object.entries(TYPES).map(x=><option key={x[0]} value={x[0]}>{x[1]}</option>)}</select><select className="inp" value={f.k||'sun'} onChange={set('k')}>{Object.entries(CATS).map(x=><option key={x[0]} value={x[0]}>{x[1]}</option>)}</select></div><input className="inp" type="number" placeholder="السعر (ج.م)" value={f.pr||''} onChange={set('pr')}/><input className="inp font-mono" dir="ltr" placeholder="كود النظارة (اختياري — بيتولّد تلقائياً)" value={f.cd||''} onChange={set('cd')}/>
+  <div className="flex gap-2">{FRAME_COLORS.map(c=><button key={c[1]} onClick={()=>setF({...f,c:c[1]})} className="w-8 h-8 rounded-full border-2" style={{background:c[1],borderColor:(f.c||'#C9A24B')===c[1]?'#fff':'transparent'}}/>)}</div>
+  <button className="btn btn-p w-full" onClick={()=>{if(!f.n){toast('اكتب اسم النظارة');return}const nums=products.map(x=>parseInt(String(x.code||'').replace(/\D/g,''),10)||0);const code=(f.cd||'').trim().toUpperCase()||('FR-'+(Math.max(1000,...nums)+1));if(products.some(x=>(x.code||'').toUpperCase()===code)){toast('الكود ده مستخدم لنظارة تانية');return}setProducts(a=>[...a,{id:Date.now(),code,name:f.n,type:f.t||'aviator',cat:f.k||'sun',price:+f.pr||700,frame:f.c||'#C9A24B',lens:'#475569',shapes:['oval','round']}]);close();toast('تمت إضافة النظارة وتحويلها إلى 3D ✓')}}>إضافة</button></div></Modal>;
+ if(t==='view3d'){const p=modal.p;return <Modal title={p.name} onClose={close}><Viewer3D p={p}/><div className="flex justify-between items-center mt-3"><span className="text-sm opacity-70">{TYPES[p.type]} · {CATS[p.cat]}</span><b className="tx-acc"><Egp v={p.price}/></b></div></Modal>;}
+ if(t==='share'){const msg=encodeURIComponent('تفضل رابط متجرنا: https://'+modal.link);return <Modal title="مشاركة الرابط" onClose={close}><div className="p-3 rounded-xl bg-white/5 font-mono text-sm mb-3 truncate" dir="ltr">{modal.link}</div><div className="grid grid-cols-2 gap-2"><button className="btn btn-g" onClick={()=>{try{navigator.clipboard.writeText('https://'+modal.link).then(()=>toast('تم نسخ الرابط ✓')).catch(()=>toast('انسخ الرابط يدوياً'))}catch(e){toast('انسخ الرابط يدوياً')}}}><I n="copy" s={15}/> نسخ الرابط</button><a className="btn btn-p" href={`https://wa.me/?text=${msg}`} target="_blank" rel="noreferrer"><I n="msg" s={15}/> واتساب</a></div></Modal>;}
+ if(t==='vote')return <VoteModal p={modal.p} link={modal.link} onClose={close} toast={toast}/>;
+ if(t==='catitem'){const k=modal.kind,it=modal.item;
+  const setter=k==='lens'?setLensTypes:k==='brand'?setBrands:setExtras;
+  const val=(key,d)=>f[key]!==undefined?f[key]:(d==null?'':String(d));
+  const nm=val('n',it&&it.name), en=val('e',it&&it.en), pr=val('p',it&&it.price);
+  const noun={lens:'نوع عدسة',brand:'شركة',extra:'ميزة حماية'}[k];
+  const priceLbl={lens:'السعر الأساسي (ج.م)',brand:'فرق السعر الإضافي (ج.م)',extra:'السعر (ج.م)'}[k];
+  const save=()=>{const name=nm.trim();const price=parseInt(pr,10);
+   if(!name){toast('اكتب الاسم بالعربي أولاً');return}
+   if(isNaN(price)||price<0){toast('اكتب سعراً صحيحاً (0 أو أكثر)');return}
+   const extra=k!=='extra'?{en:en.trim()}:{};
+   if(it){setter(a=>a.map(x=>x.id===it.id?{...x,name,...extra,price}:x));toast(`تم حفظ التعديلات على "${name}" — ظهرت في متجر العميل فوراً ✓`)}
+   else{setter(a=>[...a,{id:k+'_'+Date.now(),name,...extra,price,on:true,...(k==='lens'?{desc:'',icon:'eye'}:{})}]);toast(`تمت إضافة "${name}" — تظهر الآن في متجر العميل ✓`)}
+   close()};
+  return <Modal title={it?`تعديل ${noun}`:`إضافة ${noun}`} onClose={close}><div className="space-y-3">
+   <div><label className="text-xs opacity-60">الاسم بالعربي</label><input className="inp mt-1" value={nm} onChange={set('n')} placeholder={k==='lens'?'مثال: فوتوكروميك':k==='brand'?'مثال: ياباني':'مثال: طبقة أوليوفوبيك'}/></div>
+   {k!=='extra'&&<div><label className="text-xs opacity-60">الاسم بالإنجليزي (اختياري)</label><input className="inp mt-1" dir="ltr" value={en} onChange={set('e')} placeholder={k==='lens'?'Photochromic':'Japanese'}/></div>}
+   <div><label className="text-xs opacity-60">{priceLbl}</label><input className="inp mt-1" type="number" inputMode="numeric" min="0" value={pr} onChange={set('p')} placeholder="0"/></div>
+   <button className="btn btn-p w-full !py-3" onClick={save}><I n="check" s={17}/> {it?'حفظ التعديلات':'إضافة'}</button></div></Modal>;}
+ if(t==='catdel'){const k=modal.kind,it=modal.item;const setter=k==='lens'?setLensTypes:k==='brand'?setBrands:setExtras;
+  return <Modal title="تأكيد الحذف" onClose={close}><p className="text-sm opacity-80 mb-4">هتحذف <b>"{it.name}"</b> نهائياً وهيختفي من متجر العميل. لو عايز تخفيه مؤقتاً استخدم زر التفعيل/الإخفاء بدل الحذف.</p>
+   <div className="grid grid-cols-2 gap-2"><button className="btn btn-g" onClick={close}>إلغاء</button><button className="btn btn-d" onClick={()=>{setter(a=>a.filter(x=>x.id!==it.id));close();toast(`تم حذف "${it.name}" ✓`)}}><I n="trash" s={14}/> حذف</button></div></Modal>;}
+ if(t==='disc'){const k=modal.kind,it=modal.item;const setter=k==='lens'?setLensTypes:k==='brand'?setBrands:k==='extra'?setExtras:setProducts;
+  const d=f.d!==undefined?f.d:String(it.disc||'');const dv=parseInt(d,10)||0;
+  const save=()=>{const v=d===''?0:parseInt(d,10);if(isNaN(v)||v<0||v>90){toast('اكتب نسبة خصم من 0 إلى 90');return}setter(a=>a.map(x=>x.id===it.id?{...x,disc:v}:x));close();toast(v?`تم تطبيق خصم ${v}% على "${it.name}" — ظاهر للعملاء الآن ✓`:`تم إلغاء الخصم عن "${it.name}" ✓`)};
+  return <Modal title={`خصم على ${it.name}`} onClose={close}><div className="space-y-3">
+   <div className="flex gap-2 flex-wrap">{[5,10,15,20,25,30].map(n=><button key={n} className={'chip '+(dv===n?'on':'')} onClick={()=>setF({...f,d:String(n)})}>{n}%</button>)}</div>
+   <div><label className="text-xs opacity-60">نسبة الخصم % (0 = بدون خصم)</label><input className="inp mt-1" type="number" inputMode="numeric" min="0" max="90" value={d} onChange={set('d')} placeholder="0"/></div>
+   <div className="rounded-xl bg-white/5 p-3 text-sm flex justify-between"><span>السعر بعد الخصم</span><b className="tx-acc"><Egp v={Math.round(it.price*(1-dv/100))}/></b></div>
+   <button className="btn btn-p w-full !py-3" onClick={save}><I n="check" s={17}/> حفظ الخصم</button></div></Modal>;}
+ if(t==='ba')return <Modal title="شاهد الفرق بعينك" onClose={close}><BeforeAfter lens={modal.lens}/></Modal>;
+ if(t==='zoom')return <ZoomModal q={modal.q} onClose={close}/>;
+ if(t==='confirmq')return <ConfirmModal q={modal.q} onClose={close}/>;
+ if(t==='altq')return <AltModal q={modal.q} onClose={close}/>;
+ if(t==='sent'){const q=modal.q;const msg=encodeURIComponent(`مرحباً ${shop.name}، أنا ${q.cust}.\nاخترت ${q.frameName} مع ${q.lensName} (${q.brandName}) — الإضافات: ${q.extrasTxt}.\nالسعر المبدئي: ${fmt(q.price)} ج.م${q.pd?'\nPD: '+q.pd:''}${q.notes?'\nملاحظات: '+q.notes:''}\nرقم الاستفسار ${q.id} — برجاء مراجعة الكشف وتأكيد الملاءمة والسعر النهائي.`);
+  return <Modal title="تم إرسال استفسارك 🎉" onClose={close}><div className="text-center"><span className="w-16 h-16 rounded-full b-ok inline-flex items-center justify-center mb-3"><I n="check" s={32}/></span><div className="font-extrabold text-lg mb-1">رقم الاستفسار {q.id}</div><p className="text-sm opacity-70 mb-4 leading-7">وصل الكشف لصندوق المحل. كمّل على واتساب (وابعت صورة الكشف في المحادثة) وهيأكد لك الملاءمة والسعر النهائي.</p><a className="btn btn-p w-full !py-3" href={`https://wa.me/${waNum(shop.wa)}?text=${msg}`} target="_blank" rel="noreferrer"><I n="msg" s={18}/> فتح واتساب المحل</a><button className="btn btn-g w-full mt-2" onClick={close}>تم</button></div></Modal>;}
+ if(t==='checkout'){
+  const submit=()=>{if(!f.n||!f.p){toast('اكتب الاسم ورقم الموبايل');return}
+   const q={id:'#O-'+(400+Math.floor(Math.random()*500)),kind:'order',cust:f.n,phone:f.p,frameName:cart.map(i=>i.name).join(' + '),type:cart[0]?cart[0].type:'aviator',frame:cart[0]?cart[0].frame:'#C9A24B',lens:cart[0]?cart[0].lens:'#475569',lensName:'طلب مباشر',brandName:'—',extrasTxt:'—',fp:modal.total,lensPrice:0,add:0,price:modal.total,img:null,notes:'الدفع عبر '+(f.pay||'InstaPay'),pd:'',status:'new',time:'الآن',mine:true,rxn:0,pay:f.pay||'InstaPay'};
+   setInq(a=>[q,...a]);setDone(q);setCart([]);};
+  if(done){const msg=encodeURIComponent(`مرحباً ${shop.name}، أنا ${done.cust}، طلبت (${done.frameName}) بإجمالي ${fmt(done.price)} ج.م — رقم الطلب ${done.id}. الدفع عبر ${done.pay}.`);return <Modal title="تم تسجيل طلبك 🎉" onClose={close}><div className="text-center"><span className="w-16 h-16 rounded-full b-ok inline-flex items-center justify-center mb-3"><I n="check" s={32}/></span><div className="font-extrabold text-lg mb-1">رقم الطلب {done.id}</div><p className="text-sm opacity-70 mb-4">أكمل الآن مع المحل على واتساب لتأكيد الدفع</p><a className="btn btn-p w-full !py-3" href={`https://wa.me/${waNum(shop.wa)}?text=${msg}`} target="_blank" rel="noreferrer"><I n="msg" s={18}/> فتح واتساب المحل</a><button className="btn btn-g w-full mt-2" onClick={close}>تم</button></div></Modal>;}
+  return <Modal title="إتمام الطلب" onClose={close}><div className="space-y-3"><input className="inp" placeholder="اسمك" value={f.n||''} onChange={set('n')}/><input className="inp" dir="ltr" placeholder="رقم الموبايل" value={f.p||''} onChange={set('p')}/><div className="text-xs opacity-60">طريقة الدفع</div><div className="grid grid-cols-2 gap-2">{['InstaPay','Vodafone Cash'].map(p=><button key={p} onClick={()=>setF({...f,pay:p})} className={'p-3 rounded-xl border font-bold text-sm '+((f.pay||'InstaPay')===p?'bd-acc bg-white/10':'border-white/10 bg-white/5')}>{p}</button>)}</div><div className="flex justify-between font-extrabold pt-2 border-t border-white/10"><span>الإجمالي</span><span className="tx-acc"><Egp v={modal.total}/></span></div><button className="btn btn-p w-full !py-3" onClick={submit}><I n="msg" s={17}/> إرسال الطلب عبر واتساب</button></div></Modal>;
+ }
+ return null;
+}
+
+/* ================= APP ================= */
+function App(){
+ const [view,setView]=useState('landing');
+ const [modal,setModal]=useState(null);
+ const [tst,setTst]=useState(null);
+ const [shop,setShop]=useState({name:'دهب للبصريات',slug:'dahab-optics',color:'#14B8A6',wa:'01001234567',logo:'👓'});
+ const [shops,setShops]=useState(SHOPS0); const [extraShops,setExtra]=useState(0);
+ const [products,setProducts]=useState(PRODUCTS0); const [inq,setInq]=useState(INQ0);
+ const [lensTypes,setLensTypes]=useState(LENS_TYPES0); const [brands,setBrands]=useState(BRANDS0); const [extras,setExtras]=useState(EXTRAS0);
+ const [fav,setFav]=useState([1]); const [cart,setCart]=useState([]);
+ const [plans,setPlans]=useState([{id:1,name:'الباقة الأساسية',price:600,on:true,feats:['حتى 50 نظارة 3D','رابط متجر + QR','استقبال الكشوفات']},{id:2,name:'الباقة الاحترافية',price:1200,on:true,feats:['نظارات غير محدودة','ترشيح الذكاء الاصطناعي ورادار التحليلات','Split View وتقارير متقدمة']}]);
+ const toast=m=>{setTst(m);clearTimeout(window.__t);window.__t=setTimeout(()=>setTst(null),2400)};
+ const go=v=>{setView(v);window.scrollTo(0,0)};
+ const enterShop=s=>{setShop(x=>({...x,name:s.name,slug:s.slug}));go('merchant');toast(`دخلت كمتجر: ${s.name}`)};
+ const tabs=[['landing','الصفحة الرئيسية','home'],['admin','الإدارة العليا','crown'],['merchant','لوحة التاجر','store'],['store','متجر العميل','phone']];
+ const newCount=inq.filter(q=>q.status==='new').length;
+ return <Ctx.Provider value={{go,toast,modal,setModal,shop,setShop,shops,setShops,extraShops,setExtra,products,setProducts,inq,setInq,lensTypes,setLensTypes,brands,setBrands,extras,setExtras,fav,setFav,cart,setCart,plans,setPlans,enterShop}}>
+  <nav className="fixed top-0 inset-x-0 z-50 h-14 glass-s border-x-0 border-t-0"><div className="h-full max-w-7xl mx-auto px-3 flex items-center gap-3">
+   <div className="hidden sm:flex items-center gap-2 font-extrabold"><span className="w-7 h-7 rounded-lg bg-acc text-[#04201c] flex items-center justify-center"><I n="glasses" s={16}/></span>OptiVerse</div>
+   <div className="flex-1 flex gap-1.5 overflow-x-auto noscroll justify-start sm:justify-center">{tabs.map(t=><button key={t[0]} onClick={()=>go(t[0])} className={'btn btn-sm !rounded-xl relative '+(view===t[0]?'btn-p':'btn-g')}><I n={t[2]} s={15}/><span className="text-[.78rem]">{t[1]}</span>{t[0]==='merchant'&&newCount>0&&<span className="min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[.62rem] flex items-center justify-center">{newCount}</span>}</button>)}</div>
+   <span className="hidden md:inline badge b-warn">نموذج تجريبي</span></div></nav>
+  {view==='landing'&&<Landing/>}{view==='admin'&&<Admin/>}{view==='merchant'&&<Merchant/>}{view==='store'&&<Store/>}
+  <Modals/>
+  {tst&&<div className="fixed z-[120] bottom-24 inset-x-0 flex justify-center pointer-events-none"><div className="pop glass-s px-5 py-3 rounded-2xl font-bold text-sm shadow-2xl border-teal-400/40 flex items-center gap-2"><span className="tx-acc"><I n="check" s={16}/></span>{tst}</div></div>}
+ </Ctx.Provider>;
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

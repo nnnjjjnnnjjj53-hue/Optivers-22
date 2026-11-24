@@ -1,0 +1,10 @@
+{
+  "name": "Remix Remix OptiVerse — منصة محلات البصريات",
+  "description": "منصة SaaS متكاملة لمحلات البصريات: متجر نظارات تفاعلي، تجربة حية على الوجه بالكاميرا، تصوير متعدد الزوايا، وإدارة الكشوفات والطلبات.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

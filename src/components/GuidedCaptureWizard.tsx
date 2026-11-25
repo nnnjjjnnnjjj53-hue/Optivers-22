@@ -255,6 +255,7 @@ export function GuidedCaptureWizard({
   const [frameType, setFrameType] = useState<FrameType>(product?.type || 'wayfarer');
   const [cat, setCat] = useState<FrameCat>(product?.cat || 'med');
   const [price, setPrice] = useState(String(product?.price ?? 850));
+  const [salePrice, setSalePrice] = useState(product?.salePrice ? String(product.salePrice) : '');
   const [disc, setDisc] = useState(String(product?.disc ?? 0));
   const [frameColor, setFrameColor] = useState(product?.frame || '#C9A24B');
   const [availableColors, setAvailableColors] = useState<string[]>(
@@ -473,7 +474,11 @@ export function GuidedCaptureWizard({
 
     const finalCode = (code.trim() || `FR-${1001 + shopProductCount}`).toUpperCase();
     const finalPrice = Math.max(50, parseInt(price, 10) || 850);
-    const finalDisc = Math.max(0, Math.min(90, parseInt(disc, 10) || 0));
+    const parsedSale = salePrice.trim() ? parseInt(salePrice, 10) : 0;
+    const finalSalePrice = parsedSale > 0 && parsedSale < finalPrice ? parsedSale : undefined;
+    const finalDisc = finalSalePrice
+      ? Math.round(((finalPrice - finalSalePrice) / Math.max(1, finalPrice)) * 100)
+      : Math.max(0, Math.min(90, parseInt(disc, 10) || 0));
     const finalColors = availableColors.length ? availableColors : [frameColor];
     const primaryColor = finalColors.includes(frameColor) ? frameColor : finalColors[0];
 
@@ -608,6 +613,7 @@ export function GuidedCaptureWizard({
             type: frameType,
             cat,
             price: finalPrice,
+            salePrice: finalSalePrice,
             disc: finalDisc,
             frame: primaryColor,
             lens: cat === 'sun' ? '#475569' : '#cfe8ff',
@@ -638,6 +644,7 @@ export function GuidedCaptureWizard({
             type: frameType,
             cat,
             price: finalPrice,
+            salePrice: finalSalePrice,
             disc: finalDisc,
             frame: primaryColor,
             lens: cat === 'sun' ? '#475569' : '#cfe8ff',
@@ -1287,6 +1294,18 @@ export function GuidedCaptureWizard({
                   dir="ltr"
                   value={price}
                   onChange={(e) => setPrice(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-xs opacity-65">سعر العرض (اختياري)</label>
+                <input
+                  type="number"
+                  min={0}
+                  className="inp mt-1"
+                  dir="ltr"
+                  placeholder="مثال: 750"
+                  value={salePrice}
+                  onChange={(e) => setSalePrice(e.target.value)}
                 />
               </div>
               <div>

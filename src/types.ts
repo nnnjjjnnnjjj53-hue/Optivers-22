@@ -1,80 +1,115 @@
+export type UserRole = 'super_admin' | 'admin' | 'merchant';
 export type FrameType = 'aviator' | 'wayfarer' | 'rimless' | 'round' | 'cat';
 export type FrameCat = 'sun' | 'med' | 'safe';
 export type EyewearFrameMode = 'prescription' | 'sunglasses' | 'clip_on' | 'kids' | 'metal';
-export type EyewearSubMode = 'optical' | 'sun';
-export type FaceShape = 'oval' | 'round' | 'square';
+export type EyewearSubMode = 'optical' | 'sun' | 'sunglasses' | 'kids_optical' | 'kids_sun';
 export type FrameSize = 'Small' | 'Medium' | 'Large';
-export type TryOnEngineMode = '2d' | '3d';
+export type FaceShape = 'oval' | 'round' | 'square';
 export type ShopStatus = 'trial' | 'active' | 'soon' | 'paused' | 'expired';
 export type InquiryStatus = 'new' | 'confirmed' | 'alt';
-export type OrderStage = 'review' | 'making' | 'ready' | 'done';
-export type UserRole = 'admin' | 'merchant';
+export type InquiryStage = 'review' | 'making' | 'ready' | 'done';
+export type OrderStage = InquiryStage;
+export type BillingCycle = 'monthly' | 'annual';
+export type PlanTierKey = 'basic' | 'pro' | 'premium';
+export type TryOnMode = '2d' | '3d';
+export type FrameMaterial = 'acetate' | 'metal' | 'rimless' | 'tr_plastic';
 
-export type FrameMaterial = 'tr_plastic' | 'metal';
+export interface ProductImage {
+  id: string;
+  productId: string;
+  angleYaw: number;
+  label: string;
+  imageUrl: string;
+  originalImageUrl?: string;
+  lensMaskUrl?: string;
+  kind?: 'front_tryon' | 'gallery';
+  sortOrder: number;
+}
 
 export interface LensRegionBox {
-  cx: number; // normalized 0..1
-  cy: number; // normalized 0..1
-  w: number; // normalized 0..1
-  h: number; // normalized 0..1
+  cx: number;
+  cy: number;
+  w: number;
+  h: number;
 }
 
 export interface ModelCalibration {
-  scale?: number;
-  offsetX?: number;
-  offsetY?: number;
-  offsetZ?: number;
-  yawOffset?: number;
-  pitchOffset?: number;
+  presetUsed?: string;
+  material?: FrameMaterial;
+  detectedType?: FrameType;
+  tiltCorrectionDeg?: number;
+  bridgeCenterX?: number;
+  bridgeCenterY?: number;
+  leftLensBox?: LensRegionBox;
+  rightLensBox?: LensRegionBox;
+  lensMaskUrl?: string;
+  storeFrontUrl?: string;
+  tryOnFrontUrl?: string;
+  isSunglasses?: boolean;
+  fitScale?: number;
+  eyeLineOffset?: number;
+  aspectRatio?: number;
   frameWidthMm?: number;
   lensWidthMm?: number;
   bridgeWidthMm?: number;
   templeLengthMm?: number;
   totalFrameWidthMm?: number;
   opticalDimensions?: string;
-  material?: FrameMaterial;
+  model3dOffset?: { x: number; y: number; z: number };
+  model3dScale?: number;
   wrapCurvatureDeg?: number;
-  thicknessMm?: number;
-  bridgeCenterX?: number;
-  bridgeCenterY?: number;
-  tiltCorrectionDeg?: number;
-  isSunglasses?: boolean;
-  lensMaskUrl?: string;
-  aspectRatio?: number;
-  fitScale?: number;
-  eyeLineOffset?: number;
-  storeFrontUrl?: string;
-  tryOnFrontUrl?: string;
-  leftLensBox?: LensRegionBox;
-  rightLensBox?: LensRegionBox;
 }
 
-export interface ProductImage {
-  id: string;
-  productId: string;
-  angleYaw: number; // degrees (-90..+90) or special tag
-  label: string;
-  imageUrl: string; // processed transparent PNG/WebP data URL or Supabase Storage URL
-  originalImageUrl?: string; // untouched original upload/capture preserved before processing
-  lensMaskUrl?: string; // transparent PNG with opaque white lens region
-  kind?: 'front_tryon' | 'gallery';
-  sortOrder: number;
-}
-
-export interface ProductReview {
+export interface FrameReview {
   id: string;
   productId: string;
   shopId: string;
   authorName: string;
-  rating: number; // 1..5
+  rating: number;
   comment: string;
   createdAt: string;
+}
+
+export interface Shop {
+  id: string;
+  ownerId?: string;
+  ownerName?: string;
+  ownerEmail?: string;
+  name: string;
+  city: string;
+  governorate?: string;
+  address?: string;
+  mapsUrl?: string;
+  onboardingCompleted?: boolean;
+  enableDeliveryService?: boolean;
+  deliveryFee?: number;
+  deliveryAreas?: string;
+  isFeatured?: boolean;
+  recall6mEnabled?: boolean;
+  recall12mEnabled?: boolean;
+  aiCreditsLimit?: number;
+  aiCreditsUsed?: number;
+  topupCredits?: number;
+  isDemoAdminStore?: boolean;
+  planTier?: PlanTierKey;
+  billingCycle?: BillingCycle;
+  plan: string;
+  days: number;
+  status: ShopStatus;
+  exp: string;
+  trialEndsAt?: string;
+  slug: string;
+  price: number;
+  color: string;
+  wa: string;
+  logo: string;
 }
 
 export interface Product {
   id: string;
   shopId: string;
   code: string;
+  modelCode?: string;
   name: string;
   description?: string;
   type: FrameType;
@@ -82,88 +117,72 @@ export interface Product {
   frameType?: EyewearFrameMode;
   subCategory?: EyewearSubMode;
   price: number;
-  disc?: number; // discount_pct 0..90
+  salePrice?: number;
+  disc: number;
   frame: string;
   lens: string;
-  tryonMode?: TryOnEngineMode;
-  processedImage?: string;
-  storeFrontUrl?: string;
-  tryOnFrontUrl?: string;
-  imagePath?: string; // 1200px transparent Try-On PNG/WebP
-  frontCatalogPath?: string; // 1200x900 #F8F9FA WebP studio shot
-  sideImagePath?: string; // 1200x900 #F8F9FA 3/4 side shot
-  clipOnImagePath?: string; // 1200px transparent Try-On PNG/WebP with magnetic sun clip-on
-  clipOnFrontCatalogPath?: string; // 1200x900 #F8F9FA WebP studio shot with clip-on
-  clipOnSideImagePath?: string; // 1200x900 #F8F9FA 3/4 side shot with clip-on
-  aspectRatio?: number;
   lensWidthMm?: number;
   bridgeWidthMm?: number;
   templeLengthMm?: number;
   totalFrameWidthMm?: number;
+  shapes: FaceShape[];
+  glbUrl?: string;
+  tryonMode?: TryOnMode;
+  processedImage?: string;
+  storeFrontUrl?: string;
+  tryOnFrontUrl?: string;
+  imagePath?: string;
+  frontCatalogPath?: string;
+  sideImagePath?: string;
+  clipOnImagePath?: string;
+  clipOnFrontCatalogPath?: string;
+  clipOnSideImagePath?: string;
+  aspectRatio?: number;
   frameHexColor?: string;
   frameOpacity?: number;
+  keepLensBranding?: boolean;
+  isCrystalFrame?: boolean;
+  phash?: string;
   additionalImages?: string[];
   model3dUrl?: string;
   modelCalibration?: ModelCalibration;
   frameColors?: string[];
   availableColors?: string[];
   availableSizes?: FrameSize[];
-  shapes: FaceShape[];
-  images?: ProductImage[];
-  glbUrl?: string;
   isPublished?: boolean;
+  images?: ProductImage[];
   isDeleted?: boolean;
-  deletedAt?: string;
 }
 
 export interface LensType {
   id: string;
-  shopId?: string;
+  shopId: string;
   name: string;
-  en?: string;
-  desc?: string;
+  en: string;
+  desc: string;
   price: number;
-  disc?: number;
+  disc: number;
   icon: string;
-  on?: boolean;
+  on: boolean;
 }
 
 export interface Brand {
   id: string;
-  shopId?: string;
+  shopId: string;
   name: string;
-  en?: string;
+  en: string;
   price: number;
-  disc?: number;
-  on?: boolean;
+  disc: number;
+  on: boolean;
 }
 
 export interface ProtectionExtra {
   id: string;
-  shopId?: string;
+  shopId: string;
   name: string;
   price: number;
-  disc?: number;
-  on?: boolean;
-}
-
-export interface Shop {
-  id: string;
-  name: string;
-  city: string;
-  plan: string;
-  days: number;
-  status: ShopStatus;
-  exp: string;
-  slug: string;
-  price: number;
-  color: string;
-  wa: string;
-  logo: string;
-  ownerId?: string;
-  ownerName?: string;
-  ownerEmail?: string;
-  trialEndsAt?: string;
+  disc: number;
+  on: boolean;
 }
 
 export interface Inquiry {
@@ -185,25 +204,84 @@ export interface Inquiry {
   price: number;
   final?: number;
   img: string | null;
-  rxn?: number;
+  rxn: number;
   notes: string;
   pd: string;
   status: InquiryStatus;
   alt?: string;
   altFrom?: string;
-  stage?: OrderStage;
+  stage: InquiryStage;
   time: string;
-  createdAt?: string;
-  mine?: boolean;
+  method?: string;
   pay?: string;
+  mine?: boolean;
+  deliverySelected?: boolean;
+  deliveryAddress?: string;
+  governorate?: string;
+  deliveryFee?: number;
+}
+
+export interface ProductReview {
+  id: string;
+  productId: string;
+  shopId: string;
+  authorName: string;
+  rating: number;
+  comment: string;
+  createdAt: string;
+}
+
+export interface CrmCustomer {
+  id: string;
+  shopId: string;
+  customerName: string;
+  phone: string;
+  productId?: string;
+  productName: string;
+  lensSummary?: string;
+  pd?: string;
+  orderDate: string;
+  recall6mSentAt?: string;
+  recall12mSentAt?: string;
+  notes?: string;
 }
 
 export interface Plan {
   id: number;
+  tierKey: PlanTierKey;
   name: string;
   price: number;
+  maxProducts: number;
+  monthlyAiCredits: number;
+  turboUploadEnabled: boolean;
+  cameraPdRulerEnabled: boolean;
+  featuredBoostEnabled: boolean;
   on: boolean;
   feats: string[];
+}
+
+export interface SponsoredSupplier {
+  id: string;
+  name: string;
+  specialty: string;
+  city: string;
+  wa: string;
+  offerText: string;
+  isActive: boolean;
+}
+
+export interface PlatformSettings {
+  enablePrescriptionLenses: boolean;
+  allowMerchantLensBrandingToggle: boolean;
+  enableSponsoredSuppliers: boolean;
+  plans: Plan[];
+  annualDiscountMonths: number;
+  trialDays: number;
+  trialMaxProducts: number;
+  trialAiCredits: number;
+  topupPackFrames: number;
+  topupPackPrice: number;
+  sponsoredSuppliers: SponsoredSupplier[];
 }
 
 export interface PaymentRecord {
@@ -211,7 +289,7 @@ export interface PaymentRecord {
   shopId?: string;
   shopName: string;
   amount: number;
-  method: 'InstaPay' | 'Vodafone Cash';
+  method: string;
   referenceNo?: string;
   status: 'ok' | 'wait' | 'late';
   date: string;
@@ -219,7 +297,7 @@ export interface PaymentRecord {
 
 export interface AuditLog {
   id: string;
-  actorRole: UserRole | 'system';
+  actorRole: string;
   shopId?: string;
   action: string;
   details: string;
@@ -228,7 +306,7 @@ export interface AuditLog {
 
 export interface CartItem {
   key: string;
-  productId?: string;
+  productId: string;
   name: string;
   desc: string;
   price: number;
@@ -238,6 +316,27 @@ export interface CartItem {
   size?: FrameSize;
 }
 
+export interface VoteSession {
+  id: string;
+  productId: string;
+  shopId: string;
+  frameName: string;
+  snapshotDataUrl: string;
+  votes: { name: string; score: number; comment: string; at: string }[];
+}
+
+export interface SharedSessionData {
+  uid?: string;
+  email?: string;
+  role: UserRole;
+  shopId: string;
+}
+
+export interface UserSession extends SharedSessionData {
+  uid: string;
+  email: string;
+}
+
 export interface AuthSession {
   userId: string;
   email: string;
@@ -245,3 +344,4 @@ export interface AuthSession {
   shopId?: string;
   mfaVerified?: boolean;
 }
+

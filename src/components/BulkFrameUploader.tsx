@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useOptiVerse } from '../services/optiverseStore';
+import { getShopMaxProducts, getShopPlanCapabilities, useOptiVerse } from '../services/optiverseStore';
 import {
   EyewearFrameMode,
   EyewearSubMode,
@@ -11,8 +11,15 @@ import {
   Product,
   ProductImage,
 } from '../types';
-import { processCutoutInWorker } from '../utils/cutoutWorkerClient';
-import { generateSplitSheetViaServer } from '../utils/splitSheetApi';
+import { generateTintedCatalogAsset, processCutoutInWorker } from '../utils/cutoutWorkerClient';
+import {
+  computePerceptualHash,
+  extractOpticalDimensionsViaServer,
+  generateSplitSheetViaServer,
+  pollBatchSplitSheetStatus,
+  saveToSharedEyewearCache,
+  submitBatchSplitSheetViaServer,
+} from '../utils/splitSheetApi';
 import { CutoutWorkerOutput } from '../workers/cutoutWorker';
 import { deleteDraftFrame, loadDraftFrames, PersistedDraftFrame, saveDraftFrame } from '../utils/draftStorage';
 import { Eyewear3DViewer } from './Eyewear3DARStage';
@@ -21,6 +28,8 @@ import { I } from './Icons';
 import { Modal } from './UiShared';
 
 type CardProcessStatus = 'enhancing' | 'ready' | 'error';
+
+const MAX_BATCH_SIZE = 50;
 
 interface BulkFrameItem {
   localId: string;
@@ -38,12 +47,24 @@ interface BulkFrameItem {
   isPublished: boolean;
   showFacePreview?: boolean;
   previewClipOn?: boolean;
+  cacheHit?: boolean;
+  autoColorSibling?: boolean;
   name: string;
   code: string;
+  modelCode?: string;
+  phash?: string;
   price: number;
+  salePrice?: number;
   frameType: EyewearFrameMode;
   subCategory: EyewearSubMode;
   frameWidthMm: number;
+  lensWidthMm?: number;
+  bridgeWidthMm?: number;
+  templeLengthMm?: number;
+  totalFrameWidthMm?: number;
+  ocrFound?: boolean;
+  isCrystalFrame?: boolean;
+  keepLensBranding?: boolean;
   opticalDimensions: string;
   fitScale: number;
   eyeLineOffset: number;
@@ -52,6 +73,7 @@ interface BulkFrameItem {
   type: FrameType;
   aspectRatio: number;
   frameHexColor: string;
+  frameColors?: string[];
   frameOpacity: number;
   calibration?: ModelCalibration;
   imagePath?: string; // 1200px transparent Try-On
@@ -119,6 +141,18 @@ function cleanNameFromFile(filename: string, index: number): string {
   return base.slice(0, 42);
 }
 
+function extractColorGroupingKey(filename: string, modelCode?: string | null): string {
+  if (modelCode && modelCode.trim().length >= 3) {
+    return modelCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  }
+  const stem = filename
+    .replace(/\.[^/.]+$/, '')
+    .toLowerCase()
+    .replace(/[-_](black|gold|silver|blue|brown|red|green|clear|crystal|havana|tortoise|gray|grey|c\d+)$/i, '')
+    .trim();
+  return stem.length >= 3 ? stem : '';
+}
+
 function sizeListFromWidth(mm: number): FrameSize[] {
   if (mm <= 130) return ['Small', 'Medium'];
   if (mm >= 142) return ['Medium', 'Large'];
@@ -131,6 +165,13 @@ function resolveCatFromMode(mode: EyewearFrameMode, sub: EyewearSubMode): FrameC
   return sub === 'sun' ? 'sun' : 'med';
 }
 
+function formatOpticalString(lens?: number | null, bridge?: number | null, temple?: number | null, fallback = '52-18-140'): string {
+  if (lens && bridge) {
+    return `${lens}-${bridge}-${temple || 140}`;
+  }
+  return fallback;
+}
+
 function buildProductPayloadFromItem(
   shopId: string,
   it: BulkFrameItem
@@ -138,10 +179,12 @@ function buildProductPayloadFromItem(
   const cat = resolveCatFromMode(it.frameType, it.subCategory);
   const storeFront = it.frontCatalogPath || it.imagePath || '';
   const tryOnFront = it.imagePath || storeFront;
+  const colorsList = it.frameColors?.length ? it.frameColors : [it.frameHexColor || '#1f2937'];
 
   const prod: Omit<Product, 'id'> = {
     shopId,
     code: it.code,
+    modelCode: it.modelCode,
     name: it.name,
     description: `إطار ${it.material === 'metal' ? 'معدن' : 'بلاستيك TR'} · عرض ${it.frameWidthMm}mm · ${it.opticalDimensions}`,
     type: it.type,
@@ -149,8 +192,17 @@ function buildProductPayloadFromItem(
     frameType: it.frameType,
     subCategory: it.subCategory,
     price: Math.max(0, Math.round(it.price || 0)),
+    salePrice: it.salePrice && it.salePrice > 0 && it.salePrice < it.price ? Math.round(it.salePrice) : undefined,
+    disc:
+      it.salePrice && it.salePrice > 0 && it.salePrice < it.price
+        ? Math.round(((it.price - it.salePrice) / Math.max(1, it.price)) * 100)
+        : 0,
     frame: it.frameHexColor || '#1f2937',
     lens: cat === 'sun' ? '#334155' : '#dbeafe',
+    lensWidthMm: it.lensWidthMm,
+    bridgeWidthMm: it.bridgeWidthMm,
+    templeLengthMm: it.templeLengthMm,
+    totalFrameWidthMm: it.totalFrameWidthMm || it.frameWidthMm,
     tryonMode: it.glbStorageUrl ? '3d' : '2d',
     processedImage: storeFront,
     storeFrontUrl: storeFront,
@@ -164,11 +216,14 @@ function buildProductPayloadFromItem(
     aspectRatio: it.aspectRatio,
     frameHexColor: it.frameHexColor,
     frameOpacity: it.frameOpacity,
+    keepLensBranding: Boolean(it.keepLensBranding),
+    isCrystalFrame: Boolean(it.isCrystalFrame),
+    phash: it.phash,
     additionalImages: it.sideImagePath ? [it.sideImagePath] : undefined,
     glbUrl: it.glbStorageUrl,
     model3dUrl: it.glbStorageUrl,
-    frameColors: [it.frameHexColor || '#1f2937'],
-    availableColors: [it.frameHexColor || '#1f2937'],
+    frameColors: colorsList,
+    availableColors: colorsList,
     availableSizes: sizeListFromWidth(it.frameWidthMm),
     shapes: ['oval', 'round', 'square'],
     // Approval gate: never publish until merchant explicitly clicks اعتماد
@@ -176,6 +231,10 @@ function buildProductPayloadFromItem(
     modelCalibration: {
       ...(it.calibration || {}),
       frameWidthMm: it.frameWidthMm,
+      lensWidthMm: it.lensWidthMm,
+      bridgeWidthMm: it.bridgeWidthMm,
+      templeLengthMm: it.templeLengthMm,
+      totalFrameWidthMm: it.totalFrameWidthMm || it.frameWidthMm,
       opticalDimensions: it.opticalDimensions,
       material: it.material,
       isSunglasses: cat === 'sun',
@@ -234,13 +293,22 @@ function toPersistedDraft(shopId: string, it: BulkFrameItem): PersistedDraftFram
     savedProductId: it.savedProductId,
     name: it.name,
     code: it.code,
+    modelCode: it.modelCode,
     price: it.price,
+    salePrice: it.salePrice,
     frameType: it.frameType,
     subCategory: it.subCategory,
     cat: it.cat,
     material: it.material,
     type: it.type,
     frameWidthMm: it.frameWidthMm,
+    lensWidthMm: it.lensWidthMm,
+    bridgeWidthMm: it.bridgeWidthMm,
+    templeLengthMm: it.templeLengthMm,
+    totalFrameWidthMm: it.totalFrameWidthMm,
+    ocrFound: it.ocrFound,
+    isCrystalFrame: it.isCrystalFrame,
+    keepLensBranding: it.keepLensBranding,
     opticalDimensions: it.opticalDimensions,
     fitScale: it.fitScale,
     eyeLineOffset: it.eyeLineOffset,
@@ -268,17 +336,26 @@ function fromPersistedDraft(d: PersistedDraftFrame): BulkFrameItem {
     localId: d.localId,
     savedProductId: d.savedProductId,
     originalThumbUrl: d.frontCatalogPath || d.imagePath || '',
-    status: d.status === 'enhancing' && !d.imagePath ? 'error' : d.status,
+    status: d.status === 'enhancing' && !d.imagePath ? 'error' : (d.status as CardProcessStatus),
     stageLabel: d.imagePath ? 'جاهزة للاعتماد' : d.stageLabel,
     errorMsg: d.errorMsg,
     approved: d.approved,
     isPublished: d.isPublished,
     name: d.name,
     code: d.code,
+    modelCode: d.modelCode,
     price: d.price,
+    salePrice: d.salePrice,
     frameType: d.frameType,
     subCategory: d.subCategory,
     frameWidthMm: d.frameWidthMm,
+    lensWidthMm: d.lensWidthMm,
+    bridgeWidthMm: d.bridgeWidthMm,
+    templeLengthMm: d.templeLengthMm,
+    totalFrameWidthMm: d.totalFrameWidthMm,
+    ocrFound: d.ocrFound,
+    isCrystalFrame: d.isCrystalFrame,
+    keepLensBranding: d.keepLensBranding,
     opticalDimensions: d.opticalDimensions,
     fitScale: d.fitScale,
     eyeLineOffset: d.eyeLineOffset,
@@ -298,9 +375,50 @@ function fromPersistedDraft(d: PersistedDraftFrame): BulkFrameItem {
   };
 }
 
+async function sampleRoughHexFromFile(file: Blob): Promise<string> {
+  try {
+    if (typeof createImageBitmap !== 'function') return '#1f2937';
+    const bm = await createImageBitmap(file);
+    try {
+      const c = document.createElement('canvas');
+      c.width = 24;
+      c.height = 24;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return '#1f2937';
+      ctx.drawImage(bm, 0, 0, 24, 24);
+      const px = ctx.getImageData(0, 0, 24, 24).data;
+      const samples: Array<[number, number, number]> = [];
+      for (let y = 6; y < 18; y++) {
+        for (let x = 4; x < 20; x++) {
+          const i = (y * 24 + x) * 4;
+          if (px[i + 3] < 200) continue;
+          const lum = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+          if (lum > 225) continue; // skip white background
+          samples.push([px[i], px[i + 1], px[i + 2]]);
+        }
+      }
+      c.width = 0;
+      c.height = 0;
+      if (!samples.length) return '#1f2937';
+      samples.sort((a, b) => a[0] + a[1] + a[2] - (b[0] + b[1] + b[2]));
+      const m = samples[Math.floor(samples.length / 2)];
+      return `#${m.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+    } finally {
+      bm.close();
+    }
+  } catch {
+    return '#1f2937';
+  }
+}
+
 export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
   const {
+    session,
     activeShop,
+    products,
+    platformSettings,
+    getAccessToken,
+    addTopUpCredits,
     addProduct,
     updateProduct,
     updateProductsBatch,
@@ -309,9 +427,23 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
     toast,
   } = useOptiVerse();
 
+  const planCaps = getShopPlanCapabilities(activeShop, platformSettings);
+  const maxProducts = getShopMaxProducts(activeShop, platformSettings);
+  const activeShopProductsCount = useMemo(
+    () => products.filter((p) => p.shopId === activeShop.id && !p.isDeleted).length,
+    [products, activeShop.id]
+  );
+  const creditsCap = (activeShop.aiCreditsLimit || planCaps.monthlyAiCredits || 100) + (activeShop.topupCredits || 0);
+  const creditsUsed = activeShop.aiCreditsUsed || 0;
+  const remainingCredits = activeShop.isDemoAdminStore ? 999999 : Math.max(0, creditsCap - creditsUsed);
+  const [outOfCreditsModal, setOutOfCreditsModal] = useState<'credits' | 'capacity' | null>(null);
+
   // Step 1: 5 Frame Category Modes (BEFORE selecting photos)
   const [selectedMode, setSelectedMode] = useState<EyewearFrameMode>('prescription');
   const [subCategory, setSubCategory] = useState<EyewearSubMode>('optical');
+  const [turboMode, setTurboMode] = useState<boolean>(planCaps.turboUploadEnabled);
+  const [autoGroupColors, setAutoGroupColors] = useState<boolean>(true);
+  const [keepLensBranding, setKeepLensBranding] = useState<boolean>(false);
   const [validationAlert, setValidationAlert] = useState<string | null>(null);
 
   const [items, setItems] = useState<BulkFrameItem[]>([]);
@@ -333,6 +465,16 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
   const itemsRef = useRef<BulkFrameItem[]>([]);
   itemsRef.current = items;
 
+  useEffect(() => {
+    setTurboMode(planCaps.turboUploadEnabled);
+  }, [planCaps.turboUploadEnabled]);
+
+  useEffect(() => {
+    if (!platformSettings.allowMerchantLensBrandingToggle) {
+      setKeepLensBranding(false);
+    }
+  }, [platformSettings.allowMerchantLensBrandingToggle]);
+
   // Hydrate unresolved drafts from IndexedDB when shop changes
   useEffect(() => {
     let active = true;
@@ -342,8 +484,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       if (hydrated.length > 0) {
         setItems((prev) => {
           const existingIds = new Set(prev.map((x) => x.localId));
-          const merged = [...prev, ...hydrated.filter((h) => !existingIds.has(h.localId))];
-          return merged;
+          return [...prev, ...hydrated.filter((h) => !existingIds.has(h.localId))];
         });
       }
     });
@@ -356,7 +497,6 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
   useEffect(() => {
     if (selectedMode === 'kids') {
       setBulkWidthMm(122);
-      setSubCategory((cur) => cur);
     } else if (bulkWidthMm === 122) {
       setBulkWidthMm(136);
     }
@@ -391,6 +531,17 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
     [items]
   );
 
+  const buildClientAuthMeta = async () => {
+    const authToken = await getAccessToken();
+    return {
+      authToken,
+      shopId: activeShop.id,
+      role: session?.role || 'merchant',
+      planTier: activeShop.planTier || 'basic',
+      isDemoAdminStore: Boolean(activeShop.isDemoAdminStore),
+    };
+  };
+
   const uploadCutoutResult = async (res: CutoutWorkerOutput, shopId: string) => {
     const extCut = res.imagePath.ext || 'webp';
     const extCat = res.frontCatalogPath.ext || 'webp';
@@ -404,76 +555,271 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
     return { imagePath, frontCatalogPath, sideImagePath, maskUrl };
   };
 
+  const finalizeProcessedCard = async (
+    cardSnapshot: BulkFrameItem,
+    baseData: {
+      imagePath: string;
+      frontCatalogPath: string;
+      sideImagePath: string;
+      maskUrl?: string;
+      aspectRatio: number;
+      frameHexColor: string;
+      frameOpacity: number;
+      detectedMaterial: FrameMaterial;
+      detectedType: FrameType;
+      calibration?: ModelCalibration;
+      quality: 'good' | 'check';
+      qualityNoteAr?: string;
+      cacheHit?: boolean;
+      autoColorSibling?: boolean;
+    },
+    clipOnUrls: {
+      clipOnImagePath?: string;
+      clipOnFrontCatalogPath?: string;
+      clipOnSideImagePath?: string;
+    } = {}
+  ): Promise<BulkFrameItem> => {
+    const updatedCard: BulkFrameItem = {
+      ...cardSnapshot,
+      cat: resolveCatFromMode(cardSnapshot.frameType, cardSnapshot.subCategory),
+      material: cardSnapshot.frameType === 'metal' ? 'metal' : baseData.detectedMaterial,
+      type: cardSnapshot.type || baseData.detectedType,
+      aspectRatio: baseData.aspectRatio,
+      frameHexColor: baseData.frameHexColor,
+      frameColors: cardSnapshot.frameColors?.length ? cardSnapshot.frameColors : [baseData.frameHexColor],
+      frameOpacity: baseData.frameOpacity,
+      calibration: baseData.calibration,
+      imagePath: baseData.imagePath,
+      frontCatalogPath: baseData.frontCatalogPath,
+      sideImagePath: baseData.sideImagePath,
+      maskUrl: baseData.maskUrl,
+      ...clipOnUrls,
+      cacheHit: baseData.cacheHit,
+      autoColorSibling: baseData.autoColorSibling,
+      quality: baseData.quality,
+      qualityNoteAr: baseData.qualityNoteAr,
+      status: 'ready',
+      stageLabel: baseData.cacheHit
+        ? 'من الكتالوج المشترك بدون رصيد ⚡'
+        : baseData.autoColorSibling
+        ? 'لون مضاف محلياً (توفير AI) 🎨'
+        : baseData.quality === 'check'
+        ? 'يُرجى المراجعة'
+        : 'جاهزة للاعتماد',
+      approved: false,
+      isPublished: false,
+      reprocessing: false,
+    };
+
+    const { prod, images } = buildProductPayloadFromItem(activeShop.id, updatedCard);
+    let savedProductId = updatedCard.savedProductId;
+    if (savedProductId) {
+      await updateProduct(savedProductId, prod, images);
+    } else {
+      const saved = await addProduct(prod, images);
+      savedProductId = saved.id;
+    }
+    updatedCard.savedProductId = savedProductId;
+
+    await saveDraftFrame(toPersistedDraft(activeShop.id, updatedCard));
+    setItems((prev) => prev.map((x) => (x.localId === cardSnapshot.localId ? updatedCard : x)));
+    return updatedCard;
+  };
+
   const processSingleCard = async (
     cardSnapshot: BulkFrameItem,
-    signal?: AbortSignal
-  ): Promise<boolean> => {
-    if (signal?.aborted) return false;
+    signal?: AbortSignal,
+    precomputedSplit?: { blob?: Blob; cacheHit?: boolean; cachedAssets?: any }
+  ): Promise<BulkFrameItem | null> => {
+    if (signal?.aborted) return null;
 
     const srcFile = cardSnapshot.sourceFile;
     if (!srcFile) {
       toast('أعد رفع الصورة الأصلية لإعادة المعالجة');
-      return false;
+      return null;
     }
 
     setItems((prev) =>
       prev.map((x) =>
         x.localId === cardSnapshot.localId
-          ? { ...x, status: 'enhancing', stageLabel: 'جاري التحسين', errorMsg: undefined, reprocessing: true }
+          ? { ...x, status: 'enhancing', stageLabel: 'جاري قراءة المقاسات والهاش...', errorMsg: undefined, reprocessing: true }
           : x
       )
     );
 
     try {
+      const authMeta = await buildClientAuthMeta();
       const effectiveSub: EyewearSubMode =
         cardSnapshot.frameType === 'clip_on' ? 'optical' : cardSnapshot.subCategory;
 
+      // Step 1: Zero-cost OCR dimension/model code extraction + pHash (unless already present)
+      let workingCard = { ...cardSnapshot };
+      if (!workingCard.phash || !workingCard.ocrFound) {
+        const [ocr, phash] = await Promise.all([
+          workingCard.ocrFound
+            ? Promise.resolve(null)
+            : extractOpticalDimensionsViaServer(srcFile, signal, authMeta),
+          workingCard.phash ? Promise.resolve(workingCard.phash) : computePerceptualHash(srcFile),
+        ]);
+        if (signal?.aborted) return null;
+        if (ocr) {
+          const totalMm = ocr.totalFrameWidthMm || workingCard.frameWidthMm;
+          workingCard = {
+            ...workingCard,
+            modelCode: ocr.modelCode || workingCard.modelCode,
+            isCrystalFrame: ocr.isCrystalFrame || workingCard.isCrystalFrame,
+            lensWidthMm: ocr.lensWidthMm || workingCard.lensWidthMm,
+            bridgeWidthMm: ocr.bridgeWidthMm || workingCard.bridgeWidthMm,
+            templeLengthMm: ocr.templeLengthMm || workingCard.templeLengthMm,
+            totalFrameWidthMm: totalMm,
+            frameWidthMm: totalMm,
+            ocrFound: ocr.found,
+            opticalDimensions: formatOpticalString(
+              ocr.lensWidthMm,
+              ocr.bridgeWidthMm,
+              ocr.templeLengthMm,
+              workingCard.opticalDimensions
+            ),
+          };
+        }
+        workingCard.phash = phash || workingCard.phash;
+      }
+
       setItems((prev) =>
         prev.map((x) =>
-          x.localId === cardSnapshot.localId
-            ? { ...x, stageLabel: 'جاري توليد لوحة الاستوديو المزدوجة (16:9)...' }
+          x.localId === workingCard.localId
+            ? {
+                ...workingCard,
+                stageLabel: 'جاري فحص الكتالوج وتجهيز صور الاستوديو...',
+              }
             : x
         )
       );
 
-      // Single Gemini call produces BOTH the orthographic Chroma-Key front (left 50%)
-      // AND the 3/4 angled studio catalog shot (right 50%) in one 16:9 image.
-      const baseSplitSheet = await generateSplitSheetViaServer(
-        srcFile,
-        {
-          frameType: cardSnapshot.frameType,
-          subCategory: effectiveSub,
-          isClipOnAttachment: false,
-        },
-        signal
-      );
+      // Step 2: Single-Call Split Sheet OR precomputed Batch result
+      const splitRes =
+        precomputedSplit ||
+        (await generateSplitSheetViaServer(
+          srcFile,
+          {
+            ...authMeta,
+            frameType: workingCard.frameType,
+            subCategory: effectiveSub,
+            isClipOnAttachment: false,
+            keepLensBranding: Boolean(workingCard.keepLensBranding),
+            isCrystalFrame: Boolean(workingCard.isCrystalFrame),
+            modelCode: workingCard.modelCode,
+            phash: workingCard.phash,
+            lensWidthMm: workingCard.lensWidthMm,
+            bridgeWidthMm: workingCard.bridgeWidthMm,
+            templeLengthMm: workingCard.templeLengthMm,
+            totalFrameWidthMm: workingCard.totalFrameWidthMm || workingCard.frameWidthMm,
+          },
+          signal
+        ));
 
-      if (signal?.aborted) return false;
+      if (signal?.aborted) return null;
 
-      const baseRes = await processCutoutInWorker(
-        srcFile,
-        cardSnapshot.sideSourceFile,
-        {
-          frameType: cardSnapshot.frameType,
-          subCategory: effectiveSub,
-          material: cardSnapshot.material,
-          frameWidthMm: cardSnapshot.frameWidthMm,
-          opticalDimensions: cardSnapshot.opticalDimensions,
-          fitScale: cardSnapshot.fitScale,
-          eyeLineOffset: cardSnapshot.eyeLineOffset,
-        },
-        (stageLabel) => {
-          if (signal?.aborted) return;
-          setItems((prev) =>
-            prev.map((x) => (x.localId === cardSnapshot.localId ? { ...x, stageLabel } : x))
-          );
-        },
-        baseSplitSheet
-      );
+      let baseUrls: { imagePath: string; frontCatalogPath: string; sideImagePath: string; maskUrl?: string };
+      let baseMeta: {
+        aspectRatio: number;
+        frameHexColor: string;
+        frameOpacity: number;
+        detectedMaterial: FrameMaterial;
+        detectedType: FrameType;
+        calibration?: ModelCalibration;
+        quality: 'good' | 'check';
+        qualityNoteAr?: string;
+        cacheHit?: boolean;
+      };
 
-      if (signal?.aborted) return false;
-      const baseUrls = await uploadCutoutResult(baseRes, activeShop.id);
-      if (signal?.aborted) return false;
+      if (splitRes.cacheHit && splitRes.cachedAssets && (splitRes.cachedAssets.frontCatalogPath || splitRes.cachedAssets.imagePath)) {
+        const cached = splitRes.cachedAssets;
+        baseUrls = {
+          imagePath: cached.imagePath || cached.frontCatalogPath || '',
+          frontCatalogPath: cached.frontCatalogPath || cached.imagePath || '',
+          sideImagePath: cached.sideImagePath || cached.frontCatalogPath || '',
+          maskUrl: cached.lensMaskUrl || undefined,
+        };
+        const widthMm = cached.totalFrameWidthMm || workingCard.frameWidthMm;
+        workingCard.frameWidthMm = widthMm;
+        workingCard.lensWidthMm = cached.lensWidthMm || workingCard.lensWidthMm;
+        workingCard.bridgeWidthMm = cached.bridgeWidthMm || workingCard.bridgeWidthMm;
+        workingCard.templeLengthMm = cached.templeLengthMm || workingCard.templeLengthMm;
+        workingCard.totalFrameWidthMm = widthMm;
+        workingCard.opticalDimensions = formatOpticalString(
+          cached.lensWidthMm,
+          cached.bridgeWidthMm,
+          cached.templeLengthMm,
+          workingCard.opticalDimensions
+        );
+        baseMeta = {
+          aspectRatio: workingCard.aspectRatio || 2.4,
+          frameHexColor: workingCard.frameHexColor || '#1f2937',
+          frameOpacity: workingCard.isCrystalFrame ? 0.75 : 1.0,
+          detectedMaterial: workingCard.frameType === 'metal' ? 'metal' : 'tr_plastic',
+          detectedType: workingCard.type,
+          quality: 'good',
+          cacheHit: true,
+        };
+      } else {
+        const baseRes = await processCutoutInWorker(
+          srcFile,
+          workingCard.sideSourceFile,
+          {
+            frameType: workingCard.frameType,
+            subCategory: effectiveSub,
+            material: workingCard.material,
+            isCrystalFrame: Boolean(workingCard.isCrystalFrame),
+            frameWidthMm: workingCard.frameWidthMm,
+            opticalDimensions: workingCard.opticalDimensions,
+            fitScale: workingCard.fitScale,
+            eyeLineOffset: workingCard.eyeLineOffset,
+          },
+          (stageLabel) => {
+            if (signal?.aborted) return;
+            setItems((prev) =>
+              prev.map((x) => (x.localId === workingCard.localId ? { ...x, stageLabel } : x))
+            );
+          },
+          splitRes.blob
+        );
+
+        if (signal?.aborted) return null;
+        baseUrls = await uploadCutoutResult(baseRes, activeShop.id);
+        if (signal?.aborted) return null;
+
+        // Save to Shared Eyewear Cache (fire-and-forget)
+        void saveToSharedEyewearCache({
+          ...authMeta,
+          modelCode: workingCard.modelCode || workingCard.code,
+          frameColor: baseRes.frameHexColor,
+          phash: workingCard.phash,
+          keepLensBranding: Boolean(workingCard.keepLensBranding),
+          isCrystalFrame: Boolean(workingCard.isCrystalFrame),
+          frameType: workingCard.frameType,
+          imagePath: baseUrls.imagePath,
+          frontCatalogPath: baseUrls.frontCatalogPath,
+          sideImagePath: baseUrls.sideImagePath,
+          lensMaskUrl: baseUrls.maskUrl,
+          lensWidthMm: workingCard.lensWidthMm,
+          bridgeWidthMm: workingCard.bridgeWidthMm,
+          templeLengthMm: workingCard.templeLengthMm,
+          totalFrameWidthMm: workingCard.frameWidthMm,
+        });
+
+        baseMeta = {
+          aspectRatio: baseRes.aspectRatio,
+          frameHexColor: baseRes.frameHexColor,
+          frameOpacity: baseRes.frameOpacity,
+          detectedMaterial: baseRes.detectedMaterial,
+          detectedType: baseRes.detectedType,
+          calibration: baseRes.calibration,
+          quality: baseRes.quality,
+          qualityNoteAr: baseRes.qualityNoteAr,
+          cacheHit: false,
+        };
+      }
 
       let clipOnUrls: {
         clipOnImagePath?: string;
@@ -481,91 +827,69 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
         clipOnSideImagePath?: string;
       } = {};
 
-      if (cardSnapshot.frameType === 'clip_on' && cardSnapshot.clipOnSourceFile) {
+      if (workingCard.frameType === 'clip_on' && workingCard.clipOnSourceFile) {
         setItems((prev) =>
           prev.map((x) =>
-            x.localId === cardSnapshot.localId
-              ? { ...x, stageLabel: 'جاري توليد لوحة غيار الشمس المزدوجة (16:9)...' }
+            x.localId === workingCard.localId
+              ? { ...x, stageLabel: 'جاري تجهيز صور غيار الشمس الاستوديو...' }
               : x
           )
         );
         const clipSplitSheet = await generateSplitSheetViaServer(
-          cardSnapshot.clipOnSourceFile,
+          workingCard.clipOnSourceFile,
           {
+            ...authMeta,
             frameType: 'clip_on',
             subCategory: 'sun',
             isClipOnAttachment: true,
+            keepLensBranding: Boolean(workingCard.keepLensBranding),
+            isCrystalFrame: Boolean(workingCard.isCrystalFrame),
           },
           signal
         );
-        if (signal?.aborted) return false;
+        if (signal?.aborted) return null;
 
-        const clipRes = await processCutoutInWorker(
-          cardSnapshot.clipOnSourceFile,
-          undefined,
-          {
-            frameType: 'clip_on',
-            subCategory: 'sun',
-            isClipOnAttachment: true,
-            material: cardSnapshot.material,
-            frameWidthMm: cardSnapshot.frameWidthMm,
-            opticalDimensions: cardSnapshot.opticalDimensions,
-            fitScale: cardSnapshot.fitScale,
-            eyeLineOffset: cardSnapshot.eyeLineOffset,
-          },
-          undefined,
-          clipSplitSheet
-        );
-        if (signal?.aborted) return false;
-        const uploadedClip = await uploadCutoutResult(clipRes, activeShop.id);
-        clipOnUrls = {
-          clipOnImagePath: uploadedClip.imagePath,
-          clipOnFrontCatalogPath: uploadedClip.frontCatalogPath,
-          clipOnSideImagePath: uploadedClip.sideImagePath,
-        };
+        if (clipSplitSheet.cacheHit && clipSplitSheet.cachedAssets) {
+          clipOnUrls = {
+            clipOnImagePath: clipSplitSheet.cachedAssets.imagePath || undefined,
+            clipOnFrontCatalogPath: clipSplitSheet.cachedAssets.frontCatalogPath || undefined,
+            clipOnSideImagePath: clipSplitSheet.cachedAssets.sideImagePath || undefined,
+          };
+        } else {
+          const clipRes = await processCutoutInWorker(
+            workingCard.clipOnSourceFile,
+            undefined,
+            {
+              frameType: 'clip_on',
+              subCategory: 'sun',
+              isClipOnAttachment: true,
+              material: workingCard.material,
+              frameWidthMm: workingCard.frameWidthMm,
+              opticalDimensions: workingCard.opticalDimensions,
+              fitScale: workingCard.fitScale,
+              eyeLineOffset: workingCard.eyeLineOffset,
+            },
+            undefined,
+            clipSplitSheet.blob
+          );
+          if (signal?.aborted) return null;
+          const uploadedClip = await uploadCutoutResult(clipRes, activeShop.id);
+          clipOnUrls = {
+            clipOnImagePath: uploadedClip.imagePath,
+            clipOnFrontCatalogPath: uploadedClip.frontCatalogPath,
+            clipOnSideImagePath: uploadedClip.sideImagePath,
+          };
+        }
       }
 
-      if (signal?.aborted) return false;
-
-      const updatedCard: BulkFrameItem = {
-        ...cardSnapshot,
-        cat: resolveCatFromMode(cardSnapshot.frameType, cardSnapshot.subCategory),
-        material: cardSnapshot.frameType === 'metal' ? 'metal' : baseRes.detectedMaterial,
-        type: cardSnapshot.type || baseRes.detectedType,
-        aspectRatio: baseRes.aspectRatio,
-        frameHexColor: baseRes.frameHexColor,
-        frameOpacity: baseRes.frameOpacity,
-        calibration: baseRes.calibration,
-        imagePath: baseUrls.imagePath,
-        frontCatalogPath: baseUrls.frontCatalogPath,
-        sideImagePath: baseUrls.sideImagePath,
-        maskUrl: baseUrls.maskUrl,
-        ...clipOnUrls,
-        quality: baseRes.quality,
-        qualityNoteAr: baseRes.qualityNoteAr,
-        status: 'ready',
-        stageLabel: baseRes.quality === 'check' ? 'يُرجى المراجعة' : 'جاهزة للاعتماد',
-        approved: false,
-        isPublished: false,
-        reprocessing: false,
-      };
-
-      const { prod, images } = buildProductPayloadFromItem(activeShop.id, updatedCard);
-      let savedProductId = updatedCard.savedProductId;
-      if (savedProductId) {
-        await updateProduct(savedProductId, prod, images);
-      } else {
-        const saved = await addProduct(prod, images);
-        savedProductId = saved.id;
-      }
-      updatedCard.savedProductId = savedProductId;
-
-      await saveDraftFrame(toPersistedDraft(activeShop.id, updatedCard));
-      setItems((prev) => prev.map((x) => (x.localId === cardSnapshot.localId ? updatedCard : x)));
-      return true;
+      if (signal?.aborted) return null;
+      return await finalizeProcessedCard(workingCard, { ...baseUrls, ...baseMeta }, clipOnUrls);
     } catch (err) {
-      if (signal?.aborted) return false;
+      if (signal?.aborted) return null;
       const msg = err instanceof Error ? err.message : 'تعذر تحسين الصورة';
+      if (/رصيد|credit|quota|402/i.test(msg)) {
+        setOutOfCreditsModal('credits');
+      }
       setItems((prev) =>
         prev.map((x) =>
           x.localId === cardSnapshot.localId
@@ -579,7 +903,66 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
             : x
         )
       );
-      return false;
+      return null;
+    }
+  };
+
+  const processSiblingColorLocally = async (
+    leadCard: BulkFrameItem,
+    siblingCard: BulkFrameItem,
+    signal?: AbortSignal
+  ): Promise<BulkFrameItem | null> => {
+    if (signal?.aborted || !siblingCard.sourceFile || !leadCard.imagePath || !leadCard.frontCatalogPath) {
+      return null;
+    }
+    try {
+      const targetHex = await sampleRoughHexFromFile(siblingCard.sourceFile);
+      const [tintedCut, tintedFront, tintedSide] = await Promise.all([
+        generateTintedCatalogAsset(leadCard.imagePath, targetHex),
+        generateTintedCatalogAsset(leadCard.frontCatalogPath, targetHex),
+        leadCard.sideImagePath
+          ? generateTintedCatalogAsset(leadCard.sideImagePath, targetHex)
+          : Promise.resolve(null),
+      ]);
+      if (signal?.aborted) return null;
+
+      const [imagePath, frontCatalogPath, sideImagePath] = await Promise.all([
+        uploadAssetToStorage(tintedCut.blob, `products/${activeShop.id}/cutouts`, 'webp'),
+        uploadAssetToStorage(tintedFront.blob, `products/${activeShop.id}/front`, 'webp'),
+        tintedSide
+          ? uploadAssetToStorage(tintedSide.blob, `products/${activeShop.id}/side`, 'webp')
+          : Promise.resolve(leadCard.sideImagePath || ''),
+      ]);
+
+      return await finalizeProcessedCard(
+        {
+          ...siblingCard,
+          modelCode: leadCard.modelCode,
+          frameWidthMm: leadCard.frameWidthMm,
+          lensWidthMm: leadCard.lensWidthMm,
+          bridgeWidthMm: leadCard.bridgeWidthMm,
+          templeLengthMm: leadCard.templeLengthMm,
+          totalFrameWidthMm: leadCard.totalFrameWidthMm,
+          opticalDimensions: leadCard.opticalDimensions,
+          isCrystalFrame: leadCard.isCrystalFrame,
+        },
+        {
+          imagePath,
+          frontCatalogPath,
+          sideImagePath: sideImagePath || frontCatalogPath,
+          maskUrl: leadCard.maskUrl,
+          aspectRatio: leadCard.aspectRatio,
+          frameHexColor: targetHex,
+          frameOpacity: leadCard.frameOpacity,
+          detectedMaterial: leadCard.material,
+          detectedType: leadCard.type,
+          calibration: leadCard.calibration,
+          quality: 'good',
+          autoColorSibling: true,
+        }
+      );
+    } catch {
+      return null;
     }
   };
 
@@ -593,10 +976,32 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       return;
     }
 
+    // Strict 50-photo batch limit
+    if (files.length > MAX_BATCH_SIZE) {
+      const msg = `الحد الأقصى للدفعة الواحدة هو ${MAX_BATCH_SIZE} صورة. اخترت ${files.length} صورة — قسّم الرفع على دفعات.`;
+      setValidationAlert(msg);
+      toast(msg);
+      return;
+    }
+
     // Clip-On strict even pairing check
     if (selectedMode === 'clip_on' && files.length % 2 !== 0) {
       const msg = 'تنبيه: كل نظارة بغيار شمس تتطلب صورتين (بدون الغيار + بالغيار).';
       setValidationAlert(msg);
+      toast(msg);
+      return;
+    }
+
+    const plannedPairsCount = selectedMode === 'clip_on' ? files.length / 2 : files.length;
+    if (!activeShop.isDemoAdminStore && remainingCredits <= 0) {
+      setOutOfCreditsModal('credits');
+      return;
+    }
+    const remainingCapacity = Math.max(0, maxProducts - activeShopProductsCount);
+    if (!activeShop.isDemoAdminStore && plannedPairsCount > remainingCapacity) {
+      const msg = `متاح في باقتك حتى ${maxProducts} نظارة (المستخدم حالياً ${activeShopProductsCount}). متاح لإضافة ${remainingCapacity} نظارة فقط — قم بشحن باقة إضافية أو ترقية الباقة.`;
+      setValidationAlert(msg);
+      setOutOfCreditsModal('capacity');
       toast(msg);
       return;
     }
@@ -632,7 +1037,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       clipOnSourceFile: clipOn,
       originalThumbUrl: URL.createObjectURL(front),
       status: 'enhancing',
-      stageLabel: 'جاري التحسين',
+      stageLabel: 'في الانتظار...',
       approved: false,
       isPublished: false,
       name: cleanNameFromFile(front.name, idx),
@@ -642,6 +1047,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       subCategory: chosenSub,
       frameWidthMm: chosenMode === 'kids' ? 122 : bulkWidthMm,
       opticalDimensions: bulkOpticalDim,
+      keepLensBranding: Boolean(platformSettings.allowMerchantLensBrandingToggle && keepLensBranding),
       fitScale: 1.0,
       eyeLineOffset: 0.04,
       cat: chosenCat,
@@ -659,16 +1065,163 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
     setProgress({ done: 0, total: newCards.length });
     setVisibleLimit((lim) => Math.max(lim, PAGE_SIZE));
 
+    const authMeta = await buildClientAuthMeta();
+    const useTurbo = Boolean(turboMode && planCaps.turboUploadEnabled);
+
+    // Pre-OCR + pHash on all cards when Auto-Color Grouping or Batch API is enabled
+    const preparedCards = [...newCards];
+    if (autoGroupColors || (!useTurbo && newCards.length > 1)) {
+      await Promise.all(
+        preparedCards.map(async (c, i) => {
+          if (ctrl.signal.aborted || !c.sourceFile) return;
+          const [ocr, phash] = await Promise.all([
+            extractOpticalDimensionsViaServer(c.sourceFile, ctrl.signal, authMeta),
+            computePerceptualHash(c.sourceFile),
+          ]);
+          const widthMm = ocr.totalFrameWidthMm || c.frameWidthMm;
+          preparedCards[i] = {
+            ...c,
+            modelCode: ocr.modelCode || undefined,
+            isCrystalFrame: ocr.isCrystalFrame,
+            lensWidthMm: ocr.lensWidthMm || undefined,
+            bridgeWidthMm: ocr.bridgeWidthMm || undefined,
+            templeLengthMm: ocr.templeLengthMm || undefined,
+            totalFrameWidthMm: widthMm,
+            frameWidthMm: widthMm,
+            ocrFound: ocr.found,
+            opticalDimensions: formatOpticalString(
+              ocr.lensWidthMm,
+              ocr.bridgeWidthMm,
+              ocr.templeLengthMm,
+              c.opticalDimensions
+            ),
+            phash: phash || undefined,
+          };
+        })
+      );
+      setItems((prev) =>
+        prev.map((p) => preparedCards.find((x) => x.localId === p.localId) || p)
+      );
+    }
+
+    // Auto-Color Grouping: pick 1 lead frame per model group; siblings use local Canvas tinting at $0 API cost
+    const leadByGroupKey = new Map<string, BulkFrameItem>();
+    const siblingMap = new Map<string, BulkFrameItem>(); // sibling.localId -> leadCard
+    const aiQueue: BulkFrameItem[] = [];
+
+    for (const c of preparedCards) {
+      const gKey = autoGroupColors ? extractColorGroupingKey(c.sourceFile?.name || c.name, c.modelCode) : '';
+      if (gKey && leadByGroupKey.has(gKey) && c.frameType !== 'clip_on') {
+        siblingMap.set(c.localId, leadByGroupKey.get(gKey)!);
+      } else {
+        if (gKey && !leadByGroupKey.has(gKey)) {
+          leadByGroupKey.set(gKey, c);
+        }
+        aiQueue.push(c);
+      }
+    }
+
     let doneCount = 0;
     let successCount = 0;
-    for (let i = 0; i < newCards.length; i++) {
+    const processedLeadById = new Map<string, BulkFrameItem>();
+
+    // Use Batch API path when Standard (non-Turbo) & >1 item in AI queue
+    if (!useTurbo && aiQueue.length > 1) {
+      try {
+        const { jobId } = await submitBatchSplitSheetViaServer({
+          ...authMeta,
+          turbo: false,
+          signal: ctrl.signal,
+          items: aiQueue.map((c) => ({
+            localId: c.localId,
+            file: c.sourceFile!,
+            frameType: c.frameType,
+            subCategory: c.frameType === 'clip_on' ? 'optical' : c.subCategory,
+            keepLensBranding: Boolean(c.keepLensBranding),
+            isCrystalFrame: Boolean(c.isCrystalFrame),
+            modelCode: c.modelCode,
+            phash: c.phash,
+            lensWidthMm: c.lensWidthMm,
+            bridgeWidthMm: c.bridgeWidthMm,
+            templeLengthMm: c.templeLengthMm,
+            totalFrameWidthMm: c.totalFrameWidthMm,
+          })),
+        });
+
+        let batchResults: Record<string, { blob?: Blob; cacheHit?: boolean; cachedAssets?: any; error?: string }> = {};
+        while (!ctrl.signal.aborted) {
+          const st = await pollBatchSplitSheetStatus(jobId, authMeta, ctrl.signal);
+          setProgress({ done: Math.min(st.done, newCards.length), total: newCards.length });
+          if (st.status === 'completed') {
+            batchResults = st.results;
+            break;
+          }
+          if (st.status === 'failed') break;
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+
+        for (const c of aiQueue) {
+          if (ctrl.signal.aborted) break;
+          const res = batchResults[c.localId];
+          if (res && !res.error && (res.blob || res.cacheHit)) {
+            const finished = await processSingleCard(c, ctrl.signal, res);
+            if (finished) {
+              processedLeadById.set(c.localId, finished);
+              successCount++;
+            }
+          } else {
+            const finished = await processSingleCard(c, ctrl.signal);
+            if (finished) {
+              processedLeadById.set(c.localId, finished);
+              successCount++;
+            }
+          }
+          doneCount++;
+          setProgress({ done: doneCount, total: newCards.length });
+        }
+      } catch {
+        // Fallback cleanly to sequential queue if batch submission fails
+        for (const c of aiQueue) {
+          if (ctrl.signal.aborted) break;
+          const finished = await processSingleCard(c, ctrl.signal);
+          if (finished) {
+            processedLeadById.set(c.localId, finished);
+            successCount++;
+          }
+          doneCount++;
+          setProgress({ done: doneCount, total: newCards.length });
+        }
+      }
+    } else {
+      for (const c of aiQueue) {
+        if (ctrl.signal.aborted) break;
+        const finished = await processSingleCard(c, ctrl.signal);
+        if (finished) {
+          processedLeadById.set(c.localId, finished);
+          successCount++;
+        }
+        doneCount++;
+        setProgress({ done: doneCount, total: newCards.length });
+        if (ctrl.signal.aborted) break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    }
+
+    // Generate $0 local color-variant assets for grouped siblings
+    for (const [sibId, leadRef] of siblingMap.entries()) {
       if (ctrl.signal.aborted) break;
-      const ok = await processSingleCard(newCards[i], ctrl.signal);
+      const sib = preparedCards.find((x) => x.localId === sibId);
+      const finishedLead = processedLeadById.get(leadRef.localId);
+      let okSib: BulkFrameItem | null = null;
+      if (sib && finishedLead) {
+        okSib = await processSiblingColorLocally(finishedLead, sib, ctrl.signal);
+      }
+      if (!okSib && sib) {
+        okSib = await processSingleCard(sib, ctrl.signal);
+      }
       doneCount++;
-      if (ok) successCount++;
+      if (okSib) successCount++;
       setProgress({ done: doneCount, total: newCards.length });
-      if (ctrl.signal.aborted) break;
-      await new Promise((r) => setTimeout(r, 20));
     }
 
     setProcessing(false);
@@ -756,6 +1309,10 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
   const handleRetryCard = async (localId: string) => {
     const target = itemsRef.current.find((x) => x.localId === localId);
     if (!target) return;
+    if (!activeShop.isDemoAdminStore && remainingCredits <= 0) {
+      setOutOfCreditsModal('credits');
+      return;
+    }
     if (!target.sourceFile) {
       toast('لا يمكن إعادة المعالجة بعد تحديث الصفحة إلا برفع الصورة من جديد');
       return;
@@ -780,6 +1337,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
         frameType: it.frameType,
         subCategory: it.subCategory,
         material: it.material,
+        isCrystalFrame: Boolean(it.isCrystalFrame),
       });
       const sideImagePath = await uploadAssetToStorage(
         res.frontCatalogPath.blob,
@@ -891,18 +1449,26 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
   const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
 
   return (
-    <div className="rounded-3xl bg-[#F8F9FA] text-slate-900 p-4 sm:p-6 mb-5 border border-slate-200 shadow-sm space-y-4">
+    <div className="rounded-3xl bg-[#F8F9FA] text-[#0F172A] p-4 sm:p-6 mb-5 border border-[#E2E8F0] shadow-sm space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <span className="w-10 h-10 rounded-xl bg-[#0F766E] text-white flex items-center justify-center shrink-0">
+          <span className="w-10 h-10 rounded-xl bg-[#0F172A] text-white flex items-center justify-center shrink-0">
             <I n="upload" s={20} />
           </span>
           <div>
-            <h3 className="font-extrabold text-base sm:text-lg text-slate-900">
-              استوديو الرفع الجماعي الذكي للنظارات (لوحة مزدوجة 16:9 بمكالمة واحدة)
+            <h3 className="font-extrabold text-base sm:text-lg text-[#0F172A]">
+              استوديو الرفع الذكي — تحويل صور النظارات إلى كتالوج{' '}
+              <span dir="ltr" className="inline-block">
+                3D
+              </span>{' '}
+              احترافي في ثوانٍ
             </h3>
             <p className="text-xs text-slate-600">
-              ارفع 10 أو مئات الصور دفعة واحدة — توليد وتقسيم تلقائي لصورة التجربة المفرّغة ولقطة الكتالوج الأمامية والجانبية 3/4 على خلفية #F8F9FA
+              استخراج تلقائي لمقاسات الإطار وكود الموديل + عزل استوديو احترافي وصورة جانبية{' '}
+              <span dir="ltr" className="inline-block">
+                3/4
+              </span>{' '}
+              جاهزة لمتجرك
             </p>
           </div>
         </div>
@@ -911,7 +1477,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
             {readyUnapprovedCount > 0 && (
               <button
                 type="button"
-                className="btn btn-p btn-sm !bg-[#0F766E] !text-white"
+                className="btn btn-p btn-sm !bg-[#D97706] hover:!bg-[#B45309] !text-white"
                 onClick={() => void handleApproveAllReady()}
               >
                 <I n="check" s={14} /> اعتماد الكل ({readyUnapprovedCount})
@@ -929,8 +1495,8 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       </div>
 
       {/* Step 1: 5 Frame Category Modes BEFORE selecting files */}
-      <div className="rounded-2xl bg-white border border-slate-200 p-3.5 space-y-3">
-        <div className="text-xs font-extrabold text-[#0F766E]">
+      <div className="rounded-2xl bg-white border border-[#E2E8F0] p-3.5 space-y-3">
+        <div className="text-xs font-extrabold text-[#0284C7]">
           1. اختر وضع الإطارات أولاً (5 أوضاع مخصصة لعزل الخلفية والعدسات):
         </div>
 
@@ -945,8 +1511,8 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                 className={
                   'p-3 rounded-xl border text-start transition cursor-pointer flex flex-col gap-1 ' +
                   (active
-                    ? 'bg-[#0F766E] text-white border-[#0F766E] shadow-md'
-                    : 'bg-[#F8F9FA] text-slate-900 border-slate-200 hover:border-[#0F766E]/50 hover:bg-white')
+                    ? 'bg-[#0F172A] text-white border-[#0F172A] shadow-md'
+                    : 'bg-[#F8F9FA] text-[#0F172A] border-[#E2E8F0] hover:border-[#0284C7]/50 hover:bg-white')
                 }
               >
                 <div className="flex items-center justify-between gap-2">
@@ -980,7 +1546,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
               className={
                 'px-3 py-1 rounded-lg text-xs font-bold border cursor-pointer transition ' +
                 (subCategory !== 'sun'
-                  ? 'bg-slate-900 text-white border-slate-900'
+                  ? 'bg-[#0F172A] text-white border-[#0F172A]'
                   : 'bg-white text-slate-700 border-slate-300')
               }
             >
@@ -992,7 +1558,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
               className={
                 'px-3 py-1 rounded-lg text-xs font-bold border cursor-pointer transition ' +
                 (subCategory === 'sun'
-                  ? 'bg-slate-900 text-white border-slate-900'
+                  ? 'bg-[#0F172A] text-white border-[#0F172A]'
                   : 'bg-white text-slate-700 border-slate-300')
               }
             >
@@ -1010,7 +1576,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
               className={
                 'px-3 py-1 rounded-lg text-xs font-bold border cursor-pointer transition ' +
                 (subCategory !== 'sun'
-                  ? 'bg-slate-900 text-white border-slate-900'
+                  ? 'bg-[#0F172A] text-white border-[#0F172A]'
                   : 'bg-white text-slate-700 border-slate-300')
               }
             >
@@ -1022,7 +1588,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
               className={
                 'px-3 py-1 rounded-lg text-xs font-bold border cursor-pointer transition ' +
                 (subCategory === 'sun'
-                  ? 'bg-slate-900 text-white border-slate-900'
+                  ? 'bg-[#0F172A] text-white border-[#0F172A]'
                   : 'bg-white text-slate-700 border-slate-300')
               }
             >
@@ -1030,6 +1596,61 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
             </button>
           </div>
         )}
+
+        {/* Speed Mode (Batch vs Turbo), Auto-Color Grouping & Conditional Lens Branding */}
+        <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-slate-100 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={!planCaps.turboUploadEnabled}
+              onClick={() => planCaps.turboUploadEnabled && setTurboMode((v) => !v)}
+              className={
+                'px-3 py-1.5 rounded-xl border font-extrabold flex items-center gap-1.5 transition ' +
+                (!planCaps.turboUploadEnabled
+                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                  : turboMode
+                  ? 'bg-[#D97706] text-white border-[#D97706] cursor-pointer shadow-xs'
+                  : 'bg-white text-[#0F172A] border-slate-300 cursor-pointer hover:bg-slate-50')
+              }
+            >
+              <I n="spark" s={13} />
+              <span>رفع فوري تيربو ⚡</span>
+              {!planCaps.turboUploadEnabled && (
+                <span className="text-[0.62rem] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold">
+                  ترقية للاحترافية
+                </span>
+              )}
+            </button>
+
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] cursor-pointer font-bold text-[#0F172A]">
+              <input
+                type="checkbox"
+                checked={autoGroupColors}
+                onChange={(e) => setAutoGroupColors(e.target.checked)}
+                className="accent-[#0284C7]"
+              />
+              <span>تجميع الألوان التلقائي (توفير AI)</span>
+            </label>
+
+            {platformSettings.allowMerchantLensBrandingToggle && (
+              <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-50 border border-sky-200 cursor-pointer font-bold text-[#0284C7]">
+                <input
+                  type="checkbox"
+                  checked={keepLensBranding}
+                  onChange={(e) => setKeepLensBranding(e.target.checked)}
+                  className="accent-[#0284C7]"
+                />
+                <span>الحفاظ على كتابة العدسة التجريبية</span>
+              </label>
+            )}
+          </div>
+
+          <span className="text-[0.7rem] font-bold text-slate-600 tabular-nums">
+            حتى <span dir="ltr">{MAX_BATCH_SIZE}</span> صورة في الدفعة الواحدة — متاح في باقتك حتى{' '}
+            <span dir="ltr">{maxProducts}</span> نظارة (المضاف:{' '}
+            <span dir="ltr">{activeShopProductsCount}</span>)
+          </span>
+        </div>
       </div>
 
       {validationAlert && (
@@ -1049,7 +1670,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       )}
 
       {/* Photo Guidelines */}
-      <div className="rounded-xl bg-teal-50/70 border border-teal-200 text-slate-800 p-1">
+      <div className="rounded-xl bg-sky-50/70 border border-sky-200 text-slate-800 p-1">
         <PhotoUploadGuidelines />
       </div>
 
@@ -1068,8 +1689,8 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
         className={
           'block rounded-2xl border-2 border-dashed p-5 text-center transition cursor-pointer ' +
           (dragOver
-            ? 'border-[#0F766E] bg-teal-50'
-            : 'border-slate-300 bg-white hover:border-[#0F766E] hover:bg-slate-50')
+            ? 'border-[#0284C7] bg-sky-50'
+            : 'border-slate-300 bg-white hover:border-[#0284C7] hover:bg-slate-50')
         }
       >
         <input
@@ -1084,14 +1705,14 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
         />
         <div className="flex flex-col items-center gap-1.5">
           {processing ? (
-            <div className="w-7 h-7 rounded-full border-2 border-[#0F766E] border-t-transparent animate-spin" />
+            <div className="w-7 h-7 rounded-full border-2 border-[#0284C7] border-t-transparent animate-spin" />
           ) : (
-            <I n="upload" s={26} c="text-[#0F766E]" />
+            <I n="upload" s={26} c="text-[#0284C7]" />
           )}
-          <div className="font-bold text-sm text-slate-900">
+          <div className="font-bold text-sm text-[#0F172A]">
             {selectedMode === 'clip_on'
               ? 'اسحب أو اختر أزواج الصور بالترتيب: صورة بدون الغيار تليها صورة بالغيار (عدد زوجي)'
-              : 'اسحب وأفلت صور النظارات هنا أو اضغط لاختيار عدة صور معاً'}
+              : `اسحب وأفلت صور النظارات هنا أو اضغط لاختيار حتى ${MAX_BATCH_SIZE} صورة في الدفعة`}
           </div>
           <div className="text-xs text-slate-500">
             تُحفظ المسودات تلقائياً في المتصفح — لا تُنشر أي نظارة للعملاء قبل الضغط على «اعتماد»
@@ -1101,11 +1722,11 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
 
       {/* Queue Progress Bar + Cancel Control */}
       {(processing || progress.total > 0) && (
-        <div className="rounded-xl bg-white border border-slate-200 p-3 space-y-2">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-800">
+        <div className="rounded-xl bg-white border border-[#E2E8F0] p-3 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-[#0F172A]">
             <span className="flex items-center gap-2">
               {processing && (
-                <span className="w-3.5 h-3.5 rounded-full border-2 border-[#0F766E] border-t-transparent animate-spin inline-block shrink-0" />
+                <span className="w-3.5 h-3.5 rounded-full border-2 border-[#0284C7] border-t-transparent animate-spin inline-block shrink-0" />
               )}
               {processing
                 ? `جاري التحسين — تم تجهيز ${progress.done} من ${progress.total} نظارة...`
@@ -1114,7 +1735,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                 : `تم تجهيز ${progress.done} من ${progress.total} نظارة للمراجعة والاعتماد ✓`}
             </span>
             <div className="flex items-center gap-2">
-              <span className="text-[#0F766E] tabular-nums">{pct}%</span>
+              <span className="text-[#0284C7] tabular-nums">{pct}%</span>
               {processing && (
                 <button
                   type="button"
@@ -1127,7 +1748,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
             </div>
           </div>
           <div className="h-2.5 rounded-full bg-slate-200 overflow-hidden">
-            <div className="h-full bg-[#0F766E] rounded-full transition-all duration-150" style={{ width: `${pct}%` }} />
+            <div className="h-full bg-[#0284C7] rounded-full transition-all duration-150" style={{ width: `${pct}%` }} />
           </div>
         </div>
       )}
@@ -1135,7 +1756,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       {/* Review Grid + Bulk Actions Bar */}
       {items.length > 0 && (
         <>
-          <div className="rounded-2xl bg-white border border-slate-200 p-3 flex flex-wrap items-end gap-3">
+          <div className="rounded-2xl bg-white border border-[#E2E8F0] p-3 flex flex-wrap items-end gap-3">
             <div className="flex items-end gap-1.5">
               <div>
                 <label className="text-[0.68rem] text-slate-600 font-bold block mb-1">السعر الافتراضي (ج.م)</label>
@@ -1150,7 +1771,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
               </div>
               <button
                 type="button"
-                className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold cursor-pointer hover:bg-slate-800"
+                className="px-3 py-1.5 rounded-lg bg-[#0F172A] text-white text-xs font-bold cursor-pointer hover:bg-slate-800"
                 onClick={applyPriceToAll}
               >
                 تطبيق السعر على الكل
@@ -1168,7 +1789,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                       className={
                         'px-2 py-1 rounded-lg text-[0.68rem] font-bold border cursor-pointer ' +
                         (bulkWidthMm === p.mm
-                          ? 'bg-[#0F766E] text-white border-[#0F766E]'
+                          ? 'bg-[#0284C7] text-white border-[#0284C7]'
                           : 'bg-[#F8F9FA] text-slate-700 border-slate-300')
                       }
                       onClick={() => setBulkWidthMm(p.mm)}
@@ -1188,7 +1809,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
               </div>
               <button
                 type="button"
-                className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold cursor-pointer hover:bg-slate-800"
+                className="px-3 py-1.5 rounded-lg bg-[#0F172A] text-white text-xs font-bold cursor-pointer hover:bg-slate-800"
                 onClick={applySizeToAll}
               >
                 تطبيق المقاس على الكل
@@ -1199,7 +1820,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
               <div className="ms-auto">
                 <button
                   type="button"
-                  className="btn btn-p !bg-[#0F766E] !text-white"
+                  className="btn btn-p !bg-[#D97706] hover:!bg-[#B45309] !text-white"
                   onClick={() => void handleApproveAllReady()}
                 >
                   <I n="check" s={16} /> اعتماد ونشر الكل ({readyUnapprovedCount})
@@ -1208,7 +1829,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
             )}
           </div>
 
-          {/* Cards Grid */}
+          {/* Cards Grid (Clean Studio Outputs Only — No Before/After Clutter) */}
           <div className="grid sm:grid-cols-2 gap-4">
             {visibleItems.map((it) => {
               const isEnhancing = it.status === 'enhancing';
@@ -1217,8 +1838,10 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
               const needsCheck = it.quality === 'check';
               const showingClipOn = Boolean(it.frameType === 'clip_on' && it.previewClipOn && it.clipOnImagePath);
               const activeTryOnPreview = showingClipOn ? it.clipOnImagePath : it.imagePath;
-              const activeFrontPreview = showingClipOn && it.clipOnFrontCatalogPath ? it.clipOnFrontCatalogPath : it.frontCatalogPath;
-              const activeSidePreview = showingClipOn && it.clipOnSideImagePath ? it.clipOnSideImagePath : it.sideImagePath;
+              const activeFrontPreview =
+                showingClipOn && it.clipOnFrontCatalogPath ? it.clipOnFrontCatalogPath : it.frontCatalogPath;
+              const activeSidePreview =
+                showingClipOn && it.clipOnSideImagePath ? it.clipOnSideImagePath : it.sideImagePath;
 
               return (
                 <div
@@ -1229,15 +1852,15 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                       ? 'border-emerald-400 ring-1 ring-emerald-300'
                       : needsCheck
                       ? 'border-amber-400'
-                      : 'border-slate-200 shadow-sm')
+                      : 'border-[#E2E8F0] shadow-sm')
                   }
                 >
                   {/* Top status & action bar */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       {isEnhancing ? (
-                        <span className="text-[0.68rem] px-2 py-0.5 rounded-lg bg-teal-50 text-[#0F766E] border border-teal-200 font-bold flex items-center gap-1.5">
-                          <span className="w-3 h-3 rounded-full border-2 border-[#0F766E] border-t-transparent animate-spin inline-block" />
+                        <span className="text-[0.68rem] px-2 py-0.5 rounded-lg bg-sky-50 text-[#0284C7] border border-sky-200 font-bold flex items-center gap-1.5">
+                          <span className="w-3 h-3 rounded-full border-2 border-[#0284C7] border-t-transparent animate-spin inline-block" />
                           {it.stageLabel || 'جاري التحسين'}
                         </span>
                       ) : isError ? (
@@ -1249,11 +1872,11 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                           معتمدة ومنشورة ✓
                         </span>
                       ) : (
-                        <span className="text-[0.68rem] px-2 py-0.5 rounded-lg bg-slate-900 text-white font-semibold">
-                          بانتظار الاعتماد
+                        <span className="text-[0.68rem] px-2 py-0.5 rounded-lg bg-[#0F172A] text-white font-semibold">
+                          {it.cacheHit ? 'من الكتالوج المشترك ⚡' : it.autoColorSibling ? 'لون مضاف محلياً 🎨' : 'بانتظار الاعتماد'}
                         </span>
                       )}
-                      <span className="text-[0.66rem] px-2 py-0.5 rounded-lg bg-[#F8F9FA] border border-slate-200 text-slate-700 font-bold">
+                      <span className="text-[0.66rem] px-2 py-0.5 rounded-lg bg-[#F8F9FA] border border-[#E2E8F0] text-slate-700 font-bold">
                         {FRAME_MODES.find((m) => m.id === it.frameType)?.title || 'نظارة'}
                       </span>
                     </div>
@@ -1281,7 +1904,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                             type="button"
                             title="معاينة التثبيت على الوجه"
                             onClick={() => setInspectItem(it)}
-                            className="w-7 h-7 rounded-lg bg-slate-900 text-white flex items-center justify-center hover:bg-slate-800 cursor-pointer"
+                            className="w-7 h-7 rounded-lg bg-[#0F172A] text-white flex items-center justify-center hover:bg-slate-800 cursor-pointer"
                           >
                             <I n="eye" s={13} />
                           </button>
@@ -1308,13 +1931,13 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
 
                   {/* Clip-On Optical vs Sun Preview Switch */}
                   {isReady && it.frameType === 'clip_on' && it.clipOnImagePath && (
-                    <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-[#F8F9FA] border border-slate-200">
+                    <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0]">
                       <button
                         type="button"
                         onClick={() => updateCard(it.localId, { previewClipOn: false })}
                         className={
                           'py-1 rounded-lg text-[0.7rem] font-bold cursor-pointer ' +
-                          (!it.previewClipOn ? 'bg-slate-900 text-white' : 'text-slate-700')
+                          (!it.previewClipOn ? 'bg-[#0F172A] text-white' : 'text-slate-700')
                         }
                       >
                         الوضع الطبي 👓
@@ -1324,7 +1947,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                         onClick={() => updateCard(it.localId, { previewClipOn: true })}
                         className={
                           'py-1 rounded-lg text-[0.7rem] font-bold cursor-pointer ' +
-                          (it.previewClipOn ? 'bg-[#0F766E] text-white' : 'text-slate-700')
+                          (it.previewClipOn ? 'bg-[#0284C7] text-white' : 'text-slate-700')
                         }
                       >
                         بغيار الشمس 🕶️
@@ -1332,14 +1955,14 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                     </div>
                   )}
 
-                  {/* 3 Review Previews: Front Studio Catalog, 3/4 Side Catalog, & Transparent Try-On */}
+                  {/* 3 Studio Outputs: Front Studio Catalog, 3/4 Side Catalog, & Transparent Try-On */}
                   <div className="grid grid-cols-3 gap-2">
-                    <div className="relative h-28 rounded-xl border border-slate-200 bg-[#F8F9FA] flex items-center justify-center overflow-hidden p-1.5">
-                      <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-slate-900/85 text-white text-[0.54rem] font-bold">
+                    <div className="relative h-28 rounded-xl border border-[#E2E8F0] bg-[#F8F9FA] flex items-center justify-center overflow-hidden p-1.5">
+                      <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-[#0F172A]/85 text-white text-[0.54rem] font-bold">
                         أمامي كتالوج
                       </span>
                       {isEnhancing ? (
-                        <div className="w-5 h-5 rounded-full border-2 border-[#0F766E] border-t-transparent animate-spin" />
+                        <div className="w-5 h-5 rounded-full border-2 border-[#0284C7] border-t-transparent animate-spin" />
                       ) : isError ? (
                         <span className="text-[0.6rem] text-rose-700 font-bold text-center">{it.errorMsg}</span>
                       ) : (
@@ -1353,12 +1976,12 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                       )}
                     </div>
 
-                    <div className="relative h-28 rounded-xl border border-slate-200 bg-[#F8F9FA] flex items-center justify-center overflow-hidden p-1.5">
-                      <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-slate-900/85 text-white text-[0.54rem] font-bold">
+                    <div className="relative h-28 rounded-xl border border-[#E2E8F0] bg-[#F8F9FA] flex items-center justify-center overflow-hidden p-1.5">
+                      <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-[#0F172A]/85 text-white text-[0.54rem] font-bold">
                         جانبي 3/4
                       </span>
                       {isEnhancing || it.sideBusy ? (
-                        <div className="w-5 h-5 rounded-full border-2 border-[#0F766E] border-t-transparent animate-spin" />
+                        <div className="w-5 h-5 rounded-full border-2 border-[#0284C7] border-t-transparent animate-spin" />
                       ) : activeSidePreview ? (
                         <img
                           src={activeSidePreview}
@@ -1388,7 +2011,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                     </div>
 
                     <div
-                      className="relative h-28 rounded-xl border border-slate-200 flex items-center justify-center overflow-hidden p-1.5"
+                      className="relative h-28 rounded-xl border border-[#E2E8F0] flex items-center justify-center overflow-hidden p-1.5"
                       style={{
                         backgroundImage:
                           'linear-gradient(45deg, #e2e8f0 25%, transparent 25%), linear-gradient(-45deg, #e2e8f0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e2e8f0 75%), linear-gradient(-45deg, transparent 75%, #e2e8f0 75%)',
@@ -1397,11 +2020,11 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                         backgroundColor: '#f8fafc',
                       }}
                     >
-                      <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-[#0F766E] text-white text-[0.54rem] font-bold">
+                      <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-[#0284C7] text-white text-[0.54rem] font-bold">
                         مفرّغة للتجربة
                       </span>
                       {isEnhancing ? (
-                        <div className="w-5 h-5 rounded-full border-2 border-[#0F766E] border-t-transparent animate-spin" />
+                        <div className="w-5 h-5 rounded-full border-2 border-[#0284C7] border-t-transparent animate-spin" />
                       ) : activeTryOnPreview ? (
                         <img
                           src={activeTryOnPreview}
@@ -1411,13 +2034,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                           className="max-h-full max-w-full object-contain"
                         />
                       ) : (
-                        <img
-                          src={it.originalThumbUrl}
-                          alt={it.name}
-                          loading="lazy"
-                          decoding="async"
-                          className="max-h-full max-w-full object-contain opacity-45"
-                        />
+                        <span className="text-[0.6rem] text-slate-400">جاري التجهيز</span>
                       )}
                     </div>
                   </div>
@@ -1429,10 +2046,10 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                     </div>
                   )}
 
-                  {/* Quick Name & Price + Code */}
+                  {/* Quick Name, Price, Optional Sale Price & Code/ModelCode */}
                   <div className="grid grid-cols-12 gap-1.5">
                     <input
-                      className="col-span-6 rounded-lg border border-slate-300 bg-[#F8F9FA] text-slate-900 px-2.5 py-1.5 text-xs font-bold"
+                      className="col-span-5 rounded-lg border border-slate-300 bg-[#F8F9FA] text-slate-900 px-2.5 py-1.5 text-xs font-bold"
                       value={it.name}
                       onChange={(e) => updateCard(it.localId, { name: e.target.value })}
                       placeholder="اسم الشنبر"
@@ -1441,16 +2058,37 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                       type="number"
                       min="0"
                       dir="ltr"
-                      className="col-span-3 rounded-lg border border-slate-300 bg-[#F8F9FA] text-slate-900 px-2 py-1.5 text-xs font-bold tabular-nums"
+                      title="السعر الأساسي"
+                      className="col-span-2 rounded-lg border border-slate-300 bg-[#F8F9FA] text-slate-900 px-2 py-1.5 text-xs font-bold tabular-nums"
                       value={it.price}
                       onChange={(e) => updateCard(it.localId, { price: Math.max(0, Number(e.target.value) || 0) })}
                       placeholder="السعر"
                     />
                     <input
+                      type="number"
+                      min="0"
+                      dir="ltr"
+                      title="سعر العرض (اختياري)"
+                      className="col-span-2 rounded-lg border border-amber-300 bg-amber-50/40 text-amber-900 px-2 py-1.5 text-xs font-bold tabular-nums"
+                      value={it.salePrice || ''}
+                      onChange={(e) =>
+                        updateCard(it.localId, {
+                          salePrice: e.target.value ? Math.max(0, Number(e.target.value) || 0) : undefined,
+                        })
+                      }
+                      placeholder="عرض"
+                    />
+                    <input
                       className="col-span-3 rounded-lg border border-slate-300 bg-[#F8F9FA] text-slate-700 px-2 py-1.5 text-[0.7rem] font-mono"
                       dir="ltr"
-                      value={it.code}
-                      onChange={(e) => updateCard(it.localId, { code: e.target.value.toUpperCase() })}
+                      title="الكود / رقم الموديل"
+                      value={it.modelCode || it.code}
+                      onChange={(e) =>
+                        updateCard(it.localId, {
+                          code: e.target.value.toUpperCase(),
+                          modelCode: e.target.value.toUpperCase(),
+                        })
+                      }
                     />
                   </div>
 
@@ -1465,7 +2103,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                           'py-2 px-3 rounded-xl font-extrabold text-xs flex items-center justify-center gap-1.5 transition ' +
                           (it.approved
                             ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 cursor-default'
-                            : 'bg-[#0F766E] hover:bg-[#0d655e] text-white cursor-pointer disabled:opacity-45')
+                            : 'bg-[#D97706] hover:bg-[#B45309] text-white cursor-pointer disabled:opacity-45')
                         }
                       >
                         <I n="check" s={14} /> {it.approved ? 'تم الاعتماد ✓' : 'اعتماد'}
@@ -1485,7 +2123,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                   {isReady && activeTryOnPreview && (
                     <div className="space-y-2 border-t border-slate-100 pt-2">
                       <div className="grid grid-cols-2 gap-1.5 text-[0.68rem]">
-                        <div className="flex items-center justify-between bg-[#F8F9FA] border border-slate-200 rounded-lg px-2 py-1">
+                        <div className="flex items-center justify-between bg-[#F8F9FA] border border-[#E2E8F0] rounded-lg px-2 py-1">
                           <span className="text-slate-600">العرض (mm)</span>
                           <input
                             type="number"
@@ -1504,7 +2142,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                         <input
                           type="text"
                           dir="ltr"
-                          className="bg-[#F8F9FA] border border-slate-200 rounded-lg px-2 py-1 font-mono text-slate-900"
+                          className="bg-[#F8F9FA] border border-[#E2E8F0] rounded-lg px-2 py-1 font-mono text-slate-900"
                           value={it.opticalDimensions}
                           onChange={(e) => updateCard(it.localId, { opticalDimensions: e.target.value })}
                           placeholder="52-18-140"
@@ -1514,10 +2152,10 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                       <button
                         type="button"
                         onClick={() => updateCard(it.localId, { showFacePreview: !it.showFacePreview })}
-                        className="w-full py-1.5 px-2.5 rounded-lg bg-[#F8F9FA] hover:bg-slate-100 border border-slate-200 text-slate-800 text-[0.68rem] font-bold flex items-center justify-between cursor-pointer"
+                        className="w-full py-1.5 px-2.5 rounded-lg bg-[#F8F9FA] hover:bg-slate-100 border border-[#E2E8F0] text-slate-800 text-[0.68rem] font-bold flex items-center justify-between cursor-pointer"
                       >
                         <span>معاينة وملاءمة التثبيت على الوجه</span>
-                        <span className="text-[#0F766E]">{it.showFacePreview ? 'إخفاء' : 'عرض'}</span>
+                        <span className="text-[#0284C7]">{it.showFacePreview ? 'إخفاء' : 'عرض'}</span>
                       </button>
 
                       {it.showFacePreview && (
@@ -1544,7 +2182,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
           {hasMoreItems && (
             <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
               <span className="text-xs text-slate-600 tabular-nums">
-                عرض {visibleItems.length} من {items.length} نظارة
+                عرض <span dir="ltr">{visibleItems.length} / {items.length}</span> نظارة
               </span>
               <button
                 type="button"
@@ -1573,6 +2211,8 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                 frameType: inspectItem.frameType,
                 subCategory: inspectItem.subCategory,
                 price: inspectItem.price,
+                salePrice: inspectItem.salePrice,
+                disc: 0,
                 frame: inspectItem.frameHexColor,
                 lens: inspectItem.cat === 'sun' ? '#334155' : '#dbeafe',
                 processedImage: inspectItem.frontCatalogPath,
@@ -1612,9 +2252,78 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
               }}
             />
           )}
-          <div className="flex justify-between items-center mt-3 text-xs opacity-75">
-            <span>الأبعاد: {inspectItem.opticalDimensions}</span>
-            <span>السعر: {inspectItem.price} ج.م</span>
+          <div className="flex justify-between items-center mt-3 text-xs text-slate-600">
+            <span>
+              الأبعاد: <span dir="ltr" className="font-mono font-bold">{inspectItem.opticalDimensions}</span>
+            </span>
+            <span>
+              السعر:{' '}
+              <span dir="ltr" className="font-bold text-[#0F172A]">
+                {inspectItem.salePrice && inspectItem.salePrice < inspectItem.price
+                  ? inspectItem.salePrice
+                  : inspectItem.price}
+              </span>{' '}
+              ج.م
+            </span>
+          </div>
+        </Modal>
+      )}
+
+      {/* Smart Out-of-Credits / Capacity Exhausted Popup Modal */}
+      {outOfCreditsModal && (
+        <Modal
+          title={outOfCreditsModal === 'capacity' ? 'اكتملت سعة الكتالوج المتاحة' : 'نفد رصيد المعالجة بالذكاء الاصطناعي'}
+          onClose={() => setOutOfCreditsModal(null)}
+        >
+          <div className="space-y-4">
+            <div className="rounded-2xl bg-amber-50 border border-amber-200 p-4 text-sm text-amber-950 leading-7">
+              {outOfCreditsModal === 'capacity'
+                ? 'وصل متجرك للحد الأقصى من النظارات المتاحة في باقتك الحالية. يمكنك إضافة باقة سريعة أو ترقية باقتك الآن للمتابعة فوراً.'
+                : 'انتهى رصيد معالجة الصور بالذكاء الاصطناعي في باقتك الحالية. اشحن باقة إضافية فورية أو قم بترقية اشتراكك لإكمال رفع النظارات.'}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3">
+                <div className="text-slate-500 mb-1">سعة الكتالوج</div>
+                <b className="text-sm text-[#0F172A] tabular-nums" dir="ltr">
+                  {activeShopProductsCount} / {maxProducts}
+                </b>
+              </div>
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3">
+                <div className="text-slate-500 mb-1">رصيد المعالجة</div>
+                <b className="text-sm text-[#0284C7] tabular-nums" dir="ltr">
+                  {remainingCredits} / {creditsCap}
+                </b>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2.5">
+              <button
+                type="button"
+                className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white w-full !py-3 font-extrabold"
+                onClick={async () => {
+                  await addTopUpCredits(activeShop.id);
+                  setOutOfCreditsModal(null);
+                }}
+              >
+                <I n="plus" s={16} />
+                <span>
+                  +{platformSettings.topupPackFrames} نظارة إضافية بـ{' '}
+                  <span dir="ltr">{platformSettings.topupPackPrice}</span> ج.م
+                </span>
+              </button>
+
+              <a
+                className="btn btn-g w-full !py-2.5"
+                href={`https://wa.me/201000000000?text=${encodeURIComponent(
+                  `مرحباً إدارة OptiVerse، أرغب في ترقية باقة متجر "${activeShop.name}" (${activeShop.slug}).`
+                )}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <I n="crown" s={15} c="text-[#D97706]" /> ترقية الباقة عبر واتساب الإدارة
+              </a>
+            </div>
           </div>
         </Modal>
       )}

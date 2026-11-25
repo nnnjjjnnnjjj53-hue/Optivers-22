@@ -47,6 +47,10 @@ export const ICON_PATHS: Record<string, string> = {
   rot: 'M21 12a9 9 0 1 1-3-6.7 M21 3v6h-6',
   phone: 'M7 2h10v20H7z M11 18h2',
   logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9',
+  menu: 'M3 6h18 M3 12h18 M3 18h18',
+  map: 'M12 21s-6-5.3-6-10a6 6 0 1 1 12 0c0 4.7-6 10-6 10z M12 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4',
+  truck: 'M1 3h15v13H1z M16 8h4l3 3v5h-7z M5.5 21a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5 M18.5 21a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5',
+  arrow: 'M19 12H5 M12 19l-7-7 7-7',
 };
 
 export function I({ n, s = 18, c = '' }: { n: string; s?: number; c?: string }) {

@@ -59,6 +59,8 @@ function getCutoutWorker(): Worker | null {
   }
 }
 
+export { generateTintedCatalogAsset } from '../workers/cutoutWorker';
+
 export async function processCutoutInWorker(
   frontFile: Blob,
   sideFile?: Blob,

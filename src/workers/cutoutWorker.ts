@@ -29,6 +29,7 @@ export interface CutoutWorkerOptions {
   frameType?: EyewearFrameMode;
   subCategory?: EyewearSubMode;
   isClipOnAttachment?: boolean;
+  isCrystalFrame?: boolean;
   material?: FrameMaterial;
   frameWidthMm?: number;
   opticalDimensions?: string;
@@ -209,6 +210,108 @@ export function applyChromaKeyAndDespill(
   }
 
   return out;
+}
+
+/**
+ * Pure: Extracts transparent/crystal acetate frames placed on pure #FFFFFF white background
+ * (zero green chroma spill) using luminance & subtle edge opacity estimation.
+ */
+export function extractWhiteBgCrystalCutout(
+  raw: Uint8ClampedArray,
+  w: number,
+  h: number
+): Uint8ClampedArray {
+  const total = w * h;
+  const out = new Uint8ClampedArray(raw);
+  for (let p = 0; p < total; p++) {
+    const i = p * 4;
+    const origA = raw[i + 3];
+    if (origA < 16) {
+      out[i] = 0;
+      out[i + 1] = 0;
+      out[i + 2] = 0;
+      out[i + 3] = 0;
+      continue;
+    }
+    const r = raw[i];
+    const g = raw[i + 1];
+    const b = raw[i + 2];
+    const distFromWhite = rgbDistance(r, g, b, 255, 255, 255);
+    const maxC = Math.max(r, g, b);
+    const minC = Math.min(r, g, b);
+    const chromaDiff = maxC - minC;
+
+    if (distFromWhite <= 16 && chromaDiff <= 10) {
+      out[i] = 0;
+      out[i + 1] = 0;
+      out[i + 2] = 0;
+      out[i + 3] = 0;
+    } else if (distFromWhite < 52 && chromaDiff < 18) {
+      // Translucent crystal acetate rim: smooth semi-opaque bevel
+      const t = (distFromWhite - 16) / 36;
+      const alpha = Math.min(origA, Math.round(70 + t * 175));
+      out[i + 3] = alpha;
+    } else {
+      out[i + 3] = origA;
+    }
+  }
+  return out;
+}
+
+/**
+ * Pure: Generates a color-shifted variant buffer locally on Canvas (for Auto-Color Grouping)
+ * preserving highlights, metal sheen, and clear translucent lenses (alpha < 60).
+ */
+export function generateColorTintedVariantPixels(
+  raw: Uint8ClampedArray,
+  w: number,
+  h: number,
+  targetHex: string
+): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(raw);
+  const cleanHex = targetHex.replace('#', '');
+  const tr = parseInt(cleanHex.slice(0, 2), 16) || 30;
+  const tg = parseInt(cleanHex.slice(2, 4), 16) || 41;
+  const tb = parseInt(cleanHex.slice(4, 6), 16) || 59;
+  const total = w * h;
+
+  for (let p = 0; p < total; p++) {
+    const i = p * 4;
+    const a = raw[i + 3];
+    // Preserve clear optical lenses (alpha ~ 15..25) and transparent outer background
+    if (a <= 55) continue;
+    const r = raw[i];
+    const g = raw[i + 1];
+    const b = raw[i + 2];
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    // Blend frame shade while maintaining specular highlights (> 0.85 lum)
+    const shadeFactor = Math.min(1.25, 0.42 + lum * 0.85);
+    const highlightMix = lum > 0.86 ? (lum - 0.86) * 2.4 : 0;
+    out[i] = Math.min(255, Math.round(tr * shadeFactor * (1 - highlightMix) + r * highlightMix));
+    out[i + 1] = Math.min(255, Math.round(tg * shadeFactor * (1 - highlightMix) + g * highlightMix));
+    out[i + 2] = Math.min(255, Math.round(tb * shadeFactor * (1 - highlightMix) + b * highlightMix));
+  }
+  return out;
+}
+
+export async function generateTintedCatalogAsset(
+  sourceDataUrl: string,
+  targetHex: string
+): Promise<{ blob: Blob; dataUrl: string }> {
+  const res = await fetch(sourceDataUrl);
+  const srcBlob = await res.blob();
+  const c = await decodeBlobToCanvas(srcBlob, 1200);
+  try {
+    const ctx = getCtx2d(c);
+    const img = ctx.getImageData(0, 0, c.width, c.height);
+    const tinted = generateColorTintedVariantPixels(img.data, c.width, c.height, targetHex);
+    img.data.set(tinted);
+    ctx.putImageData(img, 0, 0);
+    const exp = await exportAsset(c, 'image/webp', 0.85);
+    return { blob: exp.blob, dataUrl: exp.dataUrl };
+  } finally {
+    disposeWorkCanvas(c);
+  }
 }
 
 /**
@@ -1008,9 +1111,22 @@ export async function processCutoutFrame(
     let qualityNoteAr: string | undefined;
     let baseCalibration: ModelCalibration = {};
 
-    if (chroma.kind) {
-      onStage?.('جاري عزل الكروما وتنقية الحواف...');
-      const keyed = applyChromaKeyAndDespill(rawData, sw, sh, chroma.kind, chroma.rgb, frameType);
+    const isWhiteCrystalStudio =
+      !chroma.kind &&
+      Boolean(options.isCrystalFrame) &&
+      chroma.rgb.r >= 232 &&
+      chroma.rgb.g >= 232 &&
+      chroma.rgb.b >= 232;
+
+    if (chroma.kind || isWhiteCrystalStudio) {
+      onStage?.(
+        isWhiteCrystalStudio
+          ? 'جاري استخلاص الإطار الشفاف من الخلفية البيضاء النقية...'
+          : 'جاري عزل الكروما وتنقية الحواف...'
+      );
+      const keyed = isWhiteCrystalStudio
+        ? extractWhiteBgCrystalCutout(rawData, sw, sh)
+        : applyChromaKeyAndDespill(rawData, sw, sh, chroma.kind!, chroma.rgb, frameType);
       const bfs = applyBfsLensFloodFill(keyed, sw, sh, { skipSunglasses });
       sampledLensColor = bfs.sampledLensColor;
       leftLensBox = bfs.leftLensBox;
@@ -1142,9 +1258,9 @@ export async function processCutoutFrame(
     }
 
     const [imagePath, frontCatalogPath, sideImagePath, maskAsset] = await Promise.all([
-      exportAsset(cutoutCanvas, 'image/webp', 0.9),
-      exportAsset(studioFrontCanvas, 'image/webp', 0.88),
-      exportAsset(studioSideCanvas, 'image/webp', 0.88),
+      exportAsset(cutoutCanvas, 'image/webp', 0.85),
+      exportAsset(studioFrontCanvas, 'image/webp', 0.85),
+      exportAsset(studioSideCanvas, 'image/webp', 0.85),
       exportAsset(maskCanvas, 'image/png', 1),
     ]);
 

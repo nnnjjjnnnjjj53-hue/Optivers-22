@@ -217,7 +217,7 @@ export function CustomerPhotoTryOn({
             const eyeDistPx = Math.max(18, face.eyeDistance * contain.w);
             const pixelsPerMm = Math.max(0.25, eyeDistPx / 63);
             const glassesW = Math.max(80, frameTotalWidthMm * pixelsPerMm * calFitScale * kidsMult);
-            const userFaceWidthMm = (Math.max(eyeDistPx * 1.9, face.cheekSpan * contain.w)) / pixelsPerMm;
+            const userFaceWidthMm = (Math.max(eyeDistPx * 1.9, face.cheekWidth * contain.w)) / pixelsPerMm;
             const fit = assessOpticalFit(userFaceWidthMm, frameTotalWidthMm);
             setPhotoFitInfo({ status: fit.status, badgeLabel: fit.badgeLabel });
             nextPose = {

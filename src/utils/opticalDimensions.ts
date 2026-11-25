@@ -49,11 +49,14 @@ export function computeTotalFrameWidthMm(lensWidthMm: number, bridgeWidthMm: num
 }
 
 export function formatOpticalDimensions(
-  lensWidthMm: number,
-  bridgeWidthMm: number,
-  templeLengthMm: number
+  lensWidthMmOrSpec: number | OpticalDimensionsSpec,
+  bridgeWidthMm?: number,
+  templeLengthMm?: number
 ): string {
-  return `${clampLensWidthMm(lensWidthMm)}□${clampBridgeWidthMm(bridgeWidthMm)}-${clampTempleLengthMm(templeLengthMm)}`;
+  if (typeof lensWidthMmOrSpec === 'object' && lensWidthMmOrSpec !== null) {
+    return `${clampLensWidthMm(lensWidthMmOrSpec.lensWidthMm)}□${clampBridgeWidthMm(lensWidthMmOrSpec.bridgeWidthMm)}-${clampTempleLengthMm(lensWidthMmOrSpec.templeLengthMm)}`;
+  }
+  return `${clampLensWidthMm(lensWidthMmOrSpec)}□${clampBridgeWidthMm(bridgeWidthMm ?? 18)}-${clampTempleLengthMm(templeLengthMm ?? 140)}`;
 }
 
 export const OPTICAL_PRESETS: Record<OpticalPresetKey, OpticalPreset> = {

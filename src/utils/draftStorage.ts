@@ -10,7 +10,9 @@ export interface PersistedDraftFrame {
   savedProductId?: string;
   name: string;
   code: string;
+  modelCode?: string;
   price: number;
+  salePrice?: number;
   frameType: EyewearFrameMode;
   subCategory: EyewearSubMode;
   cat: FrameCat;
@@ -22,6 +24,8 @@ export interface PersistedDraftFrame {
   templeLengthMm?: number;
   totalFrameWidthMm?: number;
   ocrFound?: boolean;
+  isCrystalFrame?: boolean;
+  keepLensBranding?: boolean;
   opticalDimensions: string;
   fitScale: number;
   eyeLineOffset: number;

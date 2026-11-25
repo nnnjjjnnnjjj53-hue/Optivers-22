@@ -5,13 +5,13 @@ import { I } from './Icons';
 
 export function PhotoUploadGuidelines() {
   return (
-    <div className="rounded-xl bg-teal-500/10 border border-teal-400/25 p-3 text-xs space-y-1.5">
-      <div className="font-extrabold text-teal-200 flex items-center gap-1.5">
+    <div className="rounded-xl bg-sky-50 border border-sky-200 p-3 text-xs space-y-1.5 text-[#0F172A]">
+      <div className="font-extrabold text-[#0284C7] flex items-center gap-1.5">
         <I n="spark" s={14} /> إرشادات تصوير الإطار للحصول على تجربة واقعية مطابقة للطبيعة:
       </div>
-      <ul className="grid sm:grid-cols-2 gap-x-4 gap-y-1 text-[0.72rem] opacity-85 list-disc list-inside">
+      <ul className="grid sm:grid-cols-2 gap-x-4 gap-y-1 text-[0.72rem] text-slate-700 list-disc list-inside">
         <li>لقطة أمامية مستقيمة تماماً على مستوى العين</li>
-        <li>طَيّ الأذرع للخلف بحيث تكون مخفية خلف الإطار</li>
+        <li>ذات الأذرع المطوية للخلف بحيث تكون مخفية خلف الإطار</li>
         <li>خلفية فاتحة سادة أو بلون موحد نظيف</li>
         <li>إضاءة متساوية بدون ظلال قاسية أو لمعان حاد</li>
         <li>ملء الإطار لعرض الصورة بأكبر مساحة ممكنة</li>
@@ -66,11 +66,11 @@ export function FrameFitPreview({
 
         <div
           className={
-            'relative rounded-xl bg-slate-900 border border-white/15 flex items-center justify-center overflow-hidden ' +
+            'relative rounded-xl bg-slate-900 border border-slate-300 flex items-center justify-center overflow-hidden ' +
             (compact ? 'h-32' : 'h-40')
           }
         >
-          <span className="absolute top-1.5 start-1.5 z-10 px-1.5 py-0.5 rounded bg-black/70 text-teal-200 text-[0.58rem] font-bold">
+          <span className="absolute top-1.5 start-1.5 z-10 px-1.5 py-0.5 rounded bg-black/70 text-sky-200 text-[0.58rem] font-bold">
             معاينة على الوجه
           </span>
           <div className="relative h-full aspect-[300/360]">
@@ -101,11 +101,11 @@ export function FrameFitPreview({
       </div>
 
       {/* Fit sliders wrapped cleanly in dir="ltr" so RTL layout never inverts range direction or numbers */}
-      <div className="grid sm:grid-cols-2 gap-2 rounded-xl bg-white/[0.03] border border-white/10 p-2.5 text-[0.68rem]">
+      <div className="grid sm:grid-cols-2 gap-2 rounded-xl bg-white border border-slate-200 text-[#0F172A] p-2.5 text-[0.68rem]">
         <div>
           <div className="flex items-center justify-between mb-1">
-            <span className="opacity-75 font-semibold">مقياس الملاءمة (fitScale)</span>
-            <span dir="ltr" className="font-mono tx-acc tabular-nums">
+            <span className="text-slate-600 font-semibold">مقياس الملاءمة (fitScale)</span>
+            <span dir="ltr" className="font-mono text-[#0284C7] font-bold tabular-nums">
               {fitScale.toFixed(2)}
             </span>
           </div>
@@ -118,15 +118,15 @@ export function FrameFitPreview({
               step={0.01}
               value={fitScale}
               onChange={(e) => onChangeFitScale(Number(e.target.value))}
-              className="w-full accent-[var(--acc)] cursor-pointer"
+              className="w-full accent-[#0284C7] cursor-pointer"
             />
           </div>
         </div>
 
         <div>
           <div className="flex items-center justify-between mb-1">
-            <span className="opacity-75 font-semibold">محاذاة خط العين (eyeLineOffset)</span>
-            <span dir="ltr" className="font-mono tx-acc tabular-nums">
+            <span className="text-slate-600 font-semibold">محاذاة خط العين (eyeLineOffset)</span>
+            <span dir="ltr" className="font-mono text-[#0284C7] font-bold tabular-nums">
               {eyeLineOffset >= 0 ? `+${eyeLineOffset.toFixed(2)}` : eyeLineOffset.toFixed(2)}
             </span>
           </div>
@@ -139,7 +139,7 @@ export function FrameFitPreview({
               step={0.01}
               value={eyeLineOffset}
               onChange={(e) => onChangeEyeLineOffset(Number(e.target.value))}
-              className="w-full accent-[var(--acc)] cursor-pointer"
+              className="w-full accent-[#0284C7] cursor-pointer"
             />
           </div>
         </div>

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CATS, DEFAULT_SHOP_ID, TYPES } from '../data/seed';
+import { CATS, DEFAULT_SHOP_ID, EGYPT_GOVERNORATES, TYPES } from '../data/seed';
 import { useOptiVerse } from '../services/optiverseStore';
 import { Inquiry, Product } from '../types';
 import { BeforeAfter, MiniGlasses, Rx } from './GlassesGraphics';
@@ -131,10 +131,10 @@ function ConfirmModal({ q, onClose }: { q: Inquiry; onClose: () => void }) {
     <Modal title="تأكيد الملاءمة والسعر النهائي" onClose={onClose}>
       {!ok ? (
         <div className="space-y-3">
-          <div className="text-sm opacity-75">
+          <div className="text-sm text-slate-600">
             راجعت الكشف وتأكدت إن العدسة مناسبة لقياس العميل؟ حدّد السعر النهائي اللي هيوصل له.
           </div>
-          <label className="text-xs opacity-60">السعر النهائي (ج.م)</label>
+          <label className="text-xs text-slate-500">السعر النهائي (ج.م)</label>
           <input className="inp" type="number" value={price} onChange={(e) => setPrice(+e.target.value || 0)} />
           <button
             className="btn btn-p w-full !py-3"
@@ -154,7 +154,7 @@ function ConfirmModal({ q, onClose }: { q: Inquiry; onClose: () => void }) {
             <I n="check" s={32} />
           </span>
           <div className="font-extrabold mb-1">تم تأكيد الملاءمة</div>
-          <p className="text-sm opacity-70 mb-4">أرسل السعر النهائي للعميل على واتساب</p>
+          <p className="text-sm text-slate-600 mb-4">أرسل السعر النهائي للعميل على واتساب</p>
           <a
             className="btn btn-p w-full !py-3"
             href={`https://wa.me/${waNum(q.phone)}?text=${msg}`}
@@ -179,7 +179,7 @@ function AltModal({ q, onClose }: { q: Inquiry; onClose: () => void }) {
   );
   return (
     <Modal title="اقتراح عدسة بديلة" onClose={onClose}>
-      <p className="text-sm opacity-70 mb-3">
+      <p className="text-sm text-slate-600 mb-3">
         العدسة الحالية: <b>{q.lensName}</b>. اختار بديل مناسب لقياس العميل وهيتحدّث السعر تلقائياً.
       </p>
       <div className="space-y-2">
@@ -239,7 +239,7 @@ export function Modals() {
     syncCatalogItem,
     updateProductDiscount,
     updateShop,
-    plans,
+    platformSettings,
     recordPayment,
     logAudit,
   } = useOptiVerse();
@@ -256,6 +256,9 @@ export function Modals() {
   const close = () => setModal(null);
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setF({ ...f, [k]: e.target.value });
+
+  const dynamicPlans = platformSettings.plans;
+  const annualPaidMonths = Math.max(1, 12 - Math.min(6, Math.max(0, platformSettings.annualDiscountMonths ?? 2)));
 
   if (t === 'addprod') {
     return <GuidedCaptureWizard onClose={close} />;
@@ -278,7 +281,7 @@ export function Modals() {
                 frame={p.frame}
                 lens={p.lens}
                 w={78}
-                imageUrl={p.images?.[0]?.imageUrl}
+                imageUrl={p.processedImage || p.images?.[0]?.imageUrl}
               />
             </div>
             <div className="min-w-0">
@@ -288,7 +291,7 @@ export function Modals() {
               </div>
             </div>
           </div>
-          <p className="text-sm opacity-80 leading-6">
+          <p className="text-sm text-slate-600 leading-6">
             هل أنت متأكد من حذف <b>"{p.name}"</b>؟ ستختفي من متجر العملاء نهائياً. يمكنك بدلاً من ذلك إخفاؤها مؤقتاً من زر النشر.
           </p>
           <div className="grid grid-cols-2 gap-2">
@@ -323,11 +326,25 @@ export function Modals() {
         <div className="space-y-3">
           <input className="inp" placeholder="اسم المحل" value={f.n || ''} onChange={set('n')} />
           <input className="inp" placeholder="اسم صاحب المحل" value={f.o || ''} onChange={set('o')} />
+          <input className="inp" dir="ltr" placeholder="رقم واتساب" value={f.wa || ''} onChange={set('wa')} />
           <input className="inp" type="email" dir="ltr" placeholder="بريد صاحب المحل (اختياري)" value={f.em || ''} onChange={set('em')} />
-          <input className="inp" placeholder="المدينة" value={f.c || ''} onChange={set('c')} />
-          <select className="inp" value={f.p || 'أساسية'} onChange={set('p')}>
-            <option>أساسية</option>
-            <option>احترافية</option>
+          <div className="grid grid-cols-2 gap-2">
+            <select className="inp" value={f.gov || 'القاهرة'} onChange={set('gov')}>
+              {EGYPT_GOVERNORATES.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
+            <input className="inp" placeholder="العنوان" value={f.addr || ''} onChange={set('addr')} />
+          </div>
+          <input className="inp" dir="ltr" placeholder="رابط Google Maps (اختياري)" value={f.maps || ''} onChange={set('maps')} />
+          <select className="inp" value={f.p || dynamicPlans[0]?.name || 'أساسية'} onChange={set('p')}>
+            {dynamicPlans.map((pl) => (
+              <option key={pl.id} value={pl.name}>
+                {pl.name} ({fmt(pl.price)} ج.م/ش)
+              </option>
+            ))}
           </select>
           <button
             className="btn btn-p w-full"
@@ -340,8 +357,12 @@ export function Modals() {
                 name: f.n,
                 ownerName: f.o,
                 ownerEmail: f.em,
-                city: f.c,
-                plan: f.p || 'أساسية',
+                wa: f.wa,
+                governorate: f.gov || 'القاهرة',
+                city: f.gov || 'القاهرة',
+                address: f.addr,
+                mapsUrl: f.maps,
+                plan: f.p || dynamicPlans[0]?.name || 'أساسية',
               });
               close();
               toast(`تمت إضافة ${f.n} ✓`);
@@ -359,30 +380,41 @@ export function Modals() {
     const months = Number(f.m || 1);
     const payMethod = (f.pm as 'InstaPay' | 'Vodafone Cash') || 'InstaPay';
     const refNo = f.ref || '';
-    const amount = Math.round(s.price * months * (1 - (months === 3 ? 0.1 : months === 12 ? 0.2 : 0)));
+    const amount =
+      months === 12
+        ? Math.round(s.price * annualPaidMonths)
+        : months === 3
+        ? Math.round(s.price * 3 * 0.9)
+        : Math.round(s.price);
+
     return (
       <Modal title={`تجديد اشتراك ${s.name}`} onClose={close}>
         <div className="space-y-2 mb-4">
           {[
-            [1, 0],
-            [3, 10],
-            [12, 20],
-          ].map((m) => (
+            { m: 1, label: 'تجديد شهري (شهر)', tag: null, price: Math.round(s.price) },
+            { m: 3, label: '3 أشهر', tag: 'خصم 10%', price: Math.round(s.price * 3 * 0.9) },
+            {
+              m: 12,
+              label: 'تجديد سنوي (12 شهر)',
+              tag: `${platformSettings.annualDiscountMonths ?? 2} شهر مجاناً`,
+              price: Math.round(s.price * annualPaidMonths),
+            },
+          ].map((opt) => (
             <button
-              key={m[0]}
+              key={opt.m}
               type="button"
-              onClick={() => setF({ ...f, m: String(m[0]) })}
+              onClick={() => setF({ ...f, m: String(opt.m) })}
               className={
                 'w-full flex justify-between p-3 rounded-xl border cursor-pointer ' +
-                (months === m[0] ? 'border-[#0284C7] bg-sky-50' : 'border-[#E2E8F0] bg-[#F8F9FA]')
+                (months === opt.m ? 'border-[#0284C7] bg-sky-50' : 'border-[#E2E8F0] bg-[#F8F9FA]')
               }
             >
               <span className="text-[#0F172A] font-semibold">
-                {m[0] === 1 ? 'تجديد شهري (شهر)' : m[0] === 3 ? '3 أشهر' : 'تجديد سنوي (12 شهر)'}
-                {m[1] ? <span className="badge b-ok ms-2">خصم {m[1]}%</span> : null}
+                {opt.label}
+                {opt.tag ? <span className="badge b-ok ms-2">{opt.tag}</span> : null}
               </span>
               <b className="text-[#D97706]">
-                <Egp v={Math.round(s.price * m[0] * (1 - m[1] / 100))} />
+                <Egp v={opt.price} />
               </b>
             </button>
           ))}
@@ -443,41 +475,52 @@ export function Modals() {
   if (t === 'editplan' && typeof modal !== 'string' && modal.t === 'editplan') {
     const s = modal.s;
     const selectedPlanName = f.plan || s.plan;
-    const matchedPlan = plans.find((pl) => pl.name.includes(selectedPlanName));
-    const suggestedPrice = matchedPlan?.price || (selectedPlanName === 'احترافية' ? 1200 : 600);
-    const customPrice = f.price !== undefined ? Number(f.price) : suggestedPrice;
+    const matchedPlan =
+      dynamicPlans.find((pl) => pl.name === selectedPlanName || pl.tierKey === f.tierKey) ||
+      dynamicPlans.find((pl) => pl.tierKey === s.planTier) ||
+      dynamicPlans[0];
+    const customPrice = f.price !== undefined ? Number(f.price) : matchedPlan?.price || s.price;
 
     return (
       <Modal title={`تعديل الباقة — ${s.name}`} onClose={close}>
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-2">
-            {['أساسية', 'احترافية'].map((plName) => (
-              <button
-                key={plName}
-                type="button"
-                onClick={() => {
-                  const pObj = plans.find((pl) => pl.name.includes(plName));
-                  setF({ ...f, plan: plName, price: String(pObj?.price || (plName === 'احترافية' ? 1200 : 600)) });
-                }}
-                className={
-                  'p-3 rounded-xl border text-sm font-bold cursor-pointer ' +
-                  (selectedPlanName === plName
-                    ? 'border-[#0284C7] bg-sky-50 text-[#0284C7]'
-                    : 'border-[#E2E8F0] bg-[#F8F9FA] text-[#0F172A]')
-                }
-              >
-                {plName}
-              </button>
-            ))}
+          <div className="grid grid-cols-3 gap-2">
+            {dynamicPlans.map((pl) => {
+              const isSelected = selectedPlanName === pl.name || f.tierKey === pl.tierKey;
+              return (
+                <button
+                  key={pl.id}
+                  type="button"
+                  onClick={() => {
+                    setF({ ...f, plan: pl.name, tierKey: pl.tierKey || 'basic', price: String(pl.price) });
+                  }}
+                  className={
+                    'p-2.5 rounded-xl border text-xs font-bold cursor-pointer text-center ' +
+                    (isSelected
+                      ? 'border-[#0284C7] bg-sky-50 text-[#0284C7]'
+                      : 'border-[#E2E8F0] bg-[#F8F9FA] text-[#0F172A]')
+                  }
+                >
+                  <div>{pl.name}</div>
+                  <div className="text-[0.68rem] opacity-75 tabular-nums mt-0.5">{fmt(pl.price)} ج.م</div>
+                </button>
+              );
+            })}
           </div>
           <div>
-            <label className="text-xs opacity-60">السعر الشهري للمتجر (ج.م)</label>
+            <label className="text-xs text-slate-600">السعر الشهري للمتجر (ج.م)</label>
             <input className="inp mt-1" type="number" min="0" value={customPrice} onChange={set('price')} />
           </div>
           <button
             className="btn btn-p w-full"
             onClick={async () => {
-              await updateShop(s.id, { plan: selectedPlanName, price: customPrice });
+              const chosenTier = matchedPlan?.tierKey || s.planTier || 'basic';
+              await updateShop(s.id, {
+                plan: selectedPlanName,
+                planTier: chosenTier,
+                price: customPrice,
+                aiCreditsLimit: matchedPlan?.monthlyAiCredits || s.aiCreditsLimit || 100,
+              });
               await logAudit('تعديل الباقة', `${s.name}: باقة ${selectedPlanName} (${customPrice} ج.م)`, s.id);
               close();
               toast(`تم تحديث باقة ${s.name} إلى ${selectedPlanName} ✓`);
@@ -493,7 +536,7 @@ export function Modals() {
   if (t === 'addpayment' && typeof modal !== 'string' && modal.t === 'addpayment') {
     const targetShop = shops.find((x) => x.id === (f.sid || modal.s?.id)) || modal.s || shops[0];
     const payMethod = (f.pm as 'InstaPay' | 'Vodafone Cash') || 'InstaPay';
-    const amount = f.amt !== undefined ? Number(f.amt) : targetShop?.price || 600;
+    const amount = f.amt !== undefined ? Number(f.amt) : targetShop?.price || 599;
     const refNo = f.ref || '';
     const activateShop = f.act !== '0';
 
@@ -501,13 +544,13 @@ export function Modals() {
       <Modal title="تسجيل عملية دفع (InstaPay / فودافون كاش)" onClose={close}>
         <div className="space-y-3">
           <div>
-            <label className="text-xs opacity-60">المحل</label>
+            <label className="text-xs text-slate-600">المحل</label>
             <select
               className="inp mt-1"
               value={targetShop?.id || ''}
               onChange={(e) => {
                 const chosen = shops.find((x) => x.id === e.target.value);
-                setF({ ...f, sid: e.target.value, amt: String(chosen?.price || 600) });
+                setF({ ...f, sid: e.target.value, amt: String(chosen?.price || 599) });
               }}
             >
               {shops.map((sh) => (
@@ -518,7 +561,7 @@ export function Modals() {
             </select>
           </div>
           <div>
-            <label className="text-xs opacity-60">وسيلة الدفع</label>
+            <label className="text-xs text-slate-600">وسيلة الدفع</label>
             <div className="grid grid-cols-2 gap-2 mt-1">
               {(['InstaPay', 'Vodafone Cash'] as const).map((pm) => (
                 <button
@@ -609,7 +652,7 @@ export function Modals() {
             </span>
           </span>
           <b className="text-[#D97706]">
-            <Egp v={p.price} />
+            <Egp v={p.salePrice && p.salePrice > 0 && p.salePrice < p.price ? p.salePrice : p.price} />
           </b>
         </div>
       </Modal>
@@ -697,7 +740,7 @@ export function Modals() {
       <Modal title={it ? `تعديل ${noun}` : `إضافة ${noun}`} onClose={close}>
         <div className="space-y-3">
           <div>
-            <label className="text-xs opacity-60">الاسم بالعربي</label>
+            <label className="text-xs text-slate-600">الاسم بالعربي</label>
             <input
               className="inp mt-1"
               value={nm}
@@ -707,7 +750,7 @@ export function Modals() {
           </div>
           {k !== 'extra' && (
             <div>
-              <label className="text-xs opacity-60">الاسم بالإنجليزي (اختياري)</label>
+              <label className="text-xs text-slate-600">الاسم بالإنجليزي (اختياري)</label>
               <input
                 className="inp mt-1"
                 dir="ltr"
@@ -718,7 +761,7 @@ export function Modals() {
             </div>
           )}
           <div>
-            <label className="text-xs opacity-60">{priceLbl}</label>
+            <label className="text-xs text-slate-600">{priceLbl}</label>
             <input
               className="inp mt-1"
               type="number"
@@ -743,7 +786,7 @@ export function Modals() {
     const setter = k === 'lens' ? setLensTypes : k === 'brand' ? setBrands : setExtras;
     return (
       <Modal title="تأكيد الحذف" onClose={close}>
-        <p className="text-sm opacity-80 mb-4">
+        <p className="text-sm text-slate-600 mb-4">
           هتحذف <b>"{it.name}"</b> نهائياً وهيختفي من متجر العميل. لو عايز تخفيه مؤقتاً استخدم زر التفعيل/الإخفاء بدل الحذف.
         </p>
         <div className="grid grid-cols-2 gap-2">
@@ -807,7 +850,7 @@ export function Modals() {
             ))}
           </div>
           <div>
-            <label className="text-xs opacity-60">نسبة الخصم % (0 = بدون خصم)</label>
+            <label className="text-xs text-slate-600">نسبة الخصم % (0 = بدون خصم)</label>
             <input
               className="inp mt-1"
               type="number"
@@ -867,8 +910,8 @@ export function Modals() {
             <I n="check" s={32} />
           </span>
           <div className="font-extrabold text-lg mb-1">رقم الاستفسار {q.id}</div>
-          <p className="text-sm opacity-70 mb-4 leading-7">
-            وصل الكشف لصندوق المحل. كمّل على واتساب (وابعت صورة الكشف في المحادثة) وهيأكد لك الملاءمة والسعر النهائي.
+          <p className="text-sm text-slate-600 mb-4 leading-7">
+            وصل الطلب لصندوق المحل. كمّل على واتساب وهيأكد لك المحل كل التفاصيل والسعر النهائي.
           </p>
           <a
             className="btn btn-p w-full !py-3"
@@ -887,31 +930,47 @@ export function Modals() {
   }
 
   if (t === 'checkout' && typeof modal !== 'string' && modal.t === 'checkout') {
+    const deliveryEnabled = Boolean(activeShop.enableDeliveryService);
+    const wantsDelivery = deliveryEnabled && f.dlv === 'delivery';
+    const deliveryFee = wantsDelivery ? Number(activeShop.deliveryFee || 0) : 0;
+    const grandTotal = modal.total + deliveryFee;
+
     const submit = async () => {
       if (!f.n || !f.p) {
         toast('اكتب الاسم ورقم الموبايل');
         return;
       }
+      if (wantsDelivery && !f.addr?.trim()) {
+        toast('اكتب عنوان التوصيل بالتفصيل');
+        return;
+      }
+      const deliveryTxt = wantsDelivery
+        ? `توصيل للمنزل (${f.gov || activeShop.governorate || 'القاهرة'} - ${f.addr?.trim()}) · مصاريف شحن ${fmt(deliveryFee)} ج.م`
+        : 'استلام من المحل';
+
       const q: Inquiry = {
         id: '#O-' + (400 + Math.floor(Math.random() * 500)),
         shopId: activeShop.id,
         kind: 'order',
-        cust: f.n,
-        phone: f.p,
+        cust: f.n.trim(),
+        phone: f.p.trim(),
         frameName: cart.map((i) => (i.size ? `${i.name} (${i.size})` : i.name)).join(' + '),
         type: cart[0]?.type || 'aviator',
         frame: cart[0]?.frame || '#C9A24B',
         lens: cart[0]?.lens || '#475569',
         lensName: 'طلب مباشر',
         brandName: '—',
-        extrasTxt: '—',
+        extrasTxt: deliveryTxt,
         fp: modal.total,
         lensPrice: 0,
-        add: 0,
-        price: modal.total,
+        add: deliveryFee,
+        price: grandTotal,
         img: null,
-        notes: 'الدفع عبر ' + (f.pay || 'InstaPay'),
+        notes: `الدفع عبر ${f.pay || 'InstaPay'} · ${deliveryTxt}`,
         pd: '',
+        deliveryAddress: wantsDelivery ? f.addr?.trim() : undefined,
+        governorate: wantsDelivery ? (f.gov || activeShop.governorate || 'القاهرة') : undefined,
+        deliveryFee,
         status: 'new',
         stage: 'review',
         time: 'الآن',
@@ -925,8 +984,11 @@ export function Modals() {
     };
 
     if (done) {
+      const deliveryLine = done.deliveryAddress
+        ? `\nالتوصيل إلى: ${done.governorate || ''} - ${done.deliveryAddress} (الشحن: ${fmt(done.deliveryFee || 0)} ج.م)`
+        : '';
       const msg = encodeURIComponent(
-        `مرحباً ${activeShop.name}، أنا ${done.cust}، طلبت (${done.frameName}) بإجمالي ${fmt(done.price)} ج.م — رقم الطلب ${done.id}. الدفع عبر ${done.pay}.`
+        `مرحباً ${activeShop.name}، أنا ${done.cust}، طلبت (${done.frameName}) بإجمالي ${fmt(done.price)} ج.م — رقم الطلب ${done.id}. الدفع عبر ${done.pay}.${deliveryLine}`
       );
       return (
         <Modal title="تم تسجيل طلبك 🎉" onClose={close}>
@@ -935,7 +997,7 @@ export function Modals() {
               <I n="check" s={32} />
             </span>
             <div className="font-extrabold text-lg mb-1">رقم الطلب {done.id}</div>
-            <p className="text-sm opacity-70 mb-4">أكمل الآن مع المحل على واتساب لتأكيد الدفع</p>
+            <p className="text-sm text-slate-600 mb-4">أكمل الآن مع المحل على واتساب لتأكيد الطلب</p>
             <a
               className="btn btn-p w-full !py-3"
               href={`https://wa.me/${waNum(activeShop.wa)}?text=${msg}`}
@@ -957,7 +1019,53 @@ export function Modals() {
         <div className="space-y-3">
           <input className="inp" placeholder="اسمك" value={f.n || ''} onChange={set('n')} />
           <input className="inp" dir="ltr" placeholder="رقم الموبايل" value={f.p || ''} onChange={set('p')} />
-          <div className="text-xs opacity-60">طريقة الدفع</div>
+
+          {deliveryEnabled && (
+            <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 space-y-2.5">
+              <div className="text-xs font-bold text-[#0F172A]">طريقة الاستلام</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setF({ ...f, dlv: 'pickup' })}
+                  className={
+                    'p-2 rounded-xl border text-xs font-bold cursor-pointer ' +
+                    (!wantsDelivery ? 'border-[#0284C7] bg-sky-50 text-[#0284C7]' : 'border-[#E2E8F0] bg-white text-slate-700')
+                  }
+                >
+                  استلام من المحل (مجاناً)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setF({ ...f, dlv: 'delivery' })}
+                  className={
+                    'p-2 rounded-xl border text-xs font-bold cursor-pointer ' +
+                    (wantsDelivery ? 'border-[#0284C7] bg-sky-50 text-[#0284C7]' : 'border-[#E2E8F0] bg-white text-slate-700')
+                  }
+                >
+                  توصيل للمنزل (+{fmt(activeShop.deliveryFee || 0)} ج.م)
+                </button>
+              </div>
+              {wantsDelivery && (
+                <div className="space-y-2 pt-1">
+                  <select className="inp" value={f.gov || activeShop.governorate || 'القاهرة'} onChange={set('gov')}>
+                    {EGYPT_GOVERNORATES.map((g) => (
+                      <option key={g} value={g}>
+                        {g}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    className="inp"
+                    placeholder="العنوان بالتفصيل (الشارع، العمارة، علامة مميزة)"
+                    value={f.addr || ''}
+                    onChange={set('addr')}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="text-xs text-slate-600">طريقة الدفع</div>
           <div className="grid grid-cols-2 gap-2">
             {['InstaPay', 'Vodafone Cash'].map((p) => (
               <button
@@ -975,12 +1083,22 @@ export function Modals() {
               </button>
             ))}
           </div>
-          <div className="flex justify-between font-extrabold pt-2 border-t border-[#E2E8F0] text-[#0F172A]">
-            <span>الإجمالي</span>
-            <span className="text-[#D97706]">
-              <Egp v={modal.total} />
-            </span>
+
+          <div className="space-y-1 pt-2 border-t border-[#E2E8F0] text-[#0F172A]">
+            {wantsDelivery && (
+              <div className="flex justify-between text-xs text-slate-600">
+                <span>التوصيل للمنزل</span>
+                <span>+{fmt(deliveryFee)} ج.م</span>
+              </div>
+            )}
+            <div className="flex justify-between font-extrabold">
+              <span>الإجمالي</span>
+              <span className="text-[#D97706]">
+                <Egp v={grandTotal} />
+              </span>
+            </div>
           </div>
+
           <button className="btn bg-[#D97706] hover:bg-[#B45309] text-white w-full !py-3 shadow-sm" onClick={submit}>
             <I n="msg" s={17} /> إرسال الطلب عبر واتساب
           </button>

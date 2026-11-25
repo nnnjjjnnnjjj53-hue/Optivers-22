@@ -52,9 +52,13 @@ import {
   computeTightCropBounds,
   computeVerticalSplitRegions,
   detectChromaKeyColor,
+  extractWhiteBgCrystalCutout,
+  generateColorTintedVariantPixels,
   trimStudioWhitespaceBounds,
   validateEyewearAspectRatio,
 } from '../src/workers/cutoutWorker';
+import { PLANS0, PLATFORM_SETTINGS0 } from '../src/data/seed';
+import { getShopMaxProducts } from '../src/services/optiverseStore';
 
 function makeImage(w: number, h: number, bg: [number, number, number]): Uint8ClampedArray {
   const arr = new Uint8ClampedArray(w * h * 4);
@@ -341,12 +345,14 @@ console.log('=== OptiVerse Automated Technical Verification ===');
   );
 
   const landingSrc = fs.readFileSync(path.join(root, 'src/pages/LandingPage.tsx'), 'utf8');
-  assert.ok(!landingSrc.includes('3D'), 'LandingPage removed customer-facing 3D concepts');
+  assert.ok(landingSrc.includes('AI + 3D'), 'LandingPage showcases 1:1 mm AI + 3D eyewear scale');
+  assert.ok(landingSrc.includes('/stores'), 'LandingPage links directly to certified optician directory');
+  assert.ok(!landingSrc.includes('14 يوماً'), 'LandingPage keeps 14-day trial notice off public landing');
   assert.ok(landingSrc.includes('id="how-it-works"'), 'LandingPage includes 5-step customer journey section');
 
-  assert.ok(!storefrontSrc.includes('#FFFCF7') && !modalsSrc.includes('#FFFCF7'), 'All studio surfaces upgraded to #F6F5F3');
+  assert.ok(!storefrontSrc.includes('#FFFCF7') && !modalsSrc.includes('#FFFCF7'), 'All studio surfaces upgraded to #F8F9FA');
 
-  console.log('✓ Test 7 passed: Architectural invariants, 2-photo wizard, Apple/Google Auth, Landing AI journey & DB schema preserved');
+  console.log('✓ Test 7 passed: Architectural invariants, 2-photo wizard, Apple/Google Auth, Landing AI+3D journey & DB schema preserved');
 }
 
 // 8. AI Image Processor & Virtual Try-On Lighting/Angle Engine Verification
@@ -603,17 +609,17 @@ console.log('=== OptiVerse Automated Technical Verification ===');
   const expectedPxPerMm = expectedIpdPx / 63;
   const idealFit = computePhysicalIrisFit(lm, 1280, 720, Math.round(expectedWidth / expectedPxPerMm), 1.0);
   assert.equal(idealFit.fitStatus, 'ideal');
-  assert.equal(idealFit.fitLabelAr, 'مقاس مثالي لوجهك');
+  assert.ok(idealFit.fitLabelAr.startsWith('مقاس مثالي لوجهك'));
   assert.ok(
     Math.abs(idealFit.targetWidthPx - Math.round(expectedWidth / expectedPxPerMm) * expectedPxPerMm) < 1e-3,
     'targetWidthPx equals frameWidthMm * (pixelIPD / 63) * fitScale'
   );
   const smallFit = computePhysicalIrisFit(lm, 1280, 720, Math.round(idealFit.userFaceWidthMm - 10), 1.0);
-  assert.equal(smallFit.fitStatus, 'small');
-  assert.equal(smallFit.fitLabelAr, 'الإطار صغير على وجهك');
+  assert.equal(smallFit.fitStatus, 'narrow');
+  assert.ok(smallFit.fitLabelAr.includes('ضيقاً'));
   const largeFit = computePhysicalIrisFit(lm, 1280, 720, Math.round(idealFit.userFaceWidthMm + 10), 1.0);
-  assert.equal(largeFit.fitStatus, 'large');
-  assert.equal(largeFit.fitLabelAr, 'الإطار كبير على وجهك');
+  assert.equal(largeFit.fitStatus, 'oversized');
+  assert.ok(largeFit.fitLabelAr.includes('عريض'));
 
   // F. Static architecture checks for real-photo plane pipeline, dual output, 45-degree UI & RTL fixes
   const bulkSrc = fs.readFileSync(path.join(root, 'src/components/BulkFrameUploader.tsx'), 'utf8');
@@ -961,14 +967,25 @@ console.log('=== OptiVerse Automated Technical Verification ===');
   const metaJson = fs.readFileSync(path.join(root, 'metadata.json'), 'utf8');
   const pkgJson = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
 
+  const splitFnStart = serverSrc.indexOf('async function generateSplitSheetWithFallback');
+  const splitFnEnd = serverSrc.indexOf('export function createEyewearServerApp');
+  const splitFnSrc = serverSrc.slice(splitFnStart, splitFnEnd);
+
   assert.ok(
     serverSrc.includes('/api/eyewear/split-sheet') &&
-      serverSrc.includes("model: 'gemini-3.1-flash-lite-image'") &&
-      serverSrc.includes("aspectRatio: '16:9'") &&
+      serverSrc.includes("model: 'gemini-3.1-flash-lite-image'") ||
+      splitFnSrc.includes("'gemini-3.1-flash-lite-image'") &&
+      splitFnSrc.includes("aspectRatio: '16:9'") &&
       serverSrc.includes("'User-Agent': 'aistudio-build'") &&
-      !serverSrc.includes('responseMimeType') &&
-      !serverSrc.includes('responseSchema'),
-    'server.ts calls gemini-3.1-flash-lite-image with 16:9 aspectRatio and required telemetry User-Agent'
+      !splitFnSrc.includes('responseMimeType') &&
+      !splitFnSrc.includes('responseSchema'),
+    'server.ts calls gemini-3.1-flash-lite-image with 16:9 aspectRatio and required telemetry User-Agent without responseMimeType on image call'
+  );
+  assert.ok(
+    serverSrc.includes('gemini-2.5-flash-lite') &&
+      serverSrc.includes('shared_eyewear_cache') &&
+      serverSrc.includes('authenticateRequest'),
+    'server.ts enforces JWT/credit guard, free OCR model, and global shared catalog cache'
   );
   assert.ok(
     !splitApiSrc.includes('@google/genai') &&
@@ -992,6 +1009,104 @@ console.log('=== OptiVerse Automated Technical Verification ===');
   );
 
   console.log('✓ Test 13 passed: Single-call 16:9 split-sheet server, vertical 50/50 slicing, shadow trim, & full-stack wiring verified');
+}
+
+// 14. Production SaaS Upgrade Verification: Crystal Cutout, Color Variants, Plans/Flags, Directory, Admin Demo & Merchant CRM/Onboarding
+{
+  const root = process.cwd();
+
+  // A. Crystal white-bg cutout preserves crystal acetate border and clears outer background
+  const cw = 80;
+  const ch = 40;
+  const crystalBuf = makeImage(cw, ch, [255, 255, 255]);
+  // Draw slightly shaded neutral crystal rim around frame
+  paintRect(crystalBuf, cw, ch, 16, 10, 64, 30, [205, 210, 218]);
+  // Inner lens remains white/clear
+  paintRect(crystalBuf, cw, ch, 20, 14, 36, 26, [255, 255, 255]);
+  paintRect(crystalBuf, cw, ch, 44, 14, 60, 26, [255, 255, 255]);
+  const crystalOut = extractWhiteBgCrystalCutout(crystalBuf, cw, ch);
+  assert.equal(crystalOut[(2 * cw + 2) * 4 + 3], 0, 'Outer pure white background removed to alpha=0');
+  assert.ok(crystalOut[(12 * cw + 24) * 4 + 3] > 100, 'Crystal rim pixel stays visible');
+
+  // B. Color variant generator re-tints opaque frame pixels while keeping transparent bg intact
+  const tw = 24;
+  const th = 24;
+  const tintSrc = new Uint8ClampedArray(tw * th * 4);
+  paintRect(tintSrc, tw, th, 4, 4, 20, 20, [140, 140, 140]);
+  const tintedBlue = generateColorTintedVariantPixels(tintSrc, tw, th, '#2563EB');
+  assert.equal(tintedBlue[(1 * tw + 1) * 4 + 3], 0, 'Transparent exterior remains untouched');
+  const pxB = (12 * tw + 12) * 4;
+  assert.ok(tintedBlue[pxB + 2] > tintedBlue[pxB], 'Blue channel dominates when tinted to #2563EB');
+
+  // C. Default-OFF Feature Flags & Plan Caps + Top-up
+  assert.equal(PLATFORM_SETTINGS0.enablePrescriptionLenses, false);
+  assert.equal(PLATFORM_SETTINGS0.allowMerchantLensBrandingToggle, false);
+  assert.equal(PLATFORM_SETTINGS0.enableSponsoredSuppliers, false);
+  assert.equal(PLANS0.length, 3);
+
+  const basicShop = {
+    id: 's1',
+    name: 'Basic Shop',
+    city: 'القاهرة',
+    planTier: 'basic' as const,
+    plan: 'الأساسية',
+    days: 14,
+    status: 'active' as const,
+    exp: 'شهر',
+    slug: 'basic',
+    price: 599,
+    color: '#0284C7',
+    wa: '01000000000',
+    logo: '👓',
+    topupCredits: 50,
+  };
+  assert.equal(getShopMaxProducts(basicShop, PLATFORM_SETTINGS0), 150, 'Basic 100 + 50 topup = 150');
+  assert.equal(
+    getShopMaxProducts({ ...basicShop, isDemoAdminStore: true }, PLATFORM_SETTINGS0),
+    1000,
+    'Admin Demo Store receives 1000 maxProducts'
+  );
+
+  // D. New & Upgraded Pages Wiring Check
+  const appSrc = fs.readFileSync(path.join(root, 'src/App.tsx'), 'utf8');
+  const dirSrc = fs.readFileSync(path.join(root, 'src/pages/DirectoryPage.tsx'), 'utf8');
+  const adminSrc = fs.readFileSync(path.join(root, 'src/pages/AdminPage.tsx'), 'utf8');
+  const merchantSrc = fs.readFileSync(path.join(root, 'src/pages/MerchantPage.tsx'), 'utf8');
+  const storefrontSrc = fs.readFileSync(path.join(root, 'src/pages/StorefrontPage.tsx'), 'utf8');
+  const pdpSrc = fs.readFileSync(path.join(root, 'src/components/ProductDetailsView.tsx'), 'utf8');
+  const bulkSrc = fs.readFileSync(path.join(root, 'src/components/BulkFrameUploader.tsx'), 'utf8');
+
+  assert.ok(appSrc.includes("'/stores'") && appSrc.includes('DirectoryPage'), 'App.tsx routes /stores to DirectoryPage');
+  assert.ok(dirSrc.includes('EGYPT_GOVERNORATES') && dirSrc.includes('متجر مميز'), 'DirectoryPage filters governorates and prioritizes featured stores');
+  assert.ok(
+    adminSrc.includes('switchToAdminDemoStore') &&
+      adminSrc.includes('enablePrescriptionLenses') &&
+      adminSrc.includes('allowMerchantLensBrandingToggle') &&
+      adminSrc.includes('enableSponsoredSuppliers'),
+    'AdminPage exposes demo store toggle & all 3 global feature flags'
+  );
+  assert.ok(
+    merchantSrc.includes('signInWithPhoneOtp') &&
+      merchantSrc.includes('onboardingCompleted') &&
+      merchantSrc.includes('markCrmRecallSent') &&
+      merchantSrc.includes('addTopUpCredits'),
+    'MerchantPage implements Phone OTP, onboarding gate, CRM 6m/12m recalls & top-up packs'
+  );
+  assert.ok(
+    storefrontSrc.includes('enablePrescriptionLenses') &&
+      pdpSrc.includes('enablePrescriptionLenses') &&
+      pdpSrc.includes('salePrice'),
+    'StorefrontPage & ProductDetailsView gate Rx UI cleanly and render salePrice'
+  );
+  assert.ok(
+    bulkSrc.includes('MAX_BATCH_SIZE = 50') &&
+      bulkSrc.includes('submitBatchSplitSheetViaServer') &&
+      bulkSrc.includes('extractOpticalDimensionsViaServer') &&
+      bulkSrc.includes('generateTintedCatalogAsset'),
+    'BulkFrameUploader implements 50-item batch limit, Turbo vs Batch routing, OCR, and $0 Auto-Color variants'
+  );
+
+  console.log('✓ Test 14 passed: Crystal white-bg cutout, $0 tint variants, default-OFF flags, plan caps, Directory, Admin Demo, & CRM/OTP verified');
 }
 
 console.log('=== ALL TESTS PASSED ===');

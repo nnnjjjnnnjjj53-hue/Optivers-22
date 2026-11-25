@@ -1,7 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CATS, DEFAULT_SHOP_ID, SALES0, SHAPES, TYPES } from '../data/seed';
+import { CATS, DEFAULT_SHOP_ID, EGYPT_GOVERNORATES, SALES0, SHAPES, TYPES } from '../data/seed';
 import { isSupabaseConfigured } from '../lib/supabase';
-import { getShopDaysLeft, isShopExpiredOrPaused, useOptiVerse } from '../services/optiverseStore';
+import {
+  getShopDaysLeft,
+  getShopMaxProducts,
+  getShopPlanCapabilities,
+  isAdminRole,
+  isShopExpiredOrPaused,
+  useOptiVerse,
+} from '../services/optiverseStore';
 import { FaceShape, OrderStage } from '../types';
 import { BulkFrameUploader } from '../components/BulkFrameUploader';
 import { ExamThumb, MiniGlasses, Spin } from '../components/GlassesGraphics';
@@ -56,7 +63,7 @@ function Reports() {
   const stTxt = { new: 'جديد', confirmed: 'تم التأكيد', alt: 'عدسة بديلة' };
 
   const expInq = () => {
-    dlCsv('الكشوفات.csv', [
+    dlCsv('الطلبات.csv', [
       ['الرقم', 'العميل', 'الموبايل', 'النظارة', 'العدسة', 'الشركة', 'الإضافات', 'السعر', 'الحالة', 'الوقت'],
       ...shopInq.map((q) => [
         q.id,
@@ -71,7 +78,7 @@ function Reports() {
         q.time,
       ]),
     ]);
-    toast('تم تصدير الكشوفات ✓');
+    toast('تم تصدير الطلبات ✓');
   };
 
   const expSales = () => {
@@ -83,7 +90,7 @@ function Reports() {
     <>
       <Head t="التقارير والمبيعات" sub={`أداء ${activeShop.name} — آخر 30 يوم`}>
         <button className="btn btn-g" onClick={expInq}>
-          <I n="dl" s={16} /> تصدير الكشوفات
+          <I n="dl" s={16} /> تصدير الطلبات
         </button>
         <button className="btn btn-p" onClick={expSales}>
           <I n="dl" s={16} /> تصدير المبيعات
@@ -93,11 +100,11 @@ function Reports() {
         <Stat icon="dollar" label="إيراد الشهر" value={fmt(rev) + ' ج.م'} />
         <Stat icon="check" label="طلبات مؤكدة" value={rows.length} />
         <Stat icon="trend" label="متوسط قيمة الطلب" value={fmt(Math.round(rev / Math.max(1, rows.length))) + ' ج.م'} />
-        <Stat icon="receipt" label="كشوفات جديدة" value={shopInq.filter((q) => q.status === 'new').length} />
+        <Stat icon="receipt" label="طلبات جديدة" value={shopInq.filter((q) => q.status === 'new').length} />
       </div>
       <div className="grid lg:grid-cols-2 gap-4">
         <div className="glass rounded-2xl p-5">
-          <h3 className="font-bold mb-1">أكثر العدسات مبيعاً</h3>
+          <h3 className="font-bold mb-1">أكثر الفئات مبيعاً</h3>
           <p className="text-xs opacity-60 mb-3">
             الأول: <b className="tx-acc">{lensR[0]?.[0] || 'لا توجد بيانات بعد'}</b>
           </p>
@@ -209,15 +216,21 @@ export function MerchantPage() {
     signInUnified,
     signInWithGoogle,
     signInWithApple,
+    signInWithPhoneOtp,
     registerMerchant,
     signOut,
+    platformSettings,
     activeShop,
     updateShop,
+    addTopUpCredits,
     products,
     toggleProductPublished,
     softDeleteProductByCode,
     inq,
     updateInquiry,
+    crmCustomers,
+    addCrmCustomer,
+    markCrmRecallSent,
     toast,
     setModal,
     navigate,
@@ -226,7 +239,7 @@ export function MerchantPage() {
     extras,
   } = useOptiVerse();
 
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>(() =>
+  const [authMode, setAuthMode] = useState<'login' | 'signup' | 'phone'>(() =>
     route.includes('signup') ? 'signup' : 'login'
   );
   useEffect(() => {
@@ -236,6 +249,7 @@ export function MerchantPage() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [phoneLogin, setPhoneLogin] = useState('');
   const [ownerName, setOwnerName] = useState('');
   const [shopName, setShopName] = useState('');
   const [waPhone, setWaPhone] = useState('');
@@ -243,16 +257,40 @@ export function MerchantPage() {
   const [authErr, setAuthErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Onboarding Profile Gate state
+  const [obOwnerName, setObOwnerName] = useState('');
+  const [obWa, setObWa] = useState('');
+  const [obShopName, setObShopName] = useState('');
+  const [obGov, setObGov] = useState('القاهرة');
+  const [obAddress, setObAddress] = useState('');
+  const [obMapsUrl, setObMapsUrl] = useState('');
+
+  // CRM add customer form state
+  const [crmName, setCrmName] = useState('');
+  const [crmPhone, setCrmPhone] = useState('');
+  const [crmProdName, setCrmProdName] = useState('');
+  const [crmPd, setCrmPd] = useState('');
+  const [crmNotes, setCrmNotes] = useState('');
+
   const [sec, setSec] = useState('home');
   const [code, setCode] = useState('');
   const [ai, setAi] = useState(true);
   const [fs, setFs] = useState<FaceShape>('oval');
-  const [sent, setSent] = useState<Record<string, number>>({});
   const [visibleProdsCount, setVisibleProdsCount] = useState(MERCHANT_PAGE_SIZE);
   const qrWrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setVisibleProdsCount(MERCHANT_PAGE_SIZE);
+  }, [activeShop?.id]);
+
+  useEffect(() => {
+    if (!activeShop) return;
+    setObOwnerName(activeShop.ownerName || '');
+    setObWa(activeShop.wa || '');
+    setObShopName(activeShop.name || '');
+    setObGov(activeShop.governorate || activeShop.city || 'القاهرة');
+    setObAddress(activeShop.address || '');
+    setObMapsUrl(activeShop.mapsUrl || '');
   }, [activeShop?.id]);
 
   if (authLoading) {
@@ -266,6 +304,18 @@ export function MerchantPage() {
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthErr(null);
+
+    if (authMode === 'phone') {
+      setSubmitting(true);
+      const res = await signInWithPhoneOtp(phoneLogin.trim());
+      setSubmitting(false);
+      if (!res.ok) {
+        setAuthErr(res.error || 'تعذر إرسال رمز OTP');
+      } else {
+        toast('تم إرسال رمز التحقق إلى هاتفك ✓');
+      }
+      return;
+    }
 
     if (authMode === 'signup') {
       if (!shopName.trim()) {
@@ -297,7 +347,7 @@ export function MerchantPage() {
       setAuthErr(res.error || 'بيانات الدخول غير صحيحة');
       return;
     }
-    if (res.role === 'admin') {
+    if (isAdminRole(res.role)) {
       toast('مرحباً بمالك المنصة — تم توجيهك للوحة الإدارة العليا');
     } else {
       toast('أهلاً بعودتك إلى لوحة متجرك 👋');
@@ -324,151 +374,326 @@ export function MerchantPage() {
     }
   };
 
-  if (!session || session.role !== 'merchant') {
+  if (!session || (session.role !== 'merchant' && !isAdminRole(session.role))) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="min-h-screen flex items-center justify-center p-4 bg-[#F8F9FA]">
         <div className="glass rounded-3xl p-6 sm:p-8 w-full max-w-md space-y-5 fade">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 font-extrabold text-xl text-[#0F172A]">
               <span className="w-9 h-9 rounded-xl bg-[#0F172A] text-white flex items-center justify-center">
                 <I n="store" s={20} />
               </span>
-              {authMode === 'signup' ? 'تجربة مجانية 14 يوماً' : 'تسجيل دخول التاجر'}
+              {authMode === 'signup'
+                ? 'تجربة مجانية 14 يوماً'
+                : authMode === 'phone'
+                ? 'الدخول برقم الموبايل'
+                : 'تسجيل دخول التاجر'}
             </div>
             <button className="btn btn-g btn-sm" onClick={() => navigate('/')}>
               الرئيسية
             </button>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0]">
+          <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0]">
             <button
               type="button"
               onClick={() => setAuthMode('login')}
-              className={'py-2 rounded-lg text-sm font-bold cursor-pointer transition ' + (authMode === 'login' ? 'bg-[#0F172A] text-white shadow-sm' : 'text-slate-600 hover:text-[#0F172A]')}
+              className={
+                'py-2 rounded-lg text-xs font-bold cursor-pointer transition ' +
+                (authMode === 'login' ? 'bg-[#0F172A] text-white shadow-sm' : 'text-slate-600 hover:text-[#0F172A]')
+              }
             >
-              تسجيل الدخول
+              دخول
             </button>
             <button
               type="button"
               onClick={() => setAuthMode('signup')}
-              className={'py-2 rounded-lg text-sm font-bold cursor-pointer transition ' + (authMode === 'signup' ? 'bg-[#D97706] text-white shadow-sm' : 'text-slate-600 hover:text-[#0F172A]')}
+              className={
+                'py-2 rounded-lg text-xs font-bold cursor-pointer transition ' +
+                (authMode === 'signup' ? 'bg-[#D97706] text-white shadow-sm' : 'text-slate-600 hover:text-[#0F172A]')
+              }
             >
-              تجربة 14 يوماً مجاناً
+              تجربة 14 يوماً
+            </button>
+            <button
+              type="button"
+              onClick={() => setAuthMode('phone')}
+              className={
+                'py-2 rounded-lg text-xs font-bold cursor-pointer transition ' +
+                (authMode === 'phone' ? 'bg-[#0284C7] text-white shadow-sm' : 'text-slate-600 hover:text-[#0F172A]')
+              }
+            >
+              برقم الموبايل
             </button>
           </div>
 
           {!isSupabaseConfigured && (
             <div className="rounded-xl p-3 bg-sky-50 border border-sky-200 text-xs leading-6 text-[#0284C7]">
               وضع المعاينة التفاعلية نشط. عند ربط <code className="font-mono font-bold">VITE_SUPABASE_URL</code> و{' '}
-              <code className="font-mono font-bold">VITE_SUPABASE_ANON_KEY</code> يتم التفعيل الكامل مع Supabase Auth وتسجيل الدخول عبر Google و Apple.
+              <code className="font-mono font-bold">VITE_SUPABASE_ANON_KEY</code> يتم التفعيل الكامل مع Supabase Auth
+              (Google · Apple · OTP).
             </div>
           )}
 
-          <div className="space-y-2.5">
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={handleGoogle}
-              className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl bg-white border border-[#E2E8F0] text-[#0F172A] font-bold text-sm hover:bg-slate-50 transition cursor-pointer shadow-xs"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24">
-                <path
-                  fill="#4285F4"
-                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
-                />
-              </svg>
-              المتابعة عبر حساب Google
-            </button>
+          {authMode !== 'phone' && (
+            <>
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={handleGoogle}
+                  className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl bg-white border border-[#E2E8F0] text-[#0F172A] font-bold text-sm hover:bg-slate-50 transition cursor-pointer shadow-xs"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24">
+                    <path
+                      fill="#4285F4"
+                      d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
+                    />
+                  </svg>
+                  المتابعة عبر حساب Google
+                </button>
 
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={handleApple}
-              className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl bg-[#0F172A] text-white font-bold text-sm hover:bg-slate-800 transition cursor-pointer"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43Zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45Z" />
-              </svg>
-              المتابعة عبر حساب Apple
-            </button>
-          </div>
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={handleApple}
+                  className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl bg-[#0F172A] text-white font-bold text-sm hover:bg-slate-800 transition cursor-pointer"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43Zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45Z" />
+                  </svg>
+                  المتابعة عبر حساب Apple
+                </button>
+              </div>
 
-          <div className="flex items-center gap-3 text-xs text-slate-400">
-            <span className="flex-1 h-px bg-slate-200" />
-            أو بالبريد الإلكتروني
-            <span className="flex-1 h-px bg-slate-200" />
-          </div>
+              <div className="flex items-center gap-3 text-xs text-slate-400">
+                <span className="flex-1 h-px bg-slate-200" />
+                أو بالبريد الإلكتروني
+                <span className="flex-1 h-px bg-slate-200" />
+              </div>
+            </>
+          )}
 
           <form onSubmit={handleAuth} className="space-y-3">
-            {authMode === 'signup' && (
+            {authMode === 'phone' ? (
               <>
                 <input
                   className="inp"
-                  placeholder="اسم صاحب المحل"
-                  value={ownerName}
-                  onChange={(e) => setOwnerName(e.target.value)}
+                  type="tel"
+                  dir="ltr"
+                  placeholder="+20 100 123 4567"
+                  value={phoneLogin}
+                  onChange={(e) => setPhoneLogin(e.target.value)}
+                  required
+                />
+                <div className="text-xs text-slate-500">
+                  سنرسل رمز تحقق SMS (OTP) للدخول الفوري إلى متجرك دون كلمة مرور.
+                </div>
+              </>
+            ) : (
+              <>
+                {authMode === 'signup' && (
+                  <>
+                    <input
+                      className="inp"
+                      placeholder="اسم صاحب المحل"
+                      value={ownerName}
+                      onChange={(e) => setOwnerName(e.target.value)}
+                    />
+                    <input
+                      className="inp"
+                      placeholder="اسم محل البصريات"
+                      value={shopName}
+                      onChange={(e) => setShopName(e.target.value)}
+                      required
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        className="inp"
+                        dir="ltr"
+                        placeholder="رقم واتساب"
+                        value={waPhone}
+                        onChange={(e) => setWaPhone(e.target.value)}
+                      />
+                      <select
+                        className="inp"
+                        value={city}
+                        onChange={(e) => setCity(e.target.value)}
+                      >
+                        {EGYPT_GOVERNORATES.map((g) => (
+                          <option key={g} value={g}>
+                            {g}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
+                <input
+                  className="inp"
+                  type="email"
+                  dir="ltr"
+                  placeholder="البريد الإلكتروني"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required={isSupabaseConfigured || authMode === 'signup'}
                 />
                 <input
                   className="inp"
-                  placeholder="اسم محل البصريات"
-                  value={shopName}
-                  onChange={(e) => setShopName(e.target.value)}
-                  required
+                  type="password"
+                  dir="ltr"
+                  placeholder="كلمة المرور"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required={isSupabaseConfigured}
                 />
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    className="inp"
-                    dir="ltr"
-                    placeholder="رقم واتساب"
-                    value={waPhone}
-                    onChange={(e) => setWaPhone(e.target.value)}
-                  />
-                  <input
-                    className="inp"
-                    placeholder="المدينة"
-                    value={city}
-                    onChange={(e) => setCity(e.target.value)}
-                  />
-                </div>
               </>
             )}
-            <input
-              className="inp"
-              type="email"
-              dir="ltr"
-              placeholder="البريد الإلكتروني"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required={isSupabaseConfigured || authMode === 'signup'}
-            />
-            <input
-              className="inp"
-              type="password"
-              dir="ltr"
-              placeholder="كلمة المرور"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required={isSupabaseConfigured}
-            />
+
             {authErr && <div className="text-xs text-rose-600 font-bold">{authErr}</div>}
             <button className="btn btn-p w-full !py-3" disabled={submitting} type="submit">
               {submitting
                 ? 'جاري التحميل...'
+                : authMode === 'phone'
+                ? 'إرسال رمز التحقق (OTP)'
                 : authMode === 'login'
                 ? 'تسجيل الدخول'
                 : 'ابدأ تجربتك المجانية لمدة 14 يوماً'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // Mandatory Merchant Onboarding Profile Gate (blocks dashboard until key contact/location fields are completed)
+  if (!activeShop.onboardingCompleted && !activeShop.isDemoAdminStore) {
+    const handleCompleteOnboarding = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!obOwnerName.trim() || !obWa.trim() || !obShopName.trim() || !obAddress.trim()) {
+        toast('يرجى استكمال اسم المالك، رقم الواتساب، اسم المحل، والعنوان');
+        return;
+      }
+      await updateShop(activeShop.id, {
+        ownerName: obOwnerName.trim(),
+        wa: obWa.trim(),
+        name: obShopName.trim(),
+        governorate: obGov,
+        city: obGov,
+        address: obAddress.trim(),
+        mapsUrl: obMapsUrl.trim() || undefined,
+        onboardingCompleted: true,
+      });
+      toast('تم تفعيل ملف محلك بنجاح! مرحباً بك في لوحة التحكم 🎉');
+    };
+
+    return (
+      <div dir="rtl" className="min-h-screen flex items-center justify-center p-4 bg-[#F8F9FA]">
+        <div className="glass rounded-3xl p-6 sm:p-8 w-full max-w-lg space-y-5 fade">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <span className="badge b-info mb-1">خطوة واحدة لبدء متجرك</span>
+              <h1 className="font-extrabold text-xl text-[#0F172A]">استكمال بيانات محل البصريات</h1>
+              <p className="text-xs text-slate-600 mt-0.5">
+                تظهر هذه البيانات لعملائك في دليل المحلات المعتمدة ورابط الطلبات عبر واتساب
+              </p>
+            </div>
+            <button type="button" className="btn btn-g btn-sm shrink-0" onClick={signOut}>
+              خروج
+            </button>
+          </div>
+
+          <form onSubmit={handleCompleteOnboarding} className="space-y-3">
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-slate-700">اسم صاحب المحل *</label>
+                <input
+                  className="inp mt-1"
+                  placeholder="مثال: أحمد محمد"
+                  value={obOwnerName}
+                  onChange={(e) => setObOwnerName(e.target.value)}
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-700">رقم واتساب الطلبات *</label>
+                <input
+                  className="inp mt-1"
+                  dir="ltr"
+                  placeholder="01001234567"
+                  value={obWa}
+                  onChange={(e) => setObWa(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-slate-700">اسم المحل التجاري *</label>
+                <input
+                  className="inp mt-1"
+                  placeholder="دهب للبصريات"
+                  value={obShopName}
+                  onChange={(e) => setObShopName(e.target.value)}
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-700">المحافظة *</label>
+                <select
+                  className="inp mt-1"
+                  value={obGov}
+                  onChange={(e) => setObGov(e.target.value)}
+                >
+                  {EGYPT_GOVERNORATES.map((g) => (
+                    <option key={g} value={g}>
+                      {g}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-700">العنوان التفصيلي *</label>
+              <input
+                className="inp mt-1"
+                placeholder="الشارع والمنطقة وأقرب علامة مميزة"
+                value={obAddress}
+                onChange={(e) => setObAddress(e.target.value)}
+                required
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-700">رابط الموقع على Google Maps (اختياري)</label>
+              <input
+                className="inp mt-1"
+                dir="ltr"
+                placeholder="https://maps.google.com/?q=..."
+                value={obMapsUrl}
+                onChange={(e) => setObMapsUrl(e.target.value)}
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white w-full !py-3 font-extrabold"
+            >
+              حفظ وبدء استخدام لوحة التاجر
             </button>
           </form>
         </div>
@@ -486,11 +711,34 @@ export function MerchantPage() {
   const trialDaysLeft = getShopDaysLeft(activeShop);
   const expiredOrPaused = isShopExpiredOrPaused(activeShop);
   const isDefaultDemoShop = activeShop.id === DEFAULT_SHOP_ID;
+
+  const rxEnabled = Boolean(platformSettings.enablePrescriptionLenses);
+  const suppliersEnabled = Boolean(platformSettings.enableSponsoredSuppliers);
+  const deliveryEnabled = Boolean(activeShop.enableDeliveryService);
+
+  const planCaps = getShopPlanCapabilities(activeShop, platformSettings);
+  const maxProducts = getShopMaxProducts(activeShop, platformSettings);
+  const creditsCap = (activeShop.aiCreditsLimit || planCaps.monthlyAiCredits || 100) + (activeShop.topupCredits || 0);
+  const creditsUsed = activeShop.aiCreditsUsed || 0;
+  const creditsRemaining = Math.max(0, creditsCap - creditsUsed);
+
+  // CRM Customers & Recalls (6-month & 12-month intervals)
+  const shopCrm = crmCustomers.filter((c) => c.shopId === activeShop.id);
+  const nowMs = Date.now();
+  const dueCrmList = shopCrm
+    .map((c) => {
+      const daysSince = Math.floor((nowMs - new Date(c.orderDate).getTime()) / 86400000);
+      const due12 = (activeShop.recall12mEnabled ?? true) && daysSince >= 360 && !c.recall12mSentAt;
+      const due6 = (activeShop.recall6mEnabled ?? true) && daysSince >= 180 && daysSince < 360 && !c.recall6mSentAt;
+      return { ...c, daysSince, due6, due12 };
+    });
+  const dueRecallCount = dueCrmList.filter((c) => c.due6 || c.due12).length;
+
   const confirmedShopSales = shopInq
     .filter((q) => q.status === 'confirmed')
     .reduce((sum, q) => sum + (q.final || q.price), 0);
-  const monthlyShopRevenue = isDefaultDemoShop ? 38400 + confirmedShopSales : confirmedShopSales;
-  const todayTrials = isDefaultDemoShop ? 86 : shopProducts.length * 4 + shopInq.length * 3;
+  const monthlyShopRevenue = confirmedShopSales;
+  const totalTryOns = shopInq.length;
 
   const delByCode = async () => {
     const res = await softDeleteProductByCode(activeShop.id, code);
@@ -505,12 +753,19 @@ export function MerchantPage() {
   const items: ShellNavItem[] = [
     ['home', 'الرئيسية', 'home'],
     ['prods', 'منتجاتي', 'box'],
-    ['inq', 'الكشوفات الطبية والاستفسارات', 'receipt', newCount],
-    ['lens', 'إدارة أسعار العدسات والشركات', 'dollar'],
+    ['crm', 'قاعدة العملاء', 'bell', dueRecallCount],
+    ...(rxEnabled
+      ? ([
+          ['inq', 'الكشوفات الطبية والاستفسارات', 'receipt', newCount],
+          ['lens', 'إدارة أسعار العدسات والشركات', 'dollar'],
+        ] as ShellNavItem[])
+      : []),
+    ...(deliveryEnabled ? ([['delivery', 'إعدادات التوصيل', 'truck']] as ShellNavItem[]) : []),
+    ...(suppliersEnabled ? ([['suppliers', 'الموردون المعتمدون ⭐', 'crown']] as ShellNavItem[]) : []),
     ['stats', 'الإحصائيات', 'chart'],
     ['rep', 'التقارير والمبيعات', 'trend'],
     ['about', 'حول OptiVerse', 'info'],
-    ['store', 'إعداد متجر العملاء', 'store'],
+    ['store', 'بيانات المحل والاشتراك', 'store'],
   ];
 
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://optiverse.app';
@@ -579,28 +834,49 @@ export function MerchantPage() {
     }
   };
 
-  const radar: [string, number, number][] = isDefaultDemoShop
-    ? [
-        ['أفياتور كلاسيك', 340, 4],
-        ['وايفيرر بلاك', 298, 41],
-        ['ريملس لايت', 210, 38],
-        ['كات آي أنيقة', 187, 5],
-        ['سيف بلو', 120, 29],
-      ]
-    : shopProducts.slice(0, 5).map((p, idx) => {
-        const bought = shopInq.filter((q) => q.frameName === p.name && q.status === 'confirmed').length;
-        return [p.name, Math.max(1, bought * 12 + (5 - idx) * 3), bought];
-      });
-  const rem: [string, string, string, string][] = [
-    ['أحمد فتحي', '0100 777 1212', 'صيانة النظارة', 'مرّ 6 شهور على الشراء'],
-    ['نادية محمود', '0111 220 3344', 'الكشف السنوي', 'آخر كشف: نوفمبر 2025'],
-    ['هاني رضا', '0122 998 7766', 'الكشف السنوي', 'الموعد خلال أسبوع'],
-    ['ليلى سامي', '0155 410 6677', 'صيانة النظارة', 'تغيير بدّات الأنف'],
-  ];
+  // Strictly real radar metrics computed from actual store inquiries/try-ons & confirmed purchases
+  const radar: [string, number, number][] = shopProducts
+    .map((p) => {
+      const trials = shopInq.filter((q) => q.frameName === p.name).length;
+      const bought = shopInq.filter((q) => q.frameName === p.name && q.status === 'confirmed').length;
+      return [p.name, trials, bought] as [string, number, number];
+    })
+    .filter((r) => r[1] > 0 || r[2] > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+  const totalRadarTrials = radar.reduce((sum, r) => sum + r[1], 0);
+  const mostTriedFrame = radar[0];
+  const lowestConvFrame =
+    radar.length > 0
+      ? [...radar].sort((a, b) => a[2] / Math.max(1, a[1]) - b[2] / Math.max(1, b[1]))[0]
+      : null;
 
   const adminRenewMsg = encodeURIComponent(
     `مرحباً إدارة OptiVerse، أرغب في تجديد اشتراك متجر "${activeShop.name}" (${activeShop.slug}) عبر InstaPay / فودافون كاش.`
   );
+
+  const handleAddCrm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!crmName.trim() || !crmPhone.trim()) {
+      toast('اكتب اسم العميل ورقم الموبايل أولاً');
+      return;
+    }
+    await addCrmCustomer({
+      shopId: activeShop.id,
+      customerName: crmName.trim(),
+      phone: crmPhone.trim(),
+      productName: crmProdName.trim() || 'إطار نظارة',
+      pd: crmPd.trim() || undefined,
+      orderDate: new Date().toISOString(),
+      notes: crmNotes.trim() || undefined,
+    });
+    setCrmName('');
+    setCrmPhone('');
+    setCrmProdName('');
+    setCrmPd('');
+    setCrmNotes('');
+    toast('تم تسجيل العميل في قاعدة البيانات ✓');
+  };
 
   return (
     <Shell
@@ -610,72 +886,101 @@ export function MerchantPage() {
       title={activeShop.name}
       sub="لوحة تحكم التاجر"
       highlight="store"
+      onSignOut={signOut}
       headerAction={
-        <button className="btn btn-d btn-sm whitespace-nowrap shrink-0" title="تسجيل الخروج" onClick={signOut}>
-          <I n="logout" s={14} /> تسجيل الخروج
+        <button
+          type="button"
+          className="btn btn-tryon btn-sm whitespace-nowrap shrink-0"
+          onClick={() => navigate(`/shop/${activeShop.slug}`)}
+        >
+          <I n="eye" s={14} /> معاينة المتجر
         </button>
       }
     >
-      {/* 14-Day Free Trial Countdown / Expired Renewal Banner */}
-      {expiredOrPaused ? (
-        <div className="mb-4 rounded-2xl p-4 bg-rose-50 border border-rose-200 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="font-extrabold text-rose-800 text-sm sm:text-base">
-              انتهت الفترة التجريبية المجانية أو تم إيقاف الاشتراك — متجر العملاء متوقف مؤقتاً
-            </div>
-            <div className="text-xs text-rose-700 mt-0.5 leading-6">
-              لإعادة تفعيل رابط متجرك فوراً، جدّد الاشتراك مع إدارة المنصة عبر InstaPay أو Vodafone Cash وأرسل إيصال التحويل.
-            </div>
-          </div>
-          <a
-            className="btn btn-p btn-sm shrink-0"
-            href={`https://wa.me/201000000000?text=${adminRenewMsg}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <I n="msg" s={14} /> تجديد الاشتراك عبر واتساب الإدارة
-          </a>
-        </div>
-      ) : activeShop.status === 'trial' ? (
-        <div className="mb-4 rounded-2xl p-4 bg-sky-50 border border-sky-200 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex-1 min-w-[220px]">
-            <div className="font-extrabold text-sm sm:text-base text-[#0F172A] flex items-center gap-2 flex-wrap">
-              <I n="spark" s={17} c="text-[#0284C7]" />
-              <span>متبقي {trialDaysLeft} أيام في فترتك التجريبية المجانية</span>
-              <span className="badge b-info">14 يوماً مجاناً</span>
-            </div>
-            <div className="mt-2 h-2 rounded-full bg-sky-200/70 overflow-hidden max-w-md">
-              <div
-                className="h-full bg-[#0284C7] rounded-full transition-all"
-                style={{ width: `${Math.min(100, Math.round((trialDaysLeft / 14) * 100))}%` }}
-              />
-            </div>
-          </div>
-          <a
-            className="btn bg-[#D97706] hover:bg-[#B45309] text-white btn-sm shrink-0"
-            href={`https://wa.me/201000000000?text=${adminRenewMsg}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <I n="crown" s={14} /> تفعيل الاشتراك الدائم (InstaPay / Vodafone Cash)
-          </a>
-        </div>
-      ) : null}
-
       {sec === 'home' && (
         <>
+          {/* 14-Day Free Trial Countdown / Expired Renewal Banner (ONLY on Home tab) */}
+          {expiredOrPaused ? (
+            <div className="mb-4 rounded-2xl p-4 bg-rose-50 border border-rose-200 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="font-extrabold text-rose-800 text-sm sm:text-base">
+                  انتهت الفترة التجريبية المجانية أو تم إيقاف الاشتراك — متجر العملاء متوقف مؤقتاً
+                </div>
+                <div className="text-xs text-rose-700 mt-0.5 leading-6">
+                  لإعادة تفعيل رابط متجرك فوراً، جدّد الاشتراك مع إدارة المنصة عبر{' '}
+                  <span dir="ltr" className="inline-block font-bold">
+                    InstaPay
+                  </span>{' '}
+                  أو{' '}
+                  <span dir="ltr" className="inline-block font-bold">
+                    Vodafone Cash
+                  </span>{' '}
+                  وأرسل إيصال التحويل.
+                </div>
+              </div>
+              <a
+                className="btn btn-p btn-sm shrink-0"
+                href={`https://wa.me/201000000000?text=${adminRenewMsg}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <I n="msg" s={14} /> تجديد الاشتراك عبر واتساب الإدارة
+              </a>
+            </div>
+          ) : activeShop.status === 'trial' ? (
+            <div className="mb-4 rounded-2xl p-4 bg-sky-50 border border-sky-200 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex-1 min-w-[220px]">
+                <div className="font-extrabold text-sm sm:text-base text-[#0F172A] flex items-center gap-2 flex-wrap">
+                  <I n="spark" s={17} c="text-[#0284C7]" />
+                  <span>
+                    متبقي <span dir="ltr">{trialDaysLeft}</span> أيام في فترتك التجريبية المجانية
+                  </span>
+                  <span className="badge b-info">14 يوماً مجاناً</span>
+                </div>
+                <div className="mt-2 h-2 rounded-full bg-sky-200/70 overflow-hidden max-w-md">
+                  <div
+                    className="h-full bg-[#0284C7] rounded-full transition-all"
+                    style={{ width: `${Math.min(100, Math.round((trialDaysLeft / 14) * 100))}%` }}
+                  />
+                </div>
+              </div>
+              <a
+                className="btn bg-[#D97706] hover:bg-[#B45309] text-white btn-sm shrink-0"
+                href={`https://wa.me/201000000000?text=${adminRenewMsg}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <I n="crown" s={14} /> تفعيل الاشتراك الدائم
+              </a>
+            </div>
+          ) : null}
+
           <Head t={`أهلاً بك، ${activeShop.name} 👋`} sub="ملخص نشاط متجرك اليوم" />
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-            <Stat icon="eye" label="تجارب اليوم" value={todayTrials} sub={<span className="badge b-ok">+12%</span>} />
             <Stat
-              icon="receipt"
-              tone="b-info"
-              label="استفسارات جديدة"
-              value={newCount}
-              sub={<span className="text-slate-500">بانتظار مراجعتك</span>}
-              onClick={() => setSec('inq')}
+              icon="eye"
+              label="تجارب العملاء المسجلة"
+              value={<span dir="ltr">{totalTryOns}</span>}
+              sub={<span className="text-slate-500">إجمالي التفاعلات والطلبات</span>}
             />
-            <Stat icon="box" label="النظارات المضافة" value={shopProducts.length} />
+            <Stat
+              icon="bell"
+              tone="b-warn"
+              label="تذكيرات العملاء المستحقة"
+              value={<span dir="ltr">{dueRecallCount}</span>}
+              sub={<span className="text-slate-500">متابعة 6 و12 شهر</span>}
+              onClick={() => setSec('crm')}
+            />
+            <Stat
+              icon="box"
+              label="النظارات المنشورة"
+              value={
+                <span dir="ltr" className="inline-block">
+                  {shopProducts.length} / {maxProducts}
+                </span>
+              }
+              onClick={() => setSec('prods')}
+            />
             <Stat icon="dollar" label="مبيعات الشهر" value={<Egp v={monthlyShopRevenue} />} />
           </div>
 
@@ -687,108 +992,148 @@ export function MerchantPage() {
               <h3 className="font-bold text-[#0F172A]">رادار التحليلات الذكية</h3>
             </div>
             <p className="text-xs text-slate-500 mb-4">أين يتجرّب الناس كثيراً ولا يشترون؟</p>
-            <div className="grid md:grid-cols-2 gap-3 mb-4">
-              <div className="rounded-xl p-3.5 bg-rose-50 border border-rose-200 text-sm leading-7 text-rose-900">
-                <b className="text-rose-700">⚠ الأقل شراءً:</b> «أفياتور كلاسيك» اتجرّبت 340 مرة واتباعت 4 مرات فقط
-                (1.2%). جرّب تعدّل السعر أو تضيف خصم على الإطار.
+
+            {totalRadarTrials < 5 ? (
+              <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-6 text-center text-sm text-slate-600 leading-7">
+                ستظهر توصيات الأداء الذكية تلقائياً بعد بدء تجربة العملاء لنظاراتك
               </div>
-              <div className="rounded-xl p-3.5 bg-sky-50 border border-sky-200 text-sm leading-7 text-sky-950">
-                <b className="text-[#0284C7]">🔥 الأكثر تجربة:</b> «أفياتور كلاسيك» الأول هذا الأسبوع. و«كات آي أنيقة» (187
-                تجربة) مبيعاتها ضعيفة — راجع صورها ومقاسها.
-              </div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm min-w-[460px]">
-                <thead className="text-xs text-slate-500">
-                  <tr className="border-b border-[#E2E8F0]">
-                    <th className="p-2 text-start">الإطار</th>
-                    <th className="p-2">تجارب</th>
-                    <th className="p-2">مشتريات</th>
-                    <th className="p-2 text-start">التحويل</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {radar.map((r) => {
-                    const c = (r[2] / r[1]) * 100;
-                    return (
-                      <tr key={r[0]} className="border-b border-slate-100 tabular-nums">
-                        <td className="p-2 font-bold text-[#0F172A]">{r[0]}</td>
-                        <td className="p-2 text-center">{r[1]}</td>
-                        <td className="p-2 text-center">{r[2]}</td>
-                        <td className="p-2">
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
-                              <div
-                                className="h-full rounded-full"
-                                style={{
-                                  width: Math.min(c * 3, 100) + '%',
-                                  background: c < 5 ? '#e11d48' : '#059669',
-                                }}
-                              />
-                            </div>
-                            <span className={'text-xs font-bold ' + (c < 5 ? 'text-rose-600' : 'text-[#059669]')}>
-                              {c.toFixed(1)}%
-                            </span>
-                          </div>
-                        </td>
+            ) : (
+              <>
+                <div className="grid md:grid-cols-2 gap-3 mb-4">
+                  {lowestConvFrame && (
+                    <div className="rounded-xl p-3.5 bg-rose-50 border border-rose-200 text-sm leading-7 text-rose-900">
+                      <b className="text-rose-700">⚠ الأقل تحويلاً:</b> «{lowestConvFrame[0]}» تم تجربتها{' '}
+                      <span dir="ltr" className="font-bold">
+                        {lowestConvFrame[1]}
+                      </span>{' '}
+                      مرة بمبيعات{' '}
+                      <span dir="ltr" className="font-bold">
+                        {lowestConvFrame[2]}
+                      </span>{' '}
+                      (<span dir="ltr">{((lowestConvFrame[2] / Math.max(1, lowestConvFrame[1])) * 100).toFixed(1)}%</span>
+                      ). راجع السعر أو أضف عرضاً ترويجياً.
+                    </div>
+                  )}
+                  {mostTriedFrame && (
+                    <div className="rounded-xl p-3.5 bg-sky-50 border border-sky-200 text-sm leading-7 text-sky-950">
+                      <b className="text-[#0284C7]">🔥 الأكثر تفاعلاً:</b> «{mostTriedFrame[0]}» في الصدارة بـ{' '}
+                      <span dir="ltr" className="font-bold">
+                        {mostTriedFrame[1]}
+                      </span>{' '}
+                      تجربة وطلب مؤكد{' '}
+                      <span dir="ltr" className="font-bold">
+                        ({mostTriedFrame[2]})
+                      </span>
+                      .
+                    </div>
+                  )}
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm min-w-[460px]">
+                    <thead className="text-xs text-slate-500">
+                      <tr className="border-b border-[#E2E8F0]">
+                        <th className="p-2 text-start">الإطار</th>
+                        <th className="p-2">تجارب</th>
+                        <th className="p-2">مشتريات</th>
+                        <th className="p-2 text-start">التحويل</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                    </thead>
+                    <tbody>
+                      {radar.map((r) => {
+                        const c = (r[2] / Math.max(1, r[1])) * 100;
+                        return (
+                          <tr key={r[0]} className="border-b border-slate-100 tabular-nums">
+                            <td className="p-2 font-bold text-[#0F172A]">{r[0]}</td>
+                            <td className="p-2 text-center" dir="ltr">
+                              {r[1]}
+                            </td>
+                            <td className="p-2 text-center" dir="ltr">
+                              {r[2]}
+                            </td>
+                            <td className="p-2">
+                              <div className="flex items-center gap-2">
+                                <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full"
+                                    style={{
+                                      width: Math.min(c * 3, 100) + '%',
+                                      background: c < 5 ? '#e11d48' : '#059669',
+                                    }}
+                                  />
+                                </div>
+                                <span
+                                  dir="ltr"
+                                  className={'text-xs font-bold ' + (c < 5 ? 'text-rose-600' : 'text-[#059669]')}
+                                >
+                                  {c.toFixed(1)}%
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="glass rounded-2xl p-5">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="font-bold text-[#0F172A]">تذكير الصيانة والكشف السنوي للعملاء</h3>
-              <span className="badge b-warn">{rem.length} عملاء</span>
+              <div>
+                <h3 className="font-bold text-[#0F172A]">متابعة العملاء (CRM 6 و12 شهر)</h3>
+                <p className="text-xs text-slate-500">تنبيهات الصيانة الدورية وتغيير الإطارات عبر واتساب</p>
+              </div>
+              <button type="button" className="btn btn-g btn-sm" onClick={() => setSec('crm')}>
+                إدارة قاعدة العملاء ({shopCrm.length})
+              </button>
             </div>
-            <div className="space-y-2.5">
-              {rem.map((r) => {
-                const m = encodeURIComponent(
-                  `أهلاً ${r[0]} 👋 ${activeShop.name} بيفكّرك بموعد ${r[2]} (${r[3]}). تحب نحجزلك ميعاد؟`
-                );
-                return (
-                  <div key={r[1]} className="flex flex-wrap items-center gap-3 p-3 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0]">
-                    <span className="w-10 h-10 rounded-full bg-[#0F172A] text-white font-extrabold flex items-center justify-center">
-                      {r[0][0]}
-                    </span>
-                    <div className="flex-1 min-w-[150px]">
-                      <div className="font-bold text-sm text-[#0F172A]">{r[0]}</div>
-                      <div className="text-xs text-slate-500">
-                        {r[2]} · {r[3]}
-                      </div>
+            {dueCrmList.slice(0, 3).map((c) => {
+              const recallKind = c.due12 ? '12m' : '6m';
+              const msg = encodeURIComponent(
+                `أهلاً ${c.customerName} 👋 ${activeShop.name} بيفكّرك بموعد صيانة ومراجعة نظارتك (${c.productName}). تحب تشرفنا في المحل؟`
+              );
+              return (
+                <div key={c.id} className="flex flex-wrap items-center gap-3 p-3 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] mb-2">
+                  <span className="w-9 h-9 rounded-full bg-[#0F172A] text-white font-extrabold flex items-center justify-center">
+                    {c.customerName[0]}
+                  </span>
+                  <div className="flex-1 min-w-[150px]">
+                    <div className="font-bold text-sm text-[#0F172A]">{c.customerName}</div>
+                    <div className="text-xs text-slate-500">
+                      {c.productName} · منذ {c.daysSince} يوم
                     </div>
-                    {sent[r[1]] ? (
-                      <span className="badge b-ok">
-                        <I n="check" s={12} /> تم الإرسال
-                      </span>
-                    ) : (
-                      <a
-                        className="btn btn-p btn-sm"
-                        href={`https://wa.me/${waNum(r[1])}?text=${m}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={() => {
-                          setSent((s) => ({ ...s, [r[1]]: 1 }));
-                          toast('تم فتح واتساب بالتذكير ✓');
-                        }}
-                      >
-                        <I n="msg" s={14} /> إرسال تذكير واتساب
-                      </a>
-                    )}
                   </div>
-                );
-              })}
-            </div>
+                  <a
+                    className="btn btn-p btn-sm"
+                    href={`https://wa.me/${waNum(c.phone)}?text=${msg}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={() => markCrmRecallSent(c.id, recallKind)}
+                  >
+                    <I n="msg" s={14} /> تذكير واتساب 💬
+                  </a>
+                </div>
+              );
+            })}
           </div>
         </>
       )}
 
       {sec === 'prods' && (
         <>
-          <Head t="منتجاتي" sub={`${shopProducts.length} نظارة في الكتالوج`}>
+          <Head
+            t="منتجاتي"
+            sub={
+              <>
+                <span dir="ltr" className="inline-block font-bold text-[#0F172A]">
+                  {shopProducts.length} / {maxProducts}
+                </span>{' '}
+                نظارة متاحة في الكتالوج
+              </>
+            }
+          >
             <button className="btn btn-p" onClick={() => setModal('addprod')}>
               <I n="plus" s={16} /> إضافة نظارة جديدة
             </button>
@@ -884,9 +1229,9 @@ export function MerchantPage() {
                         <span className="badge b-acc font-mono" dir="ltr">
                           {p.code}
                         </span>
-                        {p.modelCalibration?.material && (
-                          <span className="text-[0.68rem] text-slate-500">
-                            {p.modelCalibration.material === 'metal' ? 'معدن 1.8mm' : 'TR 3.5mm'}
+                        {p.modelCode && (
+                          <span className="text-[0.68rem] font-mono text-slate-500" dir="ltr">
+                            {p.modelCode}
                           </span>
                         )}
                         {p.availableSizes && (
@@ -986,7 +1331,126 @@ export function MerchantPage() {
         </>
       )}
 
-      {sec === 'inq' && (
+      {sec === 'crm' && (
+        <>
+          <Head t="قاعدة عملاء المحل وتذكيرات المتابعة (CRM)" sub="تسجيل عملاء المحل وتنبيهات الصيانة بعد 6 و12 شهراً عبر واتساب" />
+
+          <div className="glass rounded-2xl p-5 mb-5 flex flex-wrap items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-6">
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-bold text-[#0F172A]">تذكير الصيانة الدورية (6 شهور)</span>
+                <Switch
+                  on={activeShop.recall6mEnabled ?? true}
+                  onChange={(v) => updateShop(activeShop.id, { recall6mEnabled: v })}
+                />
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-bold text-[#0F172A]">تذكير المراجعة السنوية (12 شهر)</span>
+                <Switch
+                  on={activeShop.recall12mEnabled ?? true}
+                  onChange={(v) => updateShop(activeShop.id, { recall12mEnabled: v })}
+                />
+              </div>
+            </div>
+            <span className="badge b-warn">{dueRecallCount} عملاء مستحقون للتذكير الآن</span>
+          </div>
+
+          <form onSubmit={handleAddCrm} className="glass rounded-2xl p-5 mb-5 space-y-3">
+            <h3 className="font-bold text-sm text-[#0F172A]">إضافة عميل جديد</h3>
+            <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+              <input
+                className="inp text-xs"
+                placeholder="اسم العميل *"
+                value={crmName}
+                onChange={(e) => setCrmName(e.target.value)}
+                required
+              />
+              <input
+                className="inp text-xs"
+                dir="ltr"
+                placeholder="رقم الموبايل *"
+                value={crmPhone}
+                onChange={(e) => setCrmPhone(e.target.value)}
+                required
+              />
+              <input
+                className="inp text-xs"
+                placeholder="الموديل / النظارة"
+                value={crmProdName}
+                onChange={(e) => setCrmProdName(e.target.value)}
+              />
+              <input
+                className="inp text-xs"
+                dir="ltr"
+                placeholder="PD (اختياري)"
+                value={crmPd}
+                onChange={(e) => setCrmPd(e.target.value)}
+              />
+              <div className="flex gap-2">
+                <input
+                  className="inp text-xs flex-1"
+                  placeholder="ملاحظات..."
+                  value={crmNotes}
+                  onChange={(e) => setCrmNotes(e.target.value)}
+                />
+                <button type="submit" className="btn btn-p btn-sm shrink-0">
+                  إضافة
+                </button>
+              </div>
+            </div>
+          </form>
+
+          <div className="space-y-3">
+            {dueCrmList.map((c) => {
+              const recallType: '6m' | '12m' = c.due12 ? '12m' : '6m';
+              const waText = encodeURIComponent(
+                `أهلاً ${c.customerName} 👋 معكم ${activeShop.name}. مرّ ${
+                  recallType === '12m' ? 'عام كامل' : '6 أشهر'
+                } على نظارتك (${c.productName}) — يشرفنا زيارتك لخدمة الصيانة والتنظيف المجاني أو استعراض الموديلات الجديدة.`
+              );
+              return (
+                <div key={c.id} className="glass rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <b className="text-sm text-[#0F172A]">{c.customerName}</b>
+                      <span className="font-mono text-xs text-slate-500" dir="ltr">{c.phone}</span>
+                      {(c.due6 || c.due12) && (
+                        <span className="badge b-warn">
+                          {c.due12 ? 'مستحق تذكير 12 شهر' : 'مستحق تذكير 6 شهور'}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-600">
+                      {c.productName} {c.pd ? `· PD ${c.pd}` : ''} · منذ {c.daysSince} يوم
+                      {c.notes ? ` · ${c.notes}` : ''}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {c.recall6mSentAt && <span className="badge b-ok text-[0.68rem]">أُرسل 6ش ✓</span>}
+                    {c.recall12mSentAt && <span className="badge b-ok text-[0.68rem]">أُرسل 12ش ✓</span>}
+                    <a
+                      href={`https://wa.me/${waNum(c.phone)}?text=${waText}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn btn-p btn-sm"
+                      onClick={() => markCrmRecallSent(c.id, recallType)}
+                    >
+                      <I n="msg" s={14} /> إرسال تذكير واتساب 💬
+                    </a>
+                  </div>
+                </div>
+              );
+            })}
+            {!dueCrmList.length && (
+              <div className="glass rounded-2xl p-10 text-center text-sm text-slate-500">
+                لا يوجد عملاء مسجلون بعد — أضف أول عميل لبدء التذكيرات التلقائية
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {sec === 'inq' && rxEnabled && (
         <>
           <Head t="الكشوفات الطبية والاستفسارات" sub={`${newCount} طلبات جديدة بانتظار مراجعتك`} />
           <div className="space-y-4">
@@ -1074,7 +1538,7 @@ export function MerchantPage() {
         </>
       )}
 
-      {sec === 'lens' && (
+      {sec === 'lens' && rxEnabled && (
         <>
           <Head
             t="إدارة أسعار العدسات والشركات"
@@ -1108,38 +1572,131 @@ export function MerchantPage() {
         </>
       )}
 
+      {sec === 'delivery' && deliveryEnabled && (
+        <>
+          <Head t="إعدادات التوصيل والشحن" sub="حدّد رسوم ومناطق التوصيل التي تظهر لعملائك في السلة ودليل المحلات" />
+          <div className="glass rounded-2xl p-5 max-w-xl space-y-4">
+            <div>
+              <label className="text-xs font-bold text-slate-700">رسوم التوصيل الافتراضية (ج.م)</label>
+              <input
+                type="number"
+                className="inp mt-1"
+                value={activeShop.deliveryFee ?? 60}
+                onChange={(e) => updateShop(activeShop.id, { deliveryFee: Math.max(0, +e.target.value) })}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-700">مناطق التغطية</label>
+              <input
+                className="inp mt-1"
+                placeholder="مثال: القاهرة والجيزة خلال 24 ساعة"
+                value={activeShop.deliveryAreas || ''}
+                onChange={(e) => updateShop(activeShop.id, { deliveryAreas: e.target.value })}
+              />
+            </div>
+            <button type="button" className="btn btn-p" onClick={() => toast('تم حفظ إعدادات التوصيل ✓')}>
+              حفظ إعدادات التوصيل
+            </button>
+          </div>
+        </>
+      )}
+
+      {sec === 'suppliers' && suppliersEnabled && (
+        <>
+          <Head t="الموردون المعتمدون بالمنصة ⭐" sub="تواصل مباشر مع كبار مستوردي الشنابر والعدسات بأسعار خاصة لتجار OptiVerse" />
+          <div className="grid md:grid-cols-2 gap-4">
+            {(platformSettings.sponsoredSuppliers || [])
+              .filter((s) => s.isActive)
+              .map((sup) => (
+                <div key={sup.id} className="glass rounded-2xl p-5 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h3 className="font-extrabold text-base text-[#0F172A]">{sup.name}</h3>
+                      <div className="text-xs text-slate-500 mt-0.5">{sup.specialty} · {sup.city}</div>
+                    </div>
+                    <span className="badge b-acc">مورد معتمد ⭐</span>
+                  </div>
+                  <div className="rounded-xl p-3 bg-emerald-50 border border-emerald-200 text-xs font-bold text-[#059669]">
+                    {sup.offerText}
+                  </div>
+                  <a
+                    href={`https://wa.me/${waNum(sup.wa)}?text=${encodeURIComponent(
+                      `مرحباً ${sup.name}، أتواصل معكم بصفتي تاجر مشترك في OptiVerse (${activeShop.name}) بخصوص عرض الجملة.`
+                    )}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-p w-full"
+                  >
+                    <I n="msg" s={16} /> تواصل على واتساب المورد
+                  </a>
+                </div>
+              ))}
+          </div>
+        </>
+      )}
+
       {sec === 'rep' && <Reports />}
 
       {sec === 'stats' && (
         <>
           <Head t="الإحصائيات" sub="أداء متجرك آخر 30 يوم" />
-          <div className="grid lg:grid-cols-2 gap-4">
-            <div className="glass rounded-2xl p-5">
-              <h3 className="font-bold mb-3">التجارب الأسبوعية</h3>
-              <LineChart data={[310, 420, 390, 560, 610, 720, 860]} labels={['أسبوع1', '2', '3', '4', '5', '6', '7']} h={200} />
+          {totalRadarTrials < 5 ? (
+            <div className="glass rounded-2xl p-8 text-center text-sm text-slate-600 leading-7">
+              ستظهر إحصائيات التجارب الأسبوعية والنظارات الأكثر تجربة تلقائياً بعد بدء تجربة العملاء لنظاراتك
             </div>
-            <div className="glass rounded-2xl p-5">
-              <h3 className="font-bold mb-4">النظارات الأكثر تجربة</h3>
-              <Bars rows={radar.map((r) => [r[0], r[1]])} />
+          ) : (
+            <div className="grid lg:grid-cols-2 gap-4">
+              <div className="glass rounded-2xl p-5">
+                <h3 className="font-bold mb-3">التجارب الأسبوعية</h3>
+                <LineChart
+                  data={[0, 0, 0, 0, 0, 0, totalRadarTrials]}
+                  labels={['أسبوع 1', 'أسبوع 2', 'أسبوع 3', 'أسبوع 4', 'أسبوع 5', 'أسبوع 6', 'الأسبوع الحالي']}
+                  h={200}
+                  isCurrency={false}
+                  unit="تجربة"
+                  changeLabel="عن الأسبوع السابق"
+                />
+              </div>
+              <div className="glass rounded-2xl p-5">
+                <h3 className="font-bold mb-4">النظارات الأكثر تجربة</h3>
+                <Bars rows={radar.map((r) => [r[0], r[1], ' تجربة'])} />
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
 
       {sec === 'about' && (
         <>
-          <Head t="حول OptiVerse" sub="كل ما تحتاج معرفته عن المنصة" />
+          <Head
+            t={
+              <>
+                حول <span dir="ltr">OptiVerse</span>
+              </>
+            }
+            sub="كل ما تحتاج معرفته عن المنصة"
+          />
           <div className="glass rounded-2xl p-6 mb-5 leading-8 text-sm opacity-90">
             <p className="mb-3">
-              OptiVerse منصة SaaS تمنح محلات النظارات متجراً تفاعلياً برابط خاص. ترفع صورتين لنظارتك من زاويتين
-              مختلفتين، وتُعزل الخلفية تلقائياً مع الحفاظ التام على شكل النظارة الحقيقي ليجرّبها العميل على وجهه
-              بالذكاء الاصطناعي، ثم يرسل كشف نظره ليراجعه المحل ويؤكد الملاءمة والسعر النهائي عبر واتساب.
+              <span dir="ltr" className="inline-block font-bold">
+                OptiVerse
+              </span>{' '}
+              منصة <span dir="ltr" className="inline-block">SaaS</span> تمنح محلات النظارات متجراً تفاعلياً برابط
+              خاص. ترفع صور نظاراتك لتُعزل وتنتج صور كتالوج استوديو احترافية وتجربة{' '}
+              <span dir="ltr" className="inline-block font-bold">
+                AI + 3D
+              </span>{' '}
+              بمقياس{' '}
+              <span dir="ltr" className="inline-block font-bold">
+                1:1 mm
+              </span>{' '}
+              على وجه العميل، مع دليل محلات معتمد وقاعدة عملاء وتذكيرات دورية.
             </p>
             <div className="grid sm:grid-cols-3 gap-3 mt-4">
               {[
-                ['camera', 'تجربة حية', 'تتبّع نقاط الوجه عبر MediaPipe وقياس PD'],
-                ['spark', 'ذكاء اصطناعي', 'ترشيح حسب شكل الوجه ورادار تحليلات'],
-                ['msg', 'استفسار آمن', 'مراجعة الكشف قبل تأكيد السعر'],
+                ['camera', 'تجربة حية 1:1 mm', 'تتبّع نقاط الوجه بدقة وقياس PD'],
+                ['spark', 'ذكاء اصطناعي', 'عزل صور ستوديو + تجميع ألوان مجاني + قراءة المقاسات'],
+                ['msg', 'طلب مباشر', 'استلام الطلبات مباشرة على واتساب المحل بدون عمولات'],
               ].map((x) => (
                 <div key={x[0]} className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex gap-3">
                   <span className="text-[#0284C7]">
@@ -1153,65 +1710,86 @@ export function MerchantPage() {
               ))}
             </div>
           </div>
-          <h3 className="font-bold text-[#0F172A] mb-3">جدول مقارنة الباقات</h3>
-          <div className="glass rounded-2xl overflow-x-auto">
-            <table className="w-full text-sm min-w-[480px]">
-              <thead>
-                <tr className="border-b border-[#E2E8F0] text-xs text-slate-500">
-                  <th className="p-3 text-start">الميزة</th>
-                  <th className="p-3">الأساسية</th>
-                  <th className="p-3 text-[#D97706]">الاحترافية</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[
-                  ['السعر الشهري', '600 ج.م', '1,200 ج.م'],
-                  ['عدد النظارات', '50', 'غير محدود'],
-                  ['تجارب AR شهرياً', '2,000', 'غير محدودة'],
-                  ['رابط متجر + QR', 1, 1],
-                  ['استقبال الكشوفات والاستفسارات', 1, 1],
-                  ['ترشيح الذكاء الاصطناعي لشكل الوجه', 0, 1],
-                  ['رادار التحليلات الذكية', 0, 1],
-                  ['تذكيرات واتساب للعملاء', 0, 1],
-                  ['مقارنة Split View', 0, 1],
-                  ['الدعم الفني', 'بريد إلكتروني', 'واتساب أولوية'],
-                ].map((r) => (
-                  <tr key={r[0] as string} className="border-b border-slate-100">
-                    <td className="p-3 font-semibold text-[#0F172A]">{r[0]}</td>
-                    {[r[1], r[2]].map((v, i) => (
-                      <td key={i} className="p-3 text-center">
-                        {v === 1 ? (
-                          <span className="text-[#059669] inline-block">
-                            <I n="check" s={17} />
-                          </span>
-                        ) : v === 0 ? (
-                          <span className="opacity-30">—</span>
-                        ) : (
-                          v
-                        )}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         </>
       )}
 
       {sec === 'store' && (
         <>
-          <Head t="إعداد متجر العملاء" sub="إدارة رابط المتجر ورمز QR وتخصيص مظهر المتجر لعملائك">
+          <Head
+            t="بيانات المحل والاشتراك"
+            sub="إعداد متجر العملاء وإدارة الباقة والرصيد ورابط المتجر ورمز QR"
+          >
             <button className="btn btn-tryon" onClick={() => navigate(`/shop/${activeShop.slug}`)}>
               <I n="eye" s={16} /> معاينة كعميل
             </button>
           </Head>
+
+          {/* Full Plan, Subscription & Credits Card (ONLY inside بيانات المحل والاشتراك) */}
+          <div className="glass rounded-2xl p-5 mb-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="w-9 h-9 rounded-xl bg-amber-50 text-[#D97706] border border-amber-200 flex items-center justify-center">
+                  <I n="crown" s={18} />
+                </span>
+                <div>
+                  <div className="font-extrabold text-[#0F172A] text-sm sm:text-base flex items-center gap-2 flex-wrap">
+                    <span>الباقة الحالية: {activeShop.plan}</span>
+                    {activeShop.isFeatured && <span className="badge b-acc">متجر مميز ⭐</span>}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    {activeShop.status === 'trial' ? `فترة تجريبية مجانية — متبقي ${trialDaysLeft} أيام` : 'اشتراك مفعل'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white btn-sm whitespace-nowrap shrink-0"
+                  onClick={() => addTopUpCredits(activeShop.id)}
+                >
+                  <I n="plus" s={14} /> +{platformSettings.topupPackFrames} نظارة إضافية بـ{' '}
+                  <span dir="ltr">{platformSettings.topupPackPrice}</span> ج.م
+                </button>
+                <a
+                  className="btn btn-g btn-sm whitespace-nowrap shrink-0"
+                  href={`https://wa.me/201000000000?text=${adminRenewMsg}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <I n="msg" s={14} /> ترقية / تجديد الاشتراك
+                </a>
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-3 gap-3 text-xs sm:text-sm">
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center justify-between">
+                <span className="text-slate-600">سعة المتجر</span>
+                <b className="tabular-nums text-[#0F172A]" dir="ltr">
+                  {shopProducts.length} / {maxProducts}
+                </b>
+              </div>
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center justify-between">
+                <span className="text-slate-600">رصيد معالجة AI</span>
+                <b className="tabular-nums text-[#0284C7]" dir="ltr">
+                  {creditsRemaining} / {creditsCap}
+                </b>
+              </div>
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center justify-between">
+                <span className="text-slate-600">مسطرة PD بالكاميرا</span>
+                <span className={planCaps.cameraPdRulerEnabled ? 'badge b-ok' : 'badge b-warn'}>
+                  {planCaps.cameraPdRulerEnabled ? 'مفعّلة ✓' : 'في الاحترافية'}
+                </span>
+              </div>
+            </div>
+          </div>
+
           <div className="grid lg:grid-cols-2 gap-4">
-            <div className="glass rounded-2xl p-5">
+            <div className="glass rounded-2xl p-5 min-w-0">
               <h3 className="font-bold text-[#0F172A] mb-3">رابط المتجر</h3>
-              <div className="flex items-center gap-2 p-3 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] mb-3">
-                <I n="link" s={18} c="text-[#0284C7]" />
-                <span className="font-mono text-sm text-[#0F172A] flex-1 truncate" dir="ltr">
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] mb-3 min-w-0">
+                <I n="link" s={18} c="text-[#0284C7] shrink-0" />
+                <span className="font-mono text-xs sm:text-sm text-[#0F172A] flex-1 min-w-0 break-all text-start" dir="ltr">
                   {link}
                 </span>
               </div>
@@ -1237,14 +1815,47 @@ export function MerchantPage() {
               </div>
             </div>
 
-            <div className="glass rounded-2xl p-5 space-y-4">
-              <h3 className="font-bold text-[#0F172A]">تخصيص الواجهة</h3>
+            <div className="glass rounded-2xl p-5 space-y-3.5">
+              <h3 className="font-bold text-[#0F172A]">تخصيص الواجهة وبيانات الدليل</h3>
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-600">اسم المحل</label>
+                  <input
+                    className="inp mt-1"
+                    value={activeShop.name}
+                    onChange={(e) => updateShop(activeShop.id, { name: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-600">المحافظة</label>
+                  <select
+                    className="inp mt-1"
+                    value={activeShop.governorate || activeShop.city || 'القاهرة'}
+                    onChange={(e) => updateShop(activeShop.id, { governorate: e.target.value, city: e.target.value })}
+                  >
+                    {EGYPT_GOVERNORATES.map((g) => (
+                      <option key={g} value={g}>
+                        {g}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
               <div>
-                <label className="text-xs text-slate-600">اسم المحل</label>
+                <label className="text-xs text-slate-600">العنوان في دليل المحلات</label>
                 <input
                   className="inp mt-1"
-                  value={activeShop.name}
-                  onChange={(e) => updateShop(activeShop.id, { name: e.target.value })}
+                  value={activeShop.address || ''}
+                  onChange={(e) => updateShop(activeShop.id, { address: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-600">رابط Google Maps</label>
+                <input
+                  className="inp mt-1"
+                  dir="ltr"
+                  value={activeShop.mapsUrl || ''}
+                  onChange={(e) => updateShop(activeShop.id, { mapsUrl: e.target.value })}
                 />
               </div>
               <div>

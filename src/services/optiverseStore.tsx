@@ -2,12 +2,14 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import {
   AUDIT0,
   BRANDS0,
+  CRM_CUSTOMERS0,
   DEFAULT_SHOP_ID,
   EXTRAS0,
   INQ0,
   LENS_TYPES0,
   PAYMENTS0,
   PLANS0,
+  PLATFORM_SETTINGS0,
   PRODUCTS0,
   SHOPS0,
 } from '../data/seed';
@@ -18,10 +20,12 @@ import {
   AuthSession,
   Brand,
   CartItem,
+  CrmCustomer,
   Inquiry,
   LensType,
   PaymentRecord,
   Plan,
+  PlatformSettings,
   Product,
   ProductImage,
   ProductReview,
@@ -65,13 +69,47 @@ export function getShopDaysLeft(shop: Shop): number {
 }
 
 export function isShopExpiredOrPaused(shop: Shop): boolean {
+  if (shop.isDemoAdminStore) return false;
   if (shop.status === 'paused' || shop.status === 'expired') return true;
   if (shop.status === 'trial' && getShopDaysLeft(shop) <= 0) return true;
   return false;
 }
 
+export function isAdminRole(role?: string | null): boolean {
+  return role === 'admin' || role === 'super_admin';
+}
+
+export function getShopMaxProducts(shop: Shop, settings: PlatformSettings): number {
+  if (shop.isDemoAdminStore) return 1000;
+  const matchedPlan =
+    settings.plans.find((p) => p.tierKey === shop.planTier || p.name === shop.plan) ||
+    settings.plans[0];
+  const baseCap = matchedPlan?.maxProducts ?? 100;
+  return baseCap + (shop.topupCredits || 0);
+}
+
+export function getShopPlanCapabilities(shop: Shop, settings: PlatformSettings): Plan {
+  const matchedPlan =
+    settings.plans.find((p) => p.tierKey === shop.planTier || p.name === shop.plan) ||
+    settings.plans[0] ||
+    PLANS0[0];
+  if (shop.isDemoAdminStore) {
+    return {
+      ...matchedPlan,
+      tierKey: 'premium',
+      maxProducts: 1000,
+      monthlyAiCredits: 999999,
+      turboUploadEnabled: true,
+      cameraPdRulerEnabled: true,
+      featuredBoostEnabled: true,
+    };
+  }
+  return matchedPlan;
+}
+
 function getAdminOwnerEmail(): string {
-  return String(import.meta.env.VITE_ADMIN_EMAIL || 'admin@optiverse.app').trim().toLowerCase();
+  const metaEnv = (import.meta as unknown as { env?: Record<string, string | undefined> })?.env || {};
+  return String(metaEnv.VITE_ADMIN_EMAIL || 'admin@optiverse.app').trim().toLowerCase();
 }
 
 function makeSlug(name: string): string {
@@ -96,10 +134,12 @@ interface PersistedSnapshot {
   products: Product[];
   reviews?: ProductReview[];
   inq: Inquiry[];
+  crmCustomers?: CrmCustomer[];
   lensTypes: LensType[];
   brands: Brand[];
   extras: ProtectionExtra[];
   plans: Plan[];
+  platformSettings?: PlatformSettings;
   payments: PaymentRecord[];
   auditLogs: AuditLog[];
   extraShops: number;
@@ -110,7 +150,6 @@ function normalizeCatalogShopIds<T extends { shopId?: string }>(items: T[]): T[]
 }
 
 function loadSnapshot(): PersistedSnapshot {
-  // Purge any legacy image-heavy snapshot from localStorage so images reside strictly in IndexedDB
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw && raw.includes('data:image/')) {
@@ -124,10 +163,12 @@ function loadSnapshot(): PersistedSnapshot {
     products: PRODUCTS0,
     reviews: [],
     inq: INQ0,
+    crmCustomers: CRM_CUSTOMERS0,
     lensTypes: LENS_TYPES0,
     brands: BRANDS0,
     extras: EXTRAS0,
     plans: PLANS0,
+    platformSettings: PLATFORM_SETTINGS0,
     payments: PAYMENTS0,
     auditLogs: AUDIT0,
     extraShops: 0,
@@ -178,14 +219,15 @@ export interface StoreCtxValue {
   signInWithSupabase: (
     email: string,
     password: string,
-    expectedRole?: 'admin' | 'merchant'
-  ) => Promise<{ ok: boolean; role?: 'admin' | 'merchant'; error?: string; needsMfa?: boolean }>;
+    expectedRole?: 'super_admin' | 'admin' | 'merchant'
+  ) => Promise<{ ok: boolean; role?: 'super_admin' | 'admin' | 'merchant'; error?: string; needsMfa?: boolean }>;
   signInUnified: (
     email: string,
     password: string
-  ) => Promise<{ ok: boolean; role?: 'admin' | 'merchant'; error?: string; needsMfa?: boolean }>;
+  ) => Promise<{ ok: boolean; role?: 'super_admin' | 'admin' | 'merchant'; error?: string; needsMfa?: boolean }>;
   signInWithGoogle: () => Promise<{ ok: boolean; error?: string }>;
   signInWithApple: () => Promise<{ ok: boolean; error?: string }>;
+  signInWithPhoneOtp: (phone: string) => Promise<{ ok: boolean; error?: string }>;
   registerMerchant: (opts: {
     email: string;
     password: string;
@@ -195,16 +237,23 @@ export interface StoreCtxValue {
     city: string;
   }) => Promise<{ ok: boolean; error?: string }>;
   signOut: () => Promise<void>;
+  getAccessToken: () => Promise<string | null>;
+  platformSettings: PlatformSettings;
+  savePlatformSettings: (patch: Partial<PlatformSettings>) => Promise<void>;
   shops: Shop[];
   setShops: React.Dispatch<React.SetStateAction<Shop[]>>;
   activeShop: Shop;
   setActiveShopSlug: (slug: string) => void;
   updateShop: (shopId: string, patch: Partial<Shop>) => Promise<void>;
+  addTopUpCredits: (shopId: string, packFrames?: number, packPrice?: number) => Promise<void>;
   addShopManual: (opts: {
     name: string;
     ownerName?: string;
     ownerEmail?: string;
     city?: string;
+    governorate?: string;
+    address?: string;
+    mapsUrl?: string;
     plan?: string;
     wa?: string;
   }) => Promise<Shop>;
@@ -238,6 +287,9 @@ export interface StoreCtxValue {
   setInq: React.Dispatch<React.SetStateAction<Inquiry[]>>;
   addInquiry: (q: Inquiry) => Promise<void>;
   updateInquiry: (id: string, patch: Partial<Inquiry>) => Promise<void>;
+  crmCustomers: CrmCustomer[];
+  addCrmCustomer: (c: Omit<CrmCustomer, 'id'>) => Promise<CrmCustomer>;
+  markCrmRecallSent: (id: string, type: '6m' | '12m') => Promise<void>;
   lensTypes: LensType[];
   setLensTypes: React.Dispatch<React.SetStateAction<LensType[]>>;
   brands: Brand[];
@@ -265,6 +317,7 @@ export interface StoreCtxValue {
   cart: CartItem[];
   setCart: React.Dispatch<React.SetStateAction<CartItem[]>>;
   enterShopAsMerchant: (s: Shop) => void;
+  switchToAdminDemoStore: () => Promise<void>;
   exportFullBackup: () => Promise<void>;
   uploadAssetToStorage: (blob: Blob, folder: string, ext: string) => Promise<string>;
 }
@@ -298,6 +351,12 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
   const [brands, setBrands] = useState<Brand[]>(initial.brands);
   const [extras, setExtras] = useState<ProtectionExtra[]>(initial.extras);
   const [plans, setPlans] = useState<Plan[]>(initial.plans);
+  const [platformSettings, setPlatformSettings] = useState<PlatformSettings>(
+    initial.platformSettings || PLATFORM_SETTINGS0
+  );
+  const [crmCustomers, setCrmCustomers] = useState<CrmCustomer[]>(
+    initial.crmCustomers || CRM_CUSTOMERS0
+  );
   const [payments, setPayments] = useState<PaymentRecord[]>(initial.payments);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(initial.auditLogs);
   const [favByShop, setFavByShop] = useState<Record<string, string[]>>(() =>
@@ -334,7 +393,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  // Hydrate full catalog & WebP frame assets from IndexedDB on startup (prevents localStorage 5MB quota limits)
+  // Hydrate full catalog & WebP frame assets from IndexedDB on startup
   useEffect(() => {
     let alive = true;
     idbLoadSnapshot<PersistedSnapshot>().then((idbSnap) => {
@@ -343,6 +402,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       if (idbSnap.shops?.length) setShops(idbSnap.shops);
       if (idbSnap.products?.length) setProducts(idbSnap.products);
       if (idbSnap.reviews?.length) setReviews(idbSnap.reviews);
+      if (idbSnap.crmCustomers?.length) setCrmCustomers(idbSnap.crmCustomers);
       if (idbSnap.inq?.length) {
         const mineIds = getMyInquiryIds();
         setInq(idbSnap.inq.map((q) => (mineIds.includes(q.id) ? { ...q, mine: true } : q)));
@@ -351,6 +411,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       if (idbSnap.brands?.length) setBrands(normalizeCatalogShopIds(idbSnap.brands));
       if (idbSnap.extras?.length) setExtras(normalizeCatalogShopIds(idbSnap.extras));
       if (idbSnap.plans?.length) setPlans(idbSnap.plans);
+      if (idbSnap.platformSettings) setPlatformSettings(idbSnap.platformSettings);
       if (idbSnap.payments?.length) setPayments(idbSnap.payments);
       if (idbSnap.auditLogs?.length) setAuditLogs(idbSnap.auditLogs);
       if (typeof idbSnap.extraShops === 'number') setExtraShops(idbSnap.extraShops);
@@ -360,7 +421,6 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Persist full state (hundreds of WebP frames) to IndexedDB, with safe lightweight localStorage fallback
   useEffect(() => {
     if (idbHydratedRef.current) {
       hasMutatedBeforeIdbRef.current = true;
@@ -370,17 +430,18 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       products,
       reviews,
       inq,
+      crmCustomers,
       lensTypes,
       brands,
       extras,
       plans,
+      platformSettings,
       payments,
       auditLogs,
       extraShops,
     };
 
     const timer = window.setTimeout(() => {
-      // Persist all images and product snapshots exclusively in IndexedDB (never localStorage)
       void idbSaveSnapshot(snap);
 
       try {
@@ -395,7 +456,21 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     }, 120);
 
     return () => window.clearTimeout(timer);
-  }, [shops, products, reviews, inq, lensTypes, brands, extras, plans, payments, auditLogs, extraShops]);
+  }, [
+    shops,
+    products,
+    reviews,
+    inq,
+    crmCustomers,
+    lensTypes,
+    brands,
+    extras,
+    plans,
+    platformSettings,
+    payments,
+    auditLogs,
+    extraShops,
+  ]);
 
   useEffect(() => {
     if (typeof BroadcastChannel === 'undefined') return;
@@ -406,6 +481,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         setShops(p.shops);
         setProducts(p.products);
         if (p.reviews) setReviews(p.reviews);
+        if (p.crmCustomers) setCrmCustomers(p.crmCustomers);
+        if (p.platformSettings) setPlatformSettings(p.platformSettings);
         const mineIds = getMyInquiryIds();
         setInq(p.inq.map((q) => (mineIds.includes(q.id) ? { ...q, mine: true } : q)));
         setLensTypes(p.lensTypes);
@@ -427,11 +504,18 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
 
   // Resolve active shop based on route slug (/s/[slug], /shop/[slug] or /[slug]), merchant session, or fallback
   const routePath = route.split('?')[0];
+  const isReservedRoute =
+    routePath === '/' ||
+    routePath.startsWith('/admin') ||
+    routePath.startsWith('/merchant') ||
+    routePath.startsWith('/stores') ||
+    routePath.startsWith('/directory');
+
   const routeSlug = routePath.startsWith('/s/')
     ? routePath.slice(3).replace(/^\/+|\/+$/g, '').split('/')[0]
     : routePath.startsWith('/shop/')
     ? routePath.slice(6).replace(/^\/+|\/+$/g, '').split('/')[0]
-    : routePath !== '/' && !routePath.startsWith('/admin') && !routePath.startsWith('/merchant')
+    : !isReservedRoute
     ? routePath.slice(1).split('/')[0]
     : '';
 
@@ -564,6 +648,22 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             ownerEmail: r.owner_email || undefined,
             name: r.name,
             city: r.city,
+            governorate: r.governorate || r.city || 'القاهرة',
+            address: r.address || '',
+            mapsUrl: r.maps_url || '',
+            onboardingCompleted: r.onboarding_completed !== false,
+            enableDeliveryService: Boolean(r.enable_delivery_service),
+            deliveryFee: typeof r.delivery_fee === 'number' ? r.delivery_fee : 60,
+            deliveryAreas: r.delivery_areas || '',
+            isFeatured: Boolean(r.is_featured),
+            recall6mEnabled: r.recall_6m_enabled !== false,
+            recall12mEnabled: r.recall_12m_enabled !== false,
+            aiCreditsLimit: typeof r.ai_credits_limit === 'number' ? r.ai_credits_limit : 100,
+            aiCreditsUsed: typeof r.ai_credits_used === 'number' ? r.ai_credits_used : 0,
+            topupCredits: typeof r.topup_credits === 'number' ? r.topup_credits : 0,
+            isDemoAdminStore: Boolean(r.is_demo_admin_store),
+            planTier: r.plan_tier || 'basic',
+            billingCycle: r.billing_cycle || 'monthly',
             slug: r.slug,
             plan: r.plan_name,
             price: r.price,
@@ -577,14 +677,60 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           }))
         );
       }
-      if (plansRes.data?.length) {
+
+      const [settingsRes, crmRes] = await Promise.all([
+        supabase.from('platform_settings').select('*').eq('id', 'default').maybeSingle(),
+        supabase.from('crm_customers').select('*').order('order_date', { ascending: false }),
+      ]);
+      if (settingsRes.data) {
+        const sRow = settingsRes.data as any;
+        const dbPlans: Plan[] = Array.isArray(sRow.plans) && sRow.plans.length ? sRow.plans : PLANS0;
+        setPlatformSettings({
+          enablePrescriptionLenses: Boolean(sRow.enable_prescription_lenses),
+          allowMerchantLensBrandingToggle: Boolean(sRow.allow_merchant_lens_branding_toggle),
+          enableSponsoredSuppliers: Boolean(sRow.enable_sponsored_suppliers),
+          plans: dbPlans,
+          annualDiscountMonths: Number(sRow.annual_discount_months ?? 2),
+          trialDays: Number(sRow.trial_days ?? 14),
+          trialMaxProducts: Number(sRow.trial_max_products ?? 20),
+          trialAiCredits: Number(sRow.trial_ai_credits ?? 25),
+          topupPackFrames: Number(sRow.topup_pack_frames ?? 50),
+          topupPackPrice: Number(sRow.topup_pack_price ?? 300),
+          sponsoredSuppliers: Array.isArray(sRow.sponsored_suppliers) ? sRow.sponsored_suppliers : [],
+        });
+        setPlans(dbPlans);
+      } else if (plansRes.data?.length) {
         setPlans(
-          plansRes.data.map((r: any) => ({
+          plansRes.data.map((r: any, idx: number) => ({
             id: r.id,
+            tierKey: r.tier_key || (idx === 0 ? 'basic' : idx === 1 ? 'pro' : 'premium'),
             name: r.name,
             price: r.price,
+            maxProducts: r.max_products || (idx === 0 ? 100 : idx === 1 ? 200 : 300),
+            monthlyAiCredits: r.monthly_ai_credits || (idx === 0 ? 100 : idx === 1 ? 250 : 400),
+            turboUploadEnabled: Boolean(r.turbo_upload_enabled ?? idx > 0),
+            cameraPdRulerEnabled: Boolean(r.camera_pd_ruler_enabled ?? idx > 0),
+            featuredBoostEnabled: Boolean(r.featured_boost_enabled ?? idx > 1),
             on: r.is_active,
             feats: r.features || [],
+          }))
+        );
+      }
+      if (crmRes.data?.length) {
+        setCrmCustomers(
+          crmRes.data.map((c: any) => ({
+            id: c.id,
+            shopId: c.shop_id,
+            customerName: c.customer_name,
+            phone: c.phone,
+            productId: c.product_id || undefined,
+            productName: c.product_name || 'نظارة',
+            lensSummary: c.lens_summary || '',
+            pd: c.pd || '',
+            orderDate: c.order_date,
+            recall6mSentAt: c.recall_6m_sent_at || undefined,
+            recall12mSentAt: c.recall_12m_sent_at || undefined,
+            notes: c.notes || '',
           }))
         );
       }
@@ -762,6 +908,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             altFrom: r.alt_from || undefined,
             stage: r.stage,
             pay: r.payment_method || undefined,
+            rxn: Number(r.rxn || 0),
             time: new Date(r.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
             mine: mineIds.includes(r.ref_code || r.id),
           }))
@@ -792,7 +939,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       const email = (user.email || '').trim().toLowerCase();
       const adminEmail = getAdminOwnerEmail();
 
-      let roleRow: { role: 'admin' | 'merchant'; shop_id?: string | null } | null = null;
+      let roleRow: { role: 'super_admin' | 'admin' | 'merchant'; shop_id?: string | null } | null = null;
 
       const { data: byId } = await supabase
         .from('user_roles')
@@ -819,25 +966,28 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      const isAdmin = roleRow?.role === 'admin' || (adminEmail && email === adminEmail);
+      const isAdmin =
+        roleRow?.role === 'super_admin' ||
+        roleRow?.role === 'admin' ||
+        (adminEmail && email === adminEmail);
 
       if (isAdmin) {
         if (!roleRow) {
-          await supabase.from('user_roles').upsert({ user_id: user.id, email, role: 'admin' });
+          await supabase.from('user_roles').upsert({ user_id: user.id, email, role: 'super_admin' });
         }
         const { data: factors } = await supabase.auth.mfa.listFactors();
         const verifiedTotp = factors?.totp?.find((f) => f.status === 'verified');
         const nextSess: AuthSession = {
           userId: user.id,
           email: user.email || adminEmail,
-          role: 'admin',
+          role: 'super_admin',
           mfaVerified: !verifiedTotp,
         };
         setSession(nextSess);
         if (shouldRedirect && !window.location.pathname.startsWith('/admin')) {
           navigate('/admin');
         }
-        return { role: 'admin' as const, needsMfa: Boolean(verifiedTotp) };
+        return { role: 'super_admin' as const, needsMfa: Boolean(verifiedTotp) };
       }
 
       // Regular merchant account — ensure a 14-day trial store exists (handles Google first-time sign-in)
@@ -988,16 +1138,15 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       const adminEmail = getAdminOwnerEmail();
 
       if (!supabase) {
-        // Local preview mode: Smart Role Redirect based on admin email or matching shop owner
         if (cleanEmail && (cleanEmail === adminEmail || cleanEmail === 'admin@optiverse.com' || cleanEmail === 'admin@optiverse.app')) {
           setSession({
-            userId: 'local-admin',
+            userId: 'local-super-admin',
             email: cleanEmail,
-            role: 'admin',
+            role: 'super_admin',
             mfaVerified: true,
           });
           navigate('/admin');
-          return { ok: true, role: 'admin' as const, needsMfa: false };
+          return { ok: true, role: 'super_admin' as const, needsMfa: false };
         }
         const matchedShop =
           shops.find((s) => s.ownerEmail?.toLowerCase() === cleanEmail) || activeShop;
@@ -1026,11 +1175,81 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
   );
 
   const signInWithSupabase = useCallback(
-    async (email: string, password: string, _expectedRole?: 'admin' | 'merchant') => {
+    async (email: string, password: string, _expectedRole?: 'super_admin' | 'admin' | 'merchant') => {
       return signInUnified(email, password);
     },
     [signInUnified]
   );
+
+  const signInWithPhoneOtp = useCallback(
+    async (rawPhone: string) => {
+      const phone = rawPhone.trim();
+      if (!phone || phone.length < 8) {
+        return { ok: false, error: 'أدخل رقم موبايل صحيح مع كود الدولة (مثال: +2010...)' };
+      }
+      if (!supabase) {
+        const matched = shops.find((s) => s.wa.replace(/\D/g, '').endsWith(phone.replace(/\D/g, '').slice(-9)));
+        if (matched) {
+          setActiveShopSlug(matched.slug);
+          setSession({
+            userId: 'local-phone-' + Date.now(),
+            email: matched.ownerEmail || '',
+            role: 'merchant',
+            shopId: matched.id,
+          });
+          navigate('/merchant');
+          toast(`تم تسجيل الدخول برقم ${phone} ✓`);
+          return { ok: true };
+        }
+        const newShopId = 'shop-' + Date.now();
+        const trialEndsAt = new Date(Date.now() + 14 * 86400000).toISOString();
+        const slug = makeSlug('phone-optics');
+        const newShop: Shop = {
+          id: newShopId,
+          name: 'متجر جديد',
+          ownerName: '',
+          city: 'القاهرة',
+          governorate: 'القاهرة',
+          onboardingCompleted: false,
+          enableDeliveryService: false,
+          slug,
+          plan: 'الأساسية',
+          planTier: 'basic',
+          days: 14,
+          trialEndsAt,
+          status: 'trial',
+          exp: 'تجربة 14 يوماً',
+          price: 599,
+          color: '#0284C7',
+          wa: phone,
+          logo: '👓',
+          aiCreditsLimit: 25,
+          aiCreditsUsed: 0,
+        };
+        setShops((a) => [newShop, ...a]);
+        await seedCatalogForShop(newShopId, false);
+        setActiveShopSlug(slug);
+        setSession({
+          userId: 'phone-preview-' + Date.now(),
+          email: '',
+          role: 'merchant',
+          shopId: newShopId,
+        });
+        navigate('/merchant');
+        return { ok: true };
+      }
+      const { error } = await supabase.auth.signInWithOtp({ phone });
+      if (error) return { ok: false, error: error.message };
+      return { ok: true };
+    },
+    [navigate, seedCatalogForShop, shops, toast]
+  );
+
+  const getAccessToken = useCallback(async (): Promise<string | null> => {
+    if (!supabase) return null;
+    const { data } = await supabase.auth.getSession();
+    return data.session?.access_token || null;
+  }, []);
 
   const signInWithGoogle = useCallback(async () => {
     if (!supabase) {
@@ -1267,26 +1486,88 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     async (shopId: string, patch: Partial<Shop>) => {
       setShops((a) => a.map((s) => (s.id === shopId ? { ...s, ...patch } : s)));
       if (supabase) {
-        await supabase
-          .from('shops')
-          .update({
-            ...(patch.name !== undefined ? { name: patch.name } : {}),
-            ...(patch.ownerName !== undefined ? { owner_name: patch.ownerName } : {}),
-            ...(patch.ownerEmail !== undefined ? { owner_email: patch.ownerEmail } : {}),
-            ...(patch.plan !== undefined ? { plan_name: patch.plan } : {}),
-            ...(patch.price !== undefined ? { price: patch.price } : {}),
-            ...(patch.logo !== undefined ? { logo: patch.logo } : {}),
-            ...(patch.color !== undefined ? { color: patch.color } : {}),
-            ...(patch.wa !== undefined ? { wa_phone: patch.wa } : {}),
-            ...(patch.status !== undefined ? { status: patch.status } : {}),
-            ...(patch.days !== undefined ? { days_left: patch.days } : {}),
-            ...(patch.trialEndsAt !== undefined ? { trial_ends_at: patch.trialEndsAt } : {}),
-            ...(patch.exp !== undefined ? { expires_label: patch.exp } : {}),
-          })
-          .eq('id', shopId);
+        const payload: Record<string, any> = {
+          ...(patch.name !== undefined ? { name: patch.name } : {}),
+          ...(patch.ownerName !== undefined ? { owner_name: patch.ownerName } : {}),
+          ...(patch.ownerEmail !== undefined ? { owner_email: patch.ownerEmail } : {}),
+          ...(patch.city !== undefined ? { city: patch.city } : {}),
+          ...(patch.governorate !== undefined ? { governorate: patch.governorate } : {}),
+          ...(patch.address !== undefined ? { address: patch.address } : {}),
+          ...(patch.mapsUrl !== undefined ? { maps_url: patch.mapsUrl } : {}),
+          ...(patch.onboardingCompleted !== undefined
+            ? { onboarding_completed: patch.onboardingCompleted }
+            : {}),
+          ...(patch.enableDeliveryService !== undefined
+            ? { enable_delivery_service: patch.enableDeliveryService }
+            : {}),
+          ...(patch.deliveryFee !== undefined ? { delivery_fee: patch.deliveryFee } : {}),
+          ...(patch.deliveryAreas !== undefined ? { delivery_areas: patch.deliveryAreas } : {}),
+          ...(patch.isFeatured !== undefined ? { is_featured: patch.isFeatured } : {}),
+          ...(patch.recall6mEnabled !== undefined ? { recall_6m_enabled: patch.recall6mEnabled } : {}),
+          ...(patch.recall12mEnabled !== undefined ? { recall_12m_enabled: patch.recall12mEnabled } : {}),
+          ...(patch.aiCreditsLimit !== undefined ? { ai_credits_limit: patch.aiCreditsLimit } : {}),
+          ...(patch.aiCreditsUsed !== undefined ? { ai_credits_used: patch.aiCreditsUsed } : {}),
+          ...(patch.topupCredits !== undefined ? { topup_credits: patch.topupCredits } : {}),
+          ...(patch.planTier !== undefined ? { plan_tier: patch.planTier } : {}),
+          ...(patch.billingCycle !== undefined ? { billing_cycle: patch.billingCycle } : {}),
+          ...(patch.plan !== undefined ? { plan_name: patch.plan } : {}),
+          ...(patch.price !== undefined ? { price: patch.price } : {}),
+          ...(patch.logo !== undefined ? { logo: patch.logo } : {}),
+          ...(patch.color !== undefined ? { color: patch.color } : {}),
+          ...(patch.wa !== undefined ? { wa_phone: patch.wa } : {}),
+          ...(patch.status !== undefined ? { status: patch.status } : {}),
+          ...(patch.days !== undefined ? { days_left: patch.days } : {}),
+          ...(patch.trialEndsAt !== undefined ? { trial_ends_at: patch.trialEndsAt } : {}),
+          ...(patch.exp !== undefined ? { expires_label: patch.exp } : {}),
+        };
+        await supabase.from('shops').update(payload).eq('id', shopId);
       }
     },
     []
+  );
+
+  const addTopUpCredits = useCallback(
+    async (shopId: string, packFrames = platformSettings.topupPackFrames, packPrice = platformSettings.topupPackPrice) => {
+      const target = shops.find((s) => s.id === shopId);
+      if (!target) return;
+      const nextTopup = (target.topupCredits || 0) + packFrames;
+      await updateShop(shopId, { topupCredits: nextTopup });
+      await logAudit('شحن باقة إضافية', `إضافة ${packFrames} نظارة (${packPrice} ج.م) لمتجر ${target.name}`, shopId);
+      toast(`تمت إضافة ${packFrames} نظارة إضافية لرصيد متجرك بنجاح ✓`);
+    },
+    [logAudit, platformSettings.topupPackFrames, platformSettings.topupPackPrice, shops, toast, updateShop]
+  );
+
+  const savePlatformSettings = useCallback(
+    async (patch: Partial<PlatformSettings>) => {
+      const next: PlatformSettings = {
+        ...platformSettings,
+        ...patch,
+      };
+      setPlatformSettings(next);
+      if (patch.plans) {
+        setPlans(patch.plans);
+      }
+      await logAudit('تحديث إعدادات المنصة', 'تحديث الأسعار والصلاحيات العامة للمنصة');
+      if (supabase) {
+        await supabase.from('platform_settings').upsert({
+          id: 'default',
+          enable_prescription_lenses: next.enablePrescriptionLenses,
+          allow_merchant_lens_branding_toggle: next.allowMerchantLensBrandingToggle,
+          enable_sponsored_suppliers: next.enableSponsoredSuppliers,
+          plans: next.plans,
+          annual_discount_months: next.annualDiscountMonths,
+          trial_days: next.trialDays,
+          trial_max_products: next.trialMaxProducts,
+          trial_ai_credits: next.trialAiCredits,
+          topup_pack_frames: next.topupPackFrames,
+          topup_pack_price: next.topupPackPrice,
+          sponsored_suppliers: next.sponsoredSuppliers,
+          updated_at: new Date().toISOString(),
+        });
+      }
+    },
+    [logAudit, platformSettings]
   );
 
   const addShopManual = useCallback(
@@ -1295,18 +1576,24 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       ownerName,
       ownerEmail,
       city,
-      plan = 'أساسية',
+      governorate,
+      address,
+      mapsUrl,
+      plan = 'الأساسية',
       wa = '01001234567',
     }: {
       name: string;
       ownerName?: string;
       ownerEmail?: string;
       city?: string;
+      governorate?: string;
+      address?: string;
+      mapsUrl?: string;
       plan?: string;
       wa?: string;
     }): Promise<Shop> => {
-      const matchedPlan = plans.find((pl) => pl.name.includes(plan));
-      const price = matchedPlan?.price ?? (plan === 'احترافية' ? 1200 : 600);
+      const matchedPlan = plans.find((pl) => pl.name.includes(plan)) || plans[0];
+      const price = matchedPlan?.price ?? 599;
       const slug = makeSlug(name);
       const tempId = generateId('s');
       let finalShop: Shop = {
@@ -1314,14 +1601,25 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         name: name.trim(),
         ownerName: ownerName?.trim() || 'صاحب المحل',
         ownerEmail: ownerEmail?.trim() || undefined,
-        city: city?.trim() || 'القاهرة',
-        plan,
+        city: city?.trim() || governorate?.trim() || 'القاهرة',
+        governorate: governorate?.trim() || city?.trim() || 'القاهرة',
+        address: address?.trim() || '',
+        mapsUrl: mapsUrl?.trim() || '',
+        onboardingCompleted: true,
+        enableDeliveryService: false,
+        isFeatured: Boolean(matchedPlan?.featuredBoostEnabled),
+        aiCreditsLimit: matchedPlan?.monthlyAiCredits ?? 100,
+        aiCreditsUsed: 0,
+        topupCredits: 0,
+        planTier: matchedPlan?.tierKey || 'basic',
+        billingCycle: 'monthly',
+        plan: matchedPlan?.name || plan,
         days: 30,
         status: 'active',
         exp: 'مفعل (شهر)',
         slug,
         price,
-        color: '#14B8A6',
+        color: '#0284C7',
         wa,
         logo: '👓',
       };
@@ -1334,6 +1632,14 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             owner_email: finalShop.ownerEmail || null,
             name: finalShop.name,
             city: finalShop.city,
+            governorate: finalShop.governorate,
+            address: finalShop.address,
+            maps_url: finalShop.mapsUrl,
+            onboarding_completed: true,
+            enable_delivery_service: false,
+            is_featured: finalShop.isFeatured,
+            ai_credits_limit: finalShop.aiCreditsLimit,
+            plan_tier: finalShop.planTier,
             slug: finalShop.slug,
             plan_name: finalShop.plan,
             price: finalShop.price,
@@ -1362,19 +1668,26 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
 
   const savePlan = useCallback(
     async (plan: Plan) => {
-      setPlans((a) => a.map((x) => (x.id === plan.id ? plan : x)));
-      await logAudit('تحديث باقة', `${plan.name} — ${plan.price} ج.م (${plan.on ? 'مفعّلة' : 'موقوفة'})`);
+      const nextPlans = plans.map((x) => (x.id === plan.id ? plan : x));
+      setPlans(nextPlans);
+      await savePlatformSettings({ plans: nextPlans });
       if (supabase) {
         await supabase.from('plans').upsert({
           id: plan.id,
+          tier_key: plan.tierKey,
           name: plan.name,
           price: plan.price,
+          max_products: plan.maxProducts,
+          monthly_ai_credits: plan.monthlyAiCredits,
+          turbo_upload_enabled: plan.turboUploadEnabled,
+          camera_pd_ruler_enabled: plan.cameraPdRulerEnabled,
+          featured_boost_enabled: plan.featuredBoostEnabled,
           is_active: plan.on,
           features: plan.feats,
         });
       }
     },
-    [logAudit]
+    [plans, savePlatformSettings]
   );
 
   const recordPayment = useCallback(
@@ -1980,36 +2293,93 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     [logAudit]
   );
 
-  const addInquiry = useCallback(async (q: Inquiry) => {
-    addMyInquiryId(q.id);
-    setInq((a) => [q, ...a]);
+  const addCrmCustomer = useCallback(async (input: Omit<CrmCustomer, 'id'>): Promise<CrmCustomer> => {
+    const rec: CrmCustomer = {
+      ...input,
+      id: generateId('crm'),
+    };
+    setCrmCustomers((prev) => [rec, ...prev]);
     if (supabase) {
-      await supabase.from('inquiries').insert({
-        ref_code: q.id,
-        shop_id: q.shopId,
-        kind: q.kind,
-        customer_name: q.cust,
-        phone: q.phone,
-        frame_name: q.frameName,
-        frame_type: q.type,
-        frame_color: q.frame,
-        lens_color: q.lens,
-        lens_name: q.lensName,
-        brand_name: q.brandName,
-        extras_txt: q.extrasTxt,
-        frame_price: q.fp,
-        lens_price: q.lensPrice,
-        add_price: q.add,
-        initial_price: q.price,
-        rx_image_url: q.img,
-        pd: q.pd,
-        notes: q.notes,
-        status: q.status,
-        stage: q.stage || 'review',
-        payment_method: q.pay || null,
+      await supabase.from('crm_customers').insert({
+        shop_id: rec.shopId,
+        customer_name: rec.customerName,
+        phone: rec.phone,
+        product_id: rec.productId || null,
+        product_name: rec.productName,
+        lens_summary: rec.lensSummary || '',
+        pd: rec.pd || '',
+        order_date: rec.orderDate,
+        notes: rec.notes || '',
       });
     }
+    return rec;
   }, []);
+
+  const markCrmRecallSent = useCallback(async (id: string, type: '6m' | '12m') => {
+    const now = new Date().toISOString();
+    setCrmCustomers((prev) =>
+      prev.map((c) =>
+        c.id === id
+          ? type === '6m'
+            ? { ...c, recall6mSentAt: now }
+            : { ...c, recall12mSentAt: now }
+          : c
+      )
+    );
+    if (supabase) {
+      await supabase
+        .from('crm_customers')
+        .update(type === '6m' ? { recall_6m_sent_at: now } : { recall_12m_sent_at: now })
+        .eq('id', id);
+    }
+  }, []);
+
+  const addInquiry = useCallback(
+    async (q: Inquiry) => {
+      addMyInquiryId(q.id);
+      setInq((a) => [q, ...a]);
+      // Automatically record customer in Merchant Optical CRM on every order/inquiry
+      if (q.cust && q.phone) {
+        await addCrmCustomer({
+          shopId: q.shopId,
+          customerName: q.cust,
+          phone: q.phone,
+          productName: q.frameName,
+          lensSummary: `${q.lensName}${q.extrasTxt && q.extrasTxt !== 'بدون إضافات' ? ' · ' + q.extrasTxt : ''}`,
+          pd: q.pd || '',
+          orderDate: new Date().toISOString(),
+          notes: q.notes || '',
+        });
+      }
+      if (supabase) {
+        await supabase.from('inquiries').insert({
+          ref_code: q.id,
+          shop_id: q.shopId,
+          kind: q.kind,
+          customer_name: q.cust,
+          phone: q.phone,
+          frame_name: q.frameName,
+          frame_type: q.type,
+          frame_color: q.frame,
+          lens_color: q.lens,
+          lens_name: q.lensName,
+          brand_name: q.brandName,
+          extras_txt: q.extrasTxt,
+          frame_price: q.fp,
+          lens_price: q.lensPrice,
+          add_price: q.add,
+          initial_price: q.price,
+          rx_image_url: q.img,
+          pd: q.pd,
+          notes: q.notes,
+          status: q.status,
+          stage: q.stage || 'review',
+          payment_method: q.pay || null,
+        });
+      }
+    },
+    [addCrmCustomer]
+  );
 
   const updateInquiry = useCallback(async (id: string, patch: Partial<Inquiry>) => {
     setInq((a) => a.map((x) => (x.id === id ? { ...x, ...patch } : x)));
@@ -2045,9 +2415,70 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     [navigate, session, toast]
   );
 
+  const switchToAdminDemoStore = useCallback(async () => {
+    // 1-Click Super Admin Demo Store testing (zero AI credit deduction)
+    let demoShop = shops.find((s) => s.isDemoAdminStore) || shops.find((s) => s.id === DEFAULT_SHOP_ID);
+    if (supabase) {
+      try {
+        const token = await getAccessToken();
+        const res = await fetch('/api/auth/bootstrap', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ action: 'ensure_demo_store' }),
+        });
+        const data = (await res.json().catch(() => ({}))) as { shopId?: string; slug?: string };
+        if (res.ok && data.shopId) {
+          await hydrateFromSupabase();
+          if (data.slug) setActiveShopSlug(data.slug);
+          setSession({
+            userId: session?.userId || 'super-admin-demo',
+            email: session?.email || 'admin@optiverse.app',
+            role: 'super_admin',
+            shopId: data.shopId,
+          });
+          navigate('/merchant');
+          toast('دخلت لمتجر الديمو التجريبي (معالجة AI غير محدودة بدون خصم رصيد) ⭐');
+          return;
+        }
+      } catch {
+        // fallback cleanly to local demo store
+      }
+    }
+
+    if (!demoShop) {
+      demoShop = {
+        ...SHOPS0[0],
+        id: 'admin-demo-store',
+        name: 'متجر OptiVerse التجريبي (أدمن)',
+        slug: 'admin-demo-store',
+        isDemoAdminStore: true,
+        onboardingCompleted: true,
+        planTier: 'premium',
+        plan: 'بريميوم',
+        aiCreditsLimit: 999999,
+      };
+      setShops((prev) => [demoShop!, ...prev]);
+    } else if (!demoShop.isDemoAdminStore) {
+      await updateShop(demoShop.id, { isDemoAdminStore: true, onboardingCompleted: true });
+    }
+
+    setActiveShopSlug(demoShop.slug);
+    setSession({
+      userId: session?.userId || 'super-admin-demo',
+      email: session?.email || 'admin@optiverse.app',
+      role: 'super_admin',
+      shopId: demoShop.id,
+    });
+    navigate('/merchant');
+    toast('دخلت لمتجر الديمو الخاص بالأدمن (بدون خصم رصيد) ⭐');
+  }, [getAccessToken, hydrateFromSupabase, navigate, session?.email, session?.userId, shops, toast, updateShop]);
+
   const exportFullBackup = useCallback(async () => {
     let payload: any = null;
-    if (supabase && session?.role === 'admin') {
+    if (supabase && isAdminRole(session?.role)) {
       try {
         const { data, error } = await supabase.functions.invoke('optiverse-admin', {
           body: { action: 'export_backup' },
@@ -2056,7 +2487,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           payload = data;
         }
       } catch {
-        // fallback cleanly to local snapshot export
+        // fallback cleanly
       }
     }
 
@@ -2065,11 +2496,13 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         exported_at: new Date().toISOString(),
         shops,
         products,
+        crmCustomers,
         inquiries: inq,
         lensTypes,
         brands,
         extras,
         plans,
+        platformSettings,
         payments,
         auditLogs,
       };
@@ -2083,7 +2516,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     a.click();
     a.remove();
     toast('تم تصدير نسخة احتياطية كاملة (JSON) ✓');
-  }, [session?.role, shops, products, inq, lensTypes, brands, extras, plans, payments, auditLogs, toast]);
+  }, [session?.role, shops, products, crmCustomers, inq, lensTypes, brands, extras, plans, platformSettings, payments, auditLogs, toast]);
 
   return (
     <Ctx.Provider
@@ -2100,13 +2533,18 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         signInUnified,
         signInWithGoogle,
         signInWithApple,
+        signInWithPhoneOtp,
         registerMerchant,
         signOut,
+        getAccessToken,
+        platformSettings,
+        savePlatformSettings,
         shops,
         setShops,
         activeShop,
         setActiveShopSlug,
         updateShop,
+        addTopUpCredits,
         addShopManual,
         extraShops,
         setExtraShops,
@@ -2126,6 +2564,9 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         setInq,
         addInquiry,
         updateInquiry,
+        crmCustomers,
+        addCrmCustomer,
+        markCrmRecallSent,
         lensTypes,
         setLensTypes,
         brands,
@@ -2146,6 +2587,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         cart,
         setCart,
         enterShopAsMerchant,
+        switchToAdminDemoStore,
         exportFullBackup,
         uploadAssetToStorage,
       }}

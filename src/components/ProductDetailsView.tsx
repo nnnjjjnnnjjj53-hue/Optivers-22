@@ -59,7 +59,8 @@ export function ProductDetailsView({
   onAddToCart,
   onGoCheckout,
 }: ProductDetailsViewProps) {
-  const { reviews, addProductReview, toast } = useOptiVerse();
+  const { reviews, addProductReview, platformSettings, toast } = useOptiVerse();
+  const rxEnabled = Boolean(platformSettings.enablePrescriptionLenses);
 
   const colors =
     product.frameColors && product.frameColors.length > 0
@@ -159,8 +160,24 @@ export function ProductDetailsView({
   }, [clipOnMode]);
 
   const activeImage = galleryItems[activeImgIdx] || galleryItems[0];
-  const origPrice = (product as Product & { orig?: number }).orig;
-  const hasDiscount = typeof origPrice === 'number' && origPrice > product.price && (product.disc || 0) > 0;
+  const rawOrig = (product as Product & { orig?: number }).orig;
+  const effectivePrice =
+    rawOrig !== undefined
+      ? product.price
+      : product.salePrice && product.salePrice > 0 && product.salePrice < product.price
+      ? product.salePrice
+      : product.price;
+  const origPrice =
+    rawOrig !== undefined
+      ? rawOrig
+      : product.salePrice && product.salePrice > 0 && product.salePrice < product.price
+      ? product.price
+      : undefined;
+  const effectiveDisc =
+    origPrice && origPrice > effectivePrice
+      ? product.disc || Math.round(((origPrice - effectivePrice) / origPrice) * 100)
+      : 0;
+  const hasDiscount = typeof origPrice === 'number' && origPrice > effectivePrice && effectiveDisc > 0;
   const opticalDims = resolveProductOpticalDimensions(product);
 
   const defaultDesc =
@@ -390,12 +407,12 @@ export function ProductDetailsView({
             </h1>
             <div className="mt-2.5 flex items-baseline gap-2.5 tabular-nums">
               <span className="text-2xl font-extrabold text-slate-900">
-                {fmt(product.price)} <span className="text-sm font-bold text-slate-600">ج.م</span>
+                {fmt(effectivePrice)} <span className="text-sm font-bold text-slate-600">ج.م</span>
               </span>
               {hasDiscount && (
                 <>
                   <s className="text-sm text-slate-400">{fmt(origPrice!)} ج.م</s>
-                  <span className="text-xs font-bold text-[#059669]">وفر {product.disc}%</span>
+                  <span className="text-xs font-bold text-[#059669]">وفر {effectiveDisc}%</span>
                 </>
               )}
             </div>
@@ -511,7 +528,7 @@ export function ProductDetailsView({
               <span>جربها الآن — تجربة النظارة بالذكاء الاصطناعي</span>
             </button>
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className={rxEnabled ? 'grid grid-cols-2 gap-2' : 'grid grid-cols-1'}>
               <button
                 type="button"
                 onClick={() => setActiveCanvasPanel((curPanel) => (curPanel === 'tryon' ? null : 'tryon'))}
@@ -521,14 +538,16 @@ export function ProductDetailsView({
                 <span>التجربة على صورتك</span>
               </button>
 
-              <button
-                type="button"
-                onClick={() => setActiveCanvasPanel((curPanel) => (curPanel === 'rx' ? null : 'rx'))}
-                className="py-2.5 px-3 rounded-xl bg-[#F8F9FA] hover:bg-slate-200 border border-[#E2E8F0] text-[#0F172A] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-              >
-                <I n="receipt" s={14} />
-                <span>رفع روشتة كشف النظر {initialRxUrl ? '✓' : ''}</span>
-              </button>
+              {rxEnabled && (
+                <button
+                  type="button"
+                  onClick={() => setActiveCanvasPanel((curPanel) => (curPanel === 'rx' ? null : 'rx'))}
+                  className="py-2.5 px-3 rounded-xl bg-[#F8F9FA] hover:bg-slate-200 border border-[#E2E8F0] text-[#0F172A] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                >
+                  <I n="receipt" s={14} />
+                  <span>رفع روشتة كشف النظر {initialRxUrl ? '✓' : ''}</span>
+                </button>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-2">
@@ -546,8 +565,8 @@ export function ProductDetailsView({
                 onClick={() => onGoCheckout(selectedColor, selectedSize)}
                 className="py-3 px-3 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-sm"
               >
-                <I n="eye" s={15} />
-                <span>شراء وعدسات طبية</span>
+                <I n={rxEnabled ? 'eye' : 'msg'} s={15} />
+                <span>{rxEnabled ? 'شراء وعدسات طبية' : 'اطلب الآن'}</span>
               </button>
             </div>
           </div>

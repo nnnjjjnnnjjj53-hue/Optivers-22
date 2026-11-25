@@ -1,6 +1,7 @@
 import React from 'react';
 import { Modals } from './components/Modals';
 import { AdminPage } from './pages/AdminPage';
+import { DirectoryPage } from './pages/DirectoryPage';
 import { LandingPage } from './pages/LandingPage';
 import { MerchantPage } from './pages/MerchantPage';
 import { StorefrontPage } from './pages/StorefrontPage';
@@ -12,6 +13,9 @@ function RouterView() {
 
   if (path === '/' || path === '') {
     return <LandingPage />;
+  }
+  if (path === '/stores' || path.startsWith('/stores/') || path === '/directory') {
+    return <DirectoryPage />;
   }
   if (path === '/admin' || path.startsWith('/admin/')) {
     return <AdminPage />;

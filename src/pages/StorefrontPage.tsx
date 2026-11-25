@@ -17,6 +17,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   const {
     route,
     navigate,
+    platformSettings,
     shops,
     products: allProductsRaw,
     fav,
@@ -32,6 +33,8 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     extras,
     uploadAssetToStorage,
   } = useOptiVerse();
+
+  const rxEnabled = Boolean(platformSettings.enablePrescriptionLenses);
 
   const shop = shops.find((s) => s.slug === slug) || shops[0];
   const queryString = route.includes('?')
@@ -302,7 +305,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
 
   const nav: [typeof tab, string, string][] = [
     ['shop', 'المتجر', 'store'],
-    ['lens', 'العدسات', 'eye'],
+    ...(rxEnabled ? ([['lens', 'العدسات', 'eye']] as [typeof tab, string, string][]) : []),
     ['fav', 'المفضلة', 'heart'],
     ['ord', 'طلباتي', 'receipt'],
     ['cart', 'السلة', 'bag'],
@@ -316,19 +319,43 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   return (
     <div className="pt-2 pb-24 min-h-screen" style={{ '--acc': shop.color } as React.CSSProperties}>
       <div className="max-w-5xl mx-auto px-3 sm:px-5">
-        <div className="flex items-center justify-between py-4">
-          <div className="flex items-center gap-3">
-            <span className="w-11 h-11 rounded-2xl bg-[#0F172A] text-white text-xl flex items-center justify-center shadow-sm">
+        <div className="flex items-center justify-between py-4 gap-2">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="w-11 h-11 rounded-2xl bg-[#0F172A] text-white text-xl flex items-center justify-center shadow-sm shrink-0">
               {shop.logo}
             </span>
-            <div>
-              <div className="font-extrabold leading-tight text-[#0F172A]">{shop.name}</div>
-              <div className="text-xs text-slate-500">متجر نظارات تفاعلي · {shop.city}</div>
+            <div className="min-w-0">
+              <div className="font-extrabold leading-tight text-[#0F172A] truncate flex items-center gap-1.5">
+                <span>{shop.name}</span>
+                {shop.isFeatured && <span title="متجر مميز">⭐</span>}
+              </div>
+              <div className="text-xs text-slate-500 flex items-center gap-1.5 flex-wrap">
+                <span>متجر نظارات تفاعلي · {shop.governorate || shop.city}</span>
+                {shop.mapsUrl && (
+                  <a
+                    href={shop.mapsUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[#0284C7] font-bold hover:underline inline-flex items-center gap-0.5"
+                  >
+                    <I n="map" s={11} /> الخريطة
+                  </a>
+                )}
+              </div>
             </div>
           </div>
-          <button className="btn btn-g btn-sm" onClick={() => setTab('cart')}>
-            <I n="bag" s={15} /> <span className="tabular-nums">{cart.length}</span>
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              className="btn btn-g btn-sm whitespace-nowrap"
+              onClick={() => navigate('/stores')}
+            >
+              <I n="map" s={14} /> دليل المحلات
+            </button>
+            <button type="button" className="btn btn-g btn-sm" onClick={() => setTab('cart')}>
+              <I n="bag" s={15} /> <span className="tabular-nums">{cart.length}</span>
+            </button>
+          </div>
         </div>
 
         <div className="relative overflow-hidden rounded-3xl bg-white border border-[#E2E8F0] shadow-sm p-5 mb-5 text-center">
@@ -338,7 +365,9 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
             </span>
             <h1 className="text-2xl sm:text-3xl font-extrabold text-[#0F172A] leading-snug">اختار نظاراتك وأنت في البيت</h1>
             <p className="text-xs sm:text-sm text-slate-600 mt-1.5">
-              جرّب على وشك بالكاميرا بمقياس 1:1 الحقيقي، شاركها مع صحابك، وابعت كشف نظرك للمحل
+              {rxEnabled
+                ? 'جرّب على وشك بالكاميرا بمقياس 1:1 الحقيقي، شاركها مع صحابك، وابعت كشف نظرك للمحل'
+                : 'جرّب على وشك بالكاميرا بمقياس 1:1 الحقيقي، شاركها مع صحابك، واطلب مباشرة من المحل'}
             </p>
           </div>
         </div>
@@ -387,7 +416,22 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                 setFc(color);
                 setSelectedSize(size);
                 closeFrameDetail();
-                setTab('lens');
+                if (rxEnabled) {
+                  setTab('lens');
+                } else {
+                  addCart({
+                    productId: detailProduct.id,
+                    name: detailProduct.name,
+                    desc: `إطار فقط · مقاس ${size}`,
+                    price: detailProduct.price,
+                    type: detailProduct.type,
+                    frame: color,
+                    lens: detailProduct.lens,
+                    size,
+                  });
+                  setTab('cart');
+                  setModal({ t: 'checkout', total: cartTotal + detailProduct.price });
+                }
               }}
             />
           </div>
@@ -402,10 +446,26 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                   products={products}
                   onSelectProduct={setCurId}
                   onOrderProduct={(pid) => {
+                    const targetProd = products.find((p) => p.id === pid) || cur;
                     setCurId(pid);
                     setCamOn(false);
                     closeFrameDetail();
-                    setTab('lens');
+                    if (rxEnabled) {
+                      setTab('lens');
+                    } else {
+                      addCart({
+                        productId: targetProd.id,
+                        name: targetProd.name,
+                        desc: `إطار فقط · مقاس ${selectedSize}`,
+                        price: targetProd.price,
+                        type: targetProd.type,
+                        frame: fc,
+                        lens: lc,
+                        size: selectedSize,
+                      });
+                      setTab('cart');
+                      setModal({ t: 'checkout', total: cartTotal + targetProd.price });
+                    }
                   }}
                   initialRxUrl={img}
                   onRxAttached={(rxUrl) => {
@@ -563,9 +623,26 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                   </button>
                   <button
                     className="btn bg-[#D97706] hover:bg-[#B45309] text-white !py-2.5 shadow-sm"
-                    onClick={() => setTab('lens')}
+                    onClick={() => {
+                      if (rxEnabled) {
+                        setTab('lens');
+                      } else {
+                        addCart({
+                          productId: cur.id,
+                          name: cur.name,
+                          desc: `إطار فقط · مقاس ${selectedSize}`,
+                          price: cur.price,
+                          type: cur.type,
+                          frame: fc,
+                          lens: lc,
+                          size: selectedSize,
+                        });
+                        setTab('cart');
+                        setModal({ t: 'checkout', total: cartTotal + cur.price });
+                      }
+                    }}
                   >
-                    <I n="eye" s={16} /> اختر العدسة والكشف
+                    <I n={rxEnabled ? 'eye' : 'msg'} s={16} /> {rxEnabled ? 'اختر العدسة والكشف' : 'اطلب الآن'}
                   </button>
                 </div>
               </div>
@@ -777,7 +854,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
           </div>
         )}
 
-        {tab === 'lens' && (
+        {tab === 'lens' && rxEnabled && (
           <div className="grid lg:grid-cols-5 gap-5 fade">
             <div className="lg:col-span-2 space-y-4 lg:sticky lg:top-6 self-start">
               <div className="glass rounded-3xl overflow-hidden">
@@ -1180,9 +1257,9 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
               <Empty
                 icon="receipt"
                 t="لا توجد طلبات"
-                s="اختار عدسة وابعت كشفك للمحل"
-                b="اختيار العدسات"
-                on={() => setTab('lens')}
+                s={rxEnabled ? 'اختار عدسة وابعت كشفك للمحل' : 'تصفّح النظارات وأضف ما يعجبك للسلة للطلب عبر واتساب'}
+                b={rxEnabled ? 'اختيار العدسات' : 'تصفح المتجر'}
+                on={() => setTab(rxEnabled ? 'lens' : 'shop')}
               />
             ) : (
               <div className="space-y-3">
@@ -1271,8 +1348,16 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                     </div>
                   ))}
                 </div>
-                <div className="glass rounded-2xl p-4">
-                  <div className="flex justify-between font-extrabold text-xl mb-3 text-[#0F172A]">
+                <div className="glass rounded-2xl p-4 space-y-3">
+                  {shop.enableDeliveryService && (
+                    <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-xs text-[#059669] flex items-center justify-between gap-2">
+                      <span className="font-bold flex items-center gap-1.5">
+                        <I n="truck" s={15} /> خدمة التوصيل متاحة ({shop.deliveryAreas || shop.city})
+                      </span>
+                      <b className="tabular-nums">+{fmt(shop.deliveryFee ?? 60)} ج.م</b>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-extrabold text-xl text-[#0F172A]">
                     <span>الإجمالي</span>
                     <span className="text-[#D97706]">
                       <Egp v={cartTotal} />
@@ -1292,7 +1377,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
       </div>
 
       <nav className="fixed bottom-0 inset-x-0 z-40 glass-s border-x-0 border-b-0">
-        <div className="max-w-xl mx-auto grid grid-cols-5 px-2 py-1.5">
+        <div className={`max-w-xl mx-auto grid ${rxEnabled ? 'grid-cols-5' : 'grid-cols-4'} px-2 py-1.5`}>
           {nav.map((n) => (
             <button
               key={n[0]}

@@ -276,7 +276,7 @@ export const PLATFORM_SETTINGS0: PlatformSettings = {
 export const SHOPS0: Shop[] = [
   {
     id: DEFAULT_SHOP_ID,
-    name: 'دهب للبصريات',
+    name: 'OptiVepe',
     ownerName: 'أحمد الدهبي',
     ownerEmail: 'dahab@optiverse.app',
     city: 'القاهرة',

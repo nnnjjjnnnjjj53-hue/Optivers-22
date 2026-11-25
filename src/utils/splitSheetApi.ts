@@ -1,4 +1,4 @@
-import { EyewearFrameMode, EyewearSubMode } from '../types';
+import { EyewearFrameMode, EyewearSubMode, FrameColorFamily, FrameShapeTag } from '../types';
 
 export interface SplitSheetPayloadOptions {
   frameType: EyewearFrameMode;
@@ -6,6 +6,7 @@ export interface SplitSheetPayloadOptions {
   isClipOnAttachment?: boolean;
   keepLensBranding?: boolean;
   isCrystalFrame?: boolean;
+  isPatterned?: boolean;
   modelCode?: string | null;
   frameColor?: string | null;
   phash?: string | null;
@@ -27,6 +28,7 @@ export interface SharedCachedAssets {
   phash?: string | null;
   keepLensBranding?: boolean;
   isCrystalFrame?: boolean;
+  isPatterned?: boolean;
   imagePath?: string | null;
   frontCatalogPath?: string | null;
   sideImagePath?: string | null;
@@ -41,6 +43,7 @@ export interface SplitSheetApiResponse {
   blob?: Blob;
   cacheHit: boolean;
   cachedAssets?: SharedCachedAssets;
+  solidModelTemplate?: SharedCachedAssets;
   messageAr?: string;
 }
 
@@ -52,6 +55,9 @@ export interface ExtractedOpticalDimensionsResult {
   totalFrameWidthMm: number | null;
   modelCode: string | null;
   isCrystalFrame: boolean;
+  frameShape?: FrameShapeTag;
+  isPatterned: boolean;
+  colorFamily: FrameColorFamily;
   rawText: string | null;
 }
 
@@ -121,6 +127,132 @@ export async function computePerceptualHash(file: Blob): Promise<string> {
     return hex;
   } catch {
     return '';
+  } finally {
+    if (bm) {
+      try {
+        bm.close();
+      } catch {
+        // ignore
+      }
+    }
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  }
+}
+
+/**
+ * Pure pixel variance analyzer for detecting multi-color / patterned frames
+ * (tortoiseshell, havana, two-tone split acetate) vs. uniform solid frames.
+ */
+export function analyzeRgbaFrameColorVariance(
+  px: Uint8ClampedArray,
+  width: number,
+  height: number
+): { variance: number; isPatterned: boolean; dominantHex: string; colorFamily: FrameColorFamily } {
+  const rs: number[] = [];
+  const gs: number[] = [];
+  const bs: number[] = [];
+  const hues: number[] = [];
+  const lums: number[] = [];
+
+  for (let y = Math.floor(height * 0.15); y < Math.ceil(height * 0.85); y++) {
+    for (let x = Math.floor(width * 0.08); x < Math.ceil(width * 0.92); x++) {
+      const i = (y * width + x) * 4;
+      if (px[i + 3] < 200) continue;
+      const r = px[i];
+      const g = px[i + 1];
+      const b = px[i + 2];
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      // Exclude bright white studio walls/tables
+      if (lum > 228 && Math.max(r, g, b) - Math.min(r, g, b) < 18) continue;
+      rs.push(r);
+      gs.push(g);
+      bs.push(b);
+      lums.push(lum);
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      if (max - min > 16) {
+        let h = 0;
+        if (max === r) h = ((g - b) / (max - min)) % 6;
+        else if (max === g) h = (b - r) / (max - min) + 2;
+        else h = (r - g) / (max - min) + 4;
+        hues.push(((h * 60 + 360) % 360));
+      }
+    }
+  }
+
+  if (rs.length < 12) {
+    return { variance: 0, isPatterned: false, dominantHex: '#1f2937', colorFamily: 'black' };
+  }
+
+  const meanR = rs.reduce((a, b) => a + b, 0) / rs.length;
+  const meanG = gs.reduce((a, b) => a + b, 0) / gs.length;
+  const meanB = bs.reduce((a, b) => a + b, 0) / bs.length;
+  const meanLum = lums.reduce((a, b) => a + b, 0) / lums.length;
+
+  let varSum = 0;
+  for (let k = 0; k < rs.length; k++) {
+    varSum += Math.pow(rs[k] - meanR, 2) + Math.pow(gs[k] - meanG, 2) + Math.pow(bs[k] - meanB, 2);
+  }
+  const rgbStdDev = Math.sqrt(varSum / (rs.length * 3));
+
+  let hueSpread = 0;
+  if (hues.length >= 8) {
+    const sortedH = [...hues].sort((a, b) => a - b);
+    hueSpread = sortedH[Math.floor(sortedH.length * 0.9)] - sortedH[Math.floor(sortedH.length * 0.1)];
+  }
+
+  const sortedL = [...lums].sort((a, b) => a - b);
+  const lumSpan = sortedL[Math.floor(sortedL.length * 0.9)] - sortedL[Math.floor(sortedL.length * 0.1)];
+
+  // Tortoiseshell / mix-color frames display strong bimodal luminance (>70) or wide RGB/hue variance
+  const isPatterned = rgbStdDev > 38 || (lumSpan > 74 && hueSpread > 30);
+
+  const hex = `#${[meanR, meanG, meanB]
+    .map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0'))
+    .join('')}`;
+
+  let colorFamily: FrameColorFamily = 'other';
+  if (isPatterned || (meanR > meanB + 22 && meanLum < 165)) {
+    colorFamily = 'brown_tortoise';
+  } else if (meanLum < 68 && Math.max(meanR, meanG, meanB) - Math.min(meanR, meanG, meanB) < 22) {
+    colorFamily = 'black';
+  } else if (meanLum > 185) {
+    colorFamily = 'clear';
+  }
+
+  return {
+    variance: Math.round(rgbStdDev),
+    isPatterned,
+    dominantHex: hex,
+    colorFamily,
+  };
+}
+
+export async function computeFrameColorVariance(
+  file: Blob
+): Promise<{ variance: number; isPatterned: boolean; dominantHex: string; colorFamily: FrameColorFamily }> {
+  let bm: ImageBitmap | null = null;
+  let canvas: HTMLCanvasElement | null = null;
+  try {
+    if (typeof createImageBitmap !== 'function') {
+      return { variance: 0, isPatterned: false, dominantHex: '#1f2937', colorFamily: 'black' };
+    }
+    bm = await createImageBitmap(file);
+    canvas = document.createElement('canvas');
+    canvas.width = 48;
+    canvas.height = 48;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) {
+      return { variance: 0, isPatterned: false, dominantHex: '#1f2937', colorFamily: 'black' };
+    }
+    ctx.drawImage(bm, 0, 0, 48, 48);
+    const px = ctx.getImageData(0, 0, 48, 48).data;
+    return analyzeRgbaFrameColorVariance(px, 48, 48);
+  } catch {
+    return { variance: 0, isPatterned: false, dominantHex: '#1f2937', colorFamily: 'black' };
   } finally {
     if (bm) {
       try {
@@ -248,6 +380,9 @@ export async function extractOpticalDimensionsViaServer(
       total_frame_width_mm?: number | null;
       model_code?: string | null;
       is_crystal_frame?: boolean;
+      frame_shape?: FrameShapeTag;
+      is_patterned?: boolean;
+      color_family?: FrameColorFamily;
       raw_text?: string | null;
     };
 
@@ -260,6 +395,9 @@ export async function extractOpticalDimensionsViaServer(
         totalFrameWidthMm: null,
         modelCode: null,
         isCrystalFrame: false,
+        frameShape: undefined,
+        isPatterned: false,
+        colorFamily: 'other',
         rawText: null,
       };
     }
@@ -273,6 +411,9 @@ export async function extractOpticalDimensionsViaServer(
         typeof payload.total_frame_width_mm === 'number' ? payload.total_frame_width_mm : null,
       modelCode: typeof payload.model_code === 'string' ? payload.model_code : null,
       isCrystalFrame: Boolean(payload.is_crystal_frame),
+      frameShape: payload.frame_shape,
+      isPatterned: Boolean(payload.is_patterned),
+      colorFamily: payload.color_family || (payload.is_crystal_frame ? 'clear' : 'other'),
       rawText: typeof payload.raw_text === 'string' ? payload.raw_text : null,
     };
   } catch (err) {
@@ -285,6 +426,9 @@ export async function extractOpticalDimensionsViaServer(
       totalFrameWidthMm: null,
       modelCode: null,
       isCrystalFrame: false,
+      frameShape: undefined,
+      isPatterned: false,
+      colorFamily: 'other',
       rawText: null,
     };
   }
@@ -319,6 +463,7 @@ export async function generateSplitSheetViaServer(
       isClipOnAttachment: Boolean(options.isClipOnAttachment),
       keepLensBranding: Boolean(options.keepLensBranding),
       isCrystalFrame: Boolean(options.isCrystalFrame),
+      isPatterned: Boolean(options.isPatterned),
       ...(options.modelCode ? { modelCode: options.modelCode } : {}),
       ...(options.frameColor ? { frameColor: options.frameColor } : {}),
       ...(computedPhash ? { phash: computedPhash } : {}),
@@ -332,6 +477,7 @@ export async function generateSplitSheetViaServer(
   const payload = (await response.json().catch(() => ({}))) as {
     cacheHit?: boolean;
     cachedAssets?: SharedCachedAssets;
+    solidModelTemplate?: SharedCachedAssets;
     messageAr?: string;
     splitImageBase64?: string;
     mimeType?: string;
@@ -342,6 +488,14 @@ export async function generateSplitSheetViaServer(
     return {
       cacheHit: true,
       cachedAssets: payload.cachedAssets,
+      messageAr: payload.messageAr,
+    };
+  }
+
+  if (response.ok && payload.solidModelTemplate) {
+    return {
+      cacheHit: false,
+      solidModelTemplate: payload.solidModelTemplate,
       messageAr: payload.messageAr,
     };
   }
@@ -362,6 +516,7 @@ export async function saveToSharedEyewearCache(params: {
   phash?: string | null;
   keepLensBranding?: boolean;
   isCrystalFrame?: boolean;
+  isPatterned?: boolean;
   frameType?: EyewearFrameMode;
   imagePath?: string;
   frontCatalogPath?: string;
@@ -387,6 +542,7 @@ export async function saveToSharedEyewearCache(params: {
         phash: params.phash,
         keepLensBranding: Boolean(params.keepLensBranding),
         isCrystalFrame: Boolean(params.isCrystalFrame),
+        isPatterned: Boolean(params.isPatterned),
         frameType: params.frameType || 'prescription',
         imagePath: params.imagePath,
         frontCatalogPath: params.frontCatalogPath,
@@ -412,6 +568,7 @@ export async function submitBatchSplitSheetViaServer(params: {
     isClipOnAttachment?: boolean;
     keepLensBranding?: boolean;
     isCrystalFrame?: boolean;
+    isPatterned?: boolean;
     modelCode?: string | null;
     frameColor?: string | null;
     phash?: string | null;
@@ -443,6 +600,7 @@ export async function submitBatchSplitSheetViaServer(params: {
         isClipOnAttachment: Boolean(item.isClipOnAttachment),
         keepLensBranding: Boolean(item.keepLensBranding),
         isCrystalFrame: Boolean(item.isCrystalFrame),
+        isPatterned: Boolean(item.isPatterned),
         modelCode: item.modelCode || undefined,
         frameColor: item.frameColor || undefined,
         phash: phash || undefined,

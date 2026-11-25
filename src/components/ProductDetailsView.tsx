@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CATS, SHAPES, TYPES } from '../data/seed';
+import { CATS, TYPES } from '../data/seed';
 import { useOptiVerse } from '../services/optiverseStore';
 import { FrameSize, Product } from '../types';
 import {
@@ -30,12 +30,6 @@ interface ProductDetailsViewProps {
   onGoCheckout: (color: string, size: FrameSize) => void;
 }
 
-const SIZE_LABELS: Record<FrameSize, { label: string; hint: string }> = {
-  Small: { label: 'Small', hint: 'ضيق · ١٣٢ مم' },
-  Medium: { label: 'Medium', hint: 'قياسي · ١٤٠ مم' },
-  Large: { label: 'Large', hint: 'عريض · ١٤٨ مم' },
-};
-
 const FRAME_MODE_LABELS: Record<string, string> = {
   prescription: 'نظارات طبية',
   sunglasses: 'نظارات شمسية',
@@ -59,8 +53,16 @@ export function ProductDetailsView({
   onAddToCart,
   onGoCheckout,
 }: ProductDetailsViewProps) {
-  const { reviews, addProductReview, platformSettings, toast } = useOptiVerse();
-  const rxEnabled = Boolean(platformSettings.enablePrescriptionLenses);
+  const { reviews, addProductReview, platformSettings, shops, setModal, toast } = useOptiVerse();
+  const rxEnabled = Boolean(
+    platformSettings.enableLensesSystem ?? platformSettings.enablePrescriptionLenses
+  );
+  const productShop = shops.find((s) => s.id === product.shopId) || shops[0];
+  const shopSlug = productShop?.slug || '';
+  const shareVoteLink =
+    typeof window !== 'undefined'
+      ? `${window.location.origin}/s/${shopSlug}/f/${product.id}?poll=1`
+      : `https://optiverse.app/s/${shopSlug}/f/${product.id}?poll=1`;
 
   const colors =
     product.frameColors && product.frameColors.length > 0
@@ -71,14 +73,12 @@ export function ProductDetailsView({
   const sizes: FrameSize[] =
     product.availableSizes && product.availableSizes.length > 0
       ? product.availableSizes
-      : ['Small', 'Medium', 'Large'];
+      : ['Medium'];
 
   const [selectedColor, setSelectedColor] = useState<string>(
     colors.includes(initialColor) ? initialColor : colors[0]
   );
-  const [selectedSize, setSelectedSize] = useState<FrameSize>(
-    sizes.includes(initialSize) ? initialSize : sizes[0]
-  );
+  const selectedSize: FrameSize = sizes.includes(initialSize) ? initialSize : sizes[0];
 
   const hasClipOnAssets =
     product.frameType === 'clip_on' &&
@@ -117,23 +117,23 @@ export function ProductDetailsView({
       pushUnique({
         id: `${product.id}-clipon-front`,
         imageUrl: resolveClipOnFrontCatalogUrl(product),
-        label: 'أمامي كتالوج (بغيار الشمس)',
+        label: 'الصورة الأمامية (بالوش · غيار شمس)',
       });
       pushUnique({
         id: `${product.id}-clipon-side`,
         imageUrl: resolveClipOnSideUrl(product),
-        label: 'جانبي 3/4 (بغيار الشمس)',
+        label: 'الصورة الجانبية (بالجنب 3/4 · غيار شمس)',
       });
     } else {
       pushUnique({
         id: `${product.id}-front`,
         imageUrl: resolveStoreFrontUrl(product),
-        label: 'أمامي كتالوج',
+        label: 'الصورة الأمامية (بالوش)',
       });
       pushUnique({
         id: `${product.id}-side`,
         imageUrl: resolveAngled45Url(product),
-        label: 'جانبي 3/4',
+        label: 'الصورة الجانبية (بالجنب 3/4)',
       });
       for (const im of product.images || []) {
         pushUnique({ id: im.id, imageUrl: im.imageUrl, label: im.label });
@@ -146,6 +146,7 @@ export function ProductDetailsView({
   }, [clipOnMode, hasClipOnAssets, product]);
 
   const [activeImgIdx, setActiveImgIdx] = useState(0);
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
 
   useEffect(() => {
     setSelectedColor(colors.includes(initialColor) ? initialColor : colors[0]);
@@ -291,7 +292,22 @@ export function ProductDetailsView({
             </div>
           )}
 
-          <div className="relative rounded-2xl bg-[#F8F9FA] border border-slate-200 min-h-[300px] sm:min-h-[380px] flex flex-col items-center justify-center p-6 sm:p-10 overflow-hidden">
+          <div
+            className="relative rounded-2xl bg-[#F8F9FA] border border-slate-200 min-h-[300px] sm:min-h-[380px] flex flex-col items-center justify-center p-6 sm:p-10 overflow-hidden touch-pan-y"
+            onTouchStart={(e) => setTouchStartX(e.touches[0]?.clientX ?? null)}
+            onTouchEnd={(e) => {
+              if (touchStartX === null || galleryItems.length < 2) return;
+              const endX = e.changedTouches[0]?.clientX ?? touchStartX;
+              const delta = endX - touchStartX;
+              setTouchStartX(null);
+              if (Math.abs(delta) < 35) return;
+              if (delta > 0) {
+                setActiveImgIdx((i) => (i + 1) % galleryItems.length);
+              } else {
+                setActiveImgIdx((i) => (i - 1 + galleryItems.length) % galleryItems.length);
+              }
+            }}
+          >
             {galleryItems.length > 1 && (
               <>
                 <button
@@ -481,42 +497,6 @@ export function ProductDetailsView({
             </div>
           </div>
 
-          {/* Frame Size Selector */}
-          <div className="space-y-2 border-t border-slate-100 pt-4">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-bold text-slate-900">المقاس</span>
-              <span className="text-slate-600">{SIZE_LABELS[selectedSize]?.hint}</span>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              {sizes.map((sz) => {
-                const active = selectedSize === sz;
-                return (
-                  <button
-                    key={sz}
-                    type="button"
-                    onClick={() => setSelectedSize(sz)}
-                    className={
-                      'py-2 px-3 rounded-xl border text-xs font-bold transition cursor-pointer whitespace-nowrap ' +
-                      (active
-                        ? 'bg-slate-900 text-white border-slate-900'
-                        : 'bg-[#F8F9FA] text-slate-900 border-slate-200 hover:bg-slate-100')
-                    }
-                  >
-                    {sz}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Quiet Fit Metadata */}
-          {product.shapes?.length > 0 && (
-            <div className="text-xs text-slate-600 border-t border-slate-100 pt-3 flex items-center gap-1.5 flex-wrap">
-              <span className="font-bold text-slate-900">مناسب لأشكال الوجه:</span>
-              <span>{product.shapes.map((sh) => SHAPES[sh]).join(' · ')}</span>
-            </div>
-          )}
-
           {/* Action Buttons */}
           <div className="space-y-2.5 pt-2">
             <button
@@ -525,27 +505,38 @@ export function ProductDetailsView({
               className="w-full py-3.5 px-4 rounded-xl bg-[#0284C7] hover:bg-[#0369A1] text-white font-extrabold text-sm flex items-center justify-center gap-2 transition cursor-pointer whitespace-nowrap shadow-sm"
             >
               <I n="camera" s={18} />
-              <span>جربها الآن — تجربة النظارة بالذكاء الاصطناعي</span>
+              <span>
+                جرّب على وجهك <span dir="ltr" className="inline-block">(AI + 3D)</span>
+              </span>
             </button>
 
-            <div className={rxEnabled ? 'grid grid-cols-2 gap-2' : 'grid grid-cols-1'}>
+            <div className={rxEnabled ? 'grid grid-cols-3 gap-2' : 'grid grid-cols-2 gap-2'}>
               <button
                 type="button"
                 onClick={() => setActiveCanvasPanel((curPanel) => (curPanel === 'tryon' ? null : 'tryon'))}
-                className="py-2.5 px-3 rounded-xl bg-[#F8F9FA] hover:bg-slate-200 border border-[#E2E8F0] text-[#0F172A] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                className="py-2.5 px-2.5 rounded-xl bg-[#F8F9FA] hover:bg-slate-200 border border-[#E2E8F0] text-[#0F172A] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
               >
                 <I n="upload" s={14} />
                 <span>التجربة على صورتك</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setModal({ t: 'vote', p: product, link: shareVoteLink })}
+                className="py-2.5 px-2.5 rounded-xl bg-[#F8F9FA] hover:bg-slate-200 border border-[#E2E8F0] text-[#0F172A] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <I n="share" s={14} />
+                <span>مشاركة للأصدقاء</span>
               </button>
 
               {rxEnabled && (
                 <button
                   type="button"
                   onClick={() => setActiveCanvasPanel((curPanel) => (curPanel === 'rx' ? null : 'rx'))}
-                  className="py-2.5 px-3 rounded-xl bg-[#F8F9FA] hover:bg-slate-200 border border-[#E2E8F0] text-[#0F172A] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                  className="py-2.5 px-2.5 rounded-xl bg-[#F8F9FA] hover:bg-slate-200 border border-[#E2E8F0] text-[#0F172A] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
                 >
                   <I n="receipt" s={14} />
-                  <span>رفع روشتة كشف النظر {initialRxUrl ? '✓' : ''}</span>
+                  <span>كشف النظر {initialRxUrl ? '✓' : ''}</span>
                 </button>
               )}
             </div>
@@ -565,8 +556,8 @@ export function ProductDetailsView({
                 onClick={() => onGoCheckout(selectedColor, selectedSize)}
                 className="py-3 px-3 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-sm"
               >
-                <I n={rxEnabled ? 'eye' : 'msg'} s={15} />
-                <span>{rxEnabled ? 'شراء وعدسات طبية' : 'اطلب الآن'}</span>
+                <I n="msg" s={15} />
+                <span>اطلب الآن عبر واتساب</span>
               </button>
             </div>
           </div>

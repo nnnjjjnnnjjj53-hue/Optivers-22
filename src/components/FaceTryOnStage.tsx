@@ -19,7 +19,7 @@ import {
 import { Eyewear3DARHandle, Eyewear3DARStage } from './Eyewear3DARStage';
 import { CustomerPhotoTryOn } from './CustomerPhotoTryOn';
 import { VideoTryOnCanvas, VideoTryOnHandle } from './VideoTryOnCanvas';
-import { Face, Glasses, MiniGlasses, getCoatingStyle } from './GlassesGraphics';
+import { Glasses, MiniGlasses, getCoatingStyle } from './GlassesGraphics';
 import { I } from './Icons';
 import { resolveStoreFrontUrl, resolveTryOnFrontUrl } from '../utils/bulkFrameProcessor';
 import { resolveProductOpticalDimensions } from '../utils/opticalDimensions';
@@ -47,6 +47,7 @@ interface FaceTryOnStageProps {
   onModeChange?: (mode: TryOnMode) => void;
   yawManual?: number;
   onYawManualChange?: (y: number) => void;
+  showLauncherWhenIdle?: boolean;
 }
 
 interface PhotoManualTransform {
@@ -466,6 +467,7 @@ export function FaceTryOnStage({
   onModeChange,
   yawManual = 0,
   onYawManualChange,
+  showLauncherWhenIdle = false,
 }: FaceTryOnStageProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const compareVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -1217,194 +1219,49 @@ export function FaceTryOnStage({
   const cmpFrontImg = compareProduct ? frontImgOf(compareProduct) : undefined;
   const cmpSideImg = compareProduct ? sideImgOf(compareProduct) : undefined;
 
-  // Clean lightweight embedded preview on Storefront
+  // Direct real-face try-on only: no static dummy model portrait is rendered outside LandingPage
   if (!fullscreen) {
-    const renderInlinePanel = (p: Product, fc: string, lc: string, label?: string, slotKey = 'main') => {
-      const fImg = frontImgOf(p);
-      const sImg = sideImgOf(p);
-      const pIs3D = isProduct3D(p);
-      const panelW = showSplit ? Math.max(120, inlineSize.w / 2) : inlineSize.w;
-      const panelH = inlineSize.h;
-      const panelFrameWidthMm = resolveProductOpticalDimensions(p).totalFrameWidthMm;
-      const widthRatio = panelFrameWidthMm / 136;
-      const inlineAspect = p.modelCalibration?.aspectRatio || frontAspect;
-      const pFitScale = p.modelCalibration?.fitScale ?? 1.0;
-      const pEyeOffset = p.modelCalibration?.eyeLineOffset ?? 0.04;
-      const baseGlassesW =
-        panelW * (showSplit ? 0.56 : 0.48) * (FRAME_SIZE_SCALE[frameSize] ?? 1.0) * widthRatio * pFitScale;
-      const baseGlassesH = baseGlassesW * inlineAspect;
-      const inlineCy = panelH * 0.436 + baseGlassesH * pEyeOffset;
-      const inlinePlacement: Metric3DPlacement = {
-        cx: panelW / 2,
-        cy: inlineCy,
-        glassesWidth: baseGlassesW,
-        glassesHeight: baseGlassesH,
-        rollDeg: 0,
-        screenYawDeg: yawManual,
-        yawDeg: yawManual,
-        pitchDeg: 0,
-        eyeDistPx: baseGlassesW / 2.34,
-        pxPerMm: baseGlassesW / panelFrameWidthMm,
-        frameWidthMm: panelFrameWidthMm,
-        cheekSpanPx: baseGlassesW * 0.96,
-        bridgePx: { x: panelW / 2, y: inlineCy },
-      };
-      return (
-        <div className="relative h-full w-full overflow-hidden">
-          {label && (
-            <div className="absolute top-2 inset-x-2 z-10 flex justify-center pointer-events-none">
-              <span className="px-2.5 py-0.5 rounded-full bg-black/65 border border-white/15 text-[0.68rem] font-bold text-white truncate max-w-full">
-                {label} · {p.price} ج.م
-              </span>
-            </div>
-          )}
-          {pIs3D ? (
-            <>
-              <Face
-                shape={faceShape}
-                type={p.type}
-                frame="transparent"
-                lens="transparent"
-                yaw={yawManual}
-                tracking={false}
-              />
-              <Eyewear3DARStage
-                product={p}
-                frontImageUrl={fImg?.imageUrl}
-                placement={inlinePlacement}
-                frameColor={fc}
-                lensColor={lc}
-                coatingId={coatingId}
-                stageW={panelW}
-                stageH={panelH}
-                enableHeadOccluder={true}
-                useEmaStabilizer={false}
-              />
-            </>
-          ) : fImg ? (
-            <>
-              <Face
-                shape={faceShape}
-                type={p.type}
-                frame="transparent"
-                lens="transparent"
-                yaw={yawManual}
-                tracking={false}
-              />
-              <Glasses25DOverlay
-                product={p}
-                frontImage={fImg}
-                sideImage={sImg}
-                placement={inlinePlacement}
-                frameColor={fc}
-                lensColor={lc}
-                coatingId={coatingId}
-                stageW={panelW}
-                stageH={panelH}
-                slotId={`inline-${slotKey}`}
-              />
-            </>
-          ) : (
-            <Face
-              shape={faceShape}
-              type={p.type}
-              frame={fc}
-              lens={lc}
-              yaw={yawManual}
-              tracking={false}
-              coatingId={coatingId}
-              isSun={p.cat === 'sun'}
-            />
-          )}
-        </div>
-      );
-    };
-
     return (
-      <div className="relative">
-        <div
-          ref={inlineStageRef}
-          className={
-            'relative grid-bg overflow-hidden select-none touch-pan-y ' +
-            (onYawManualChange ? 'cursor-grab active:cursor-grabbing' : '')
-          }
-          style={{ aspectRatio: '4/4' }}
-          onPointerDown={(e) => {
-            if (!onYawManualChange || (e.target as HTMLElement).closest('button, label, input')) return;
-            e.currentTarget.setPointerCapture(e.pointerId);
-            inlineDragRef.current = { active: true, startX: e.clientX, baseYaw: yawManual };
-          }}
-          onPointerMove={(e) => {
-            if (!inlineDragRef.current.active || !onYawManualChange) return;
-            const dx = e.clientX - inlineDragRef.current.startX;
-            onYawManualChange(Math.max(-45, Math.min(45, Math.round(inlineDragRef.current.baseYaw + dx * 0.35))));
-          }}
-          onPointerUp={() => {
-            inlineDragRef.current.active = false;
-          }}
-        >
-          {showSplit && compareProduct ? (
-            <div className="grid grid-cols-2 w-full h-full divide-x divide-x-reverse divide-white/20">
-              {renderInlinePanel(product, frameColor, lensColor, product.name, 'a')}
-              {renderInlinePanel(compareProduct, compareProduct.frame, compareProduct.lens, compareProduct.name, 'b')}
+      <>
+        {showLauncherWhenIdle && (
+          <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-4 flex flex-col items-center gap-2.5">
+            <div className="text-xs font-extrabold text-[#0F172A]">
+              اختر طريقة المعاينة المباشرة على وجهك الحقيقي:
             </div>
-          ) : (
-            renderInlinePanel(product, frameColor, lensColor, undefined, 'single')
-          )}
-
-          <div className="absolute inset-x-0 bottom-4 flex flex-col items-center gap-2 px-4 z-10">
-            {deviceCaps.cameraAvailable === false ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setPhotoCanvasModalOpen(true)}
-                  className="btn bg-[#0284C7] hover:bg-[#0369A1] text-white !px-6 !py-3 shadow-lg text-sm font-bold cursor-pointer"
-                >
-                  <I n="upload" s={17} /> التجربة على صورتك بالكانفاس
-                </button>
-                <button
-                  type="button"
-                  onClick={startLiveCamera}
-                  className="text-xs font-bold text-[#0F172A] hover:text-[#0284C7] bg-white/90 px-3 py-1 rounded-full border border-[#E2E8F0] shadow-sm cursor-pointer"
-                >
-                  أو جرّب تشغيل الكاميرا
-                </button>
-              </>
-            ) : (
-              <>
-                <div className="flex flex-wrap items-center justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={startLiveCamera}
-                    className="btn bg-[#0284C7] hover:bg-[#0369A1] text-white !px-5 !py-2.5 shadow-lg text-xs sm:text-sm font-bold"
-                  >
-                    <I n="camera" s={16} /> الكاميرا الحية 3D
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPhotoCanvasModalOpen(true)}
-                    className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-[#0F172A] border border-[#E2E8F0] shadow-lg text-xs sm:text-sm font-extrabold flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <I n="upload" s={16} /> التجربة على صورتك بالكانفاس
-                  </button>
-                </div>
-                <label className="text-xs font-bold text-[#0F172A] hover:text-[#0284C7] bg-white/90 px-3 py-1 rounded-full border border-[#E2E8F0] shadow-sm cursor-pointer">
-                  أو ارفع صورة سريعاً
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      e.target.value = '';
-                      if (f) handleGalleryUpload(f);
-                    }}
-                  />
-                </label>
-              </>
-            )}
+            <div className="grid grid-cols-2 gap-2 w-full max-w-sm">
+              <button
+                type="button"
+                onClick={startLiveCamera}
+                className="btn bg-[#0284C7] hover:bg-[#0369A1] text-white !px-2.5 !py-2.5 shadow-sm text-xs sm:text-sm font-bold justify-center whitespace-nowrap"
+              >
+                <I n="camera" s={15} />{' '}
+                <span>
+                  الكاميرا الحية <span dir="ltr">3D</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPhotoCanvasModalOpen(true)}
+                className="px-2.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-[#0F172A] border border-[#E2E8F0] shadow-sm text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <I n="upload" s={15} /> <span>جرّب على صورتك</span>
+              </button>
+            </div>
+            <label className="text-xs font-bold text-[#0F172A] hover:text-[#0284C7] bg-white px-3.5 py-1 rounded-full border border-[#E2E8F0] shadow-sm cursor-pointer whitespace-nowrap">
+              أو ارفع صورة سريعاً
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = '';
+                  if (f) handleGalleryUpload(f);
+                }}
+              />
+            </label>
           </div>
-        </div>
+        )}
 
         {photoCanvasModalOpen && (
           <div className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-sm p-3 sm:p-6 overflow-y-auto flex items-center justify-center">
@@ -1423,7 +1280,7 @@ export function FaceTryOnStage({
             </div>
           </div>
         )}
-      </div>
+      </>
     );
   }
 

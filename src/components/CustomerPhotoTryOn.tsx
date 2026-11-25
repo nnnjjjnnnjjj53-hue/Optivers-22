@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useOptiVerse } from '../services/optiverseStore';
 import { Product } from '../types';
 import { resolveClipOnTryOnUrl, resolveTryOnFrontUrl } from '../utils/bulkFrameProcessor';
 import { assessOpticalFit, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
@@ -67,7 +68,14 @@ export function CustomerPhotoTryOn({
   onClose,
   onOrderProduct,
 }: CustomerPhotoTryOnProps) {
-  const [subMode, setSubMode] = useState<'tryon' | 'rx'>(initialSubMode);
+  const { platformSettings } = useOptiVerse();
+  const rxEnabled = Boolean(
+    platformSettings.enableLensesSystem ?? platformSettings.enablePrescriptionLenses
+  );
+  const [subMode, setSubMode] = useState<'tryon' | 'rx'>(
+    rxEnabled && initialSubMode === 'rx' ? 'rx' : 'tryon'
+  );
+  const effectiveSubMode: 'tryon' | 'rx' = rxEnabled ? subMode : 'tryon';
   const [portraitUrl, setPortraitUrl] = useState<string | null>(initialPhotoUrl);
   const [rxUrl, setRxUrl] = useState<string | null>(initialRxUrl);
   const [clipOnActive, setClipOnActive] = useState(false);
@@ -119,8 +127,8 @@ export function CustomerPhotoTryOn({
   }, [product.id]);
 
   useEffect(() => {
-    setSubMode(initialSubMode);
-  }, [initialSubMode]);
+    setSubMode(rxEnabled && initialSubMode === 'rx' ? 'rx' : 'tryon');
+  }, [initialSubMode, rxEnabled]);
 
   useEffect(() => {
     if (initialRxUrl !== undefined) {
@@ -337,25 +345,27 @@ export function CustomerPhotoTryOn({
             onClick={() => setSubMode('tryon')}
             className={
               'px-3.5 py-2 rounded-xl text-xs font-extrabold transition cursor-pointer border ' +
-              (subMode === 'tryon'
+              (effectiveSubMode === 'tryon'
                 ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
                 : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400')
             }
           >
             التجربة على صورتك بالكانفاس
           </button>
-          <button
-            type="button"
-            onClick={() => setSubMode('rx')}
-            className={
-              'px-3.5 py-2 rounded-xl text-xs font-extrabold transition cursor-pointer border ' +
-              (subMode === 'rx'
-                ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400')
-            }
-          >
-            رفع روشتة كشف النظر {rxUrl ? '✓' : ''}
-          </button>
+          {rxEnabled && (
+            <button
+              type="button"
+              onClick={() => setSubMode('rx')}
+              className={
+                'px-3.5 py-2 rounded-xl text-xs font-extrabold transition cursor-pointer border ' +
+                (effectiveSubMode === 'rx'
+                  ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                  : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400')
+              }
+            >
+              رفع روشتة كشف النظر {rxUrl ? '✓' : ''}
+            </button>
+          )}
         </div>
 
         {onClose && (
@@ -371,7 +381,7 @@ export function CustomerPhotoTryOn({
       </div>
 
       {/* MODE A: Personal Photo Canvas Try-On */}
-      {subMode === 'tryon' && (
+      {effectiveSubMode === 'tryon' && (
         <div className="space-y-3">
           {!portraitUrl ? (
             <div
@@ -628,7 +638,7 @@ export function CustomerPhotoTryOn({
       )}
 
       {/* MODE B: Prescription Upload */}
-      {subMode === 'rx' && (
+      {rxEnabled && effectiveSubMode === 'rx' && (
         <div className="space-y-3">
           {!rxUrl ? (
             <div

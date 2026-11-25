@@ -13,6 +13,8 @@ export type BillingCycle = 'monthly' | 'annual';
 export type PlanTierKey = 'basic' | 'pro' | 'premium';
 export type TryOnMode = '2d' | '3d';
 export type FrameMaterial = 'acetate' | 'metal' | 'rimless' | 'tr_plastic';
+export type FrameShapeTag = 'round' | 'oval' | 'square' | 'cat_eye' | 'aviator';
+export type FrameColorFamily = 'black' | 'brown_tortoise' | 'clear' | 'metal' | 'other';
 
 export interface ProductImage {
   id: string;
@@ -58,6 +60,10 @@ export interface ModelCalibration {
   model3dOffset?: { x: number; y: number; z: number };
   model3dScale?: number;
   wrapCurvatureDeg?: number;
+  frameShapeTag?: FrameShapeTag;
+  isPatterned?: boolean;
+  colorFamily?: FrameColorFamily;
+  modelCode?: string;
 }
 
 export interface FrameReview {
@@ -68,6 +74,19 @@ export interface FrameReview {
   rating: number;
   comment: string;
   createdAt: string;
+}
+
+export type StoreThemeKey = 'royal_classic' | 'clinical_pure' | 'modern_dark' | 'emerald_elite';
+
+export interface LandingPreviewFrame {
+  id: string;
+  name: string;
+  type: FrameType;
+  frameColor: string;
+  lensColor: string;
+  dimensions: string;
+  imageUrl?: string;
+  widthPx?: number;
 }
 
 export interface Shop {
@@ -101,8 +120,68 @@ export interface Shop {
   slug: string;
   price: number;
   color: string;
+  themeKey?: StoreThemeKey;
+  aiLogoGenerations?: number;
   wa: string;
   logo: string;
+  tagline?: string;
+  bannerImageUrl?: string;
+  videoUrl?: string;
+  merchantLensConfigs?: MerchantLensBrandConfig[];
+}
+
+export type LensTrack = 'single_vision' | 'custom_lab';
+export type CustomLabDesign = 'progressive' | 'bifocal';
+export type LensCategoryKey =
+  | 'white_plastic'
+  | 'anti_reflection'
+  | 'blue_cut'
+  | 'photochromic'
+  | 'night_drive'
+  | 'three_in_one';
+export type LensIndex = '1.56' | '1.60' | '1.67' | '1.74';
+export type PhotoVariant = 'none' | 'photo_grey' | 'photo_brown';
+export type SponsorBadgeType = 'official_sponsor' | 'featured_partner' | 'none';
+
+export interface LensMatrixPriceCell {
+  enabled: boolean;
+  recommendedPrice: number;
+}
+
+export interface OfficialLensBrand {
+  id: string;
+  track: LensTrack;
+  nameAr: string;
+  nameEn: string;
+  origin?: string;
+  priority: number;
+  sponsorBadge: SponsorBadgeType;
+  allowedVariancePct: number;
+  estimatedDays?: number;
+  supportsProgressive?: boolean;
+  supportsBifocal?: boolean;
+  isActive: boolean;
+  prices: Record<string, LensMatrixPriceCell>;
+}
+
+export interface MerchantLensPriceCell {
+  enabled: boolean;
+  price: number;
+}
+
+export interface MerchantLensBrandConfig {
+  shopId: string;
+  brandId: string;
+  track: LensTrack;
+  isCustomBrand?: boolean;
+  nameAr?: string;
+  nameEn?: string;
+  origin?: string;
+  estimatedDays?: number;
+  supportsProgressive?: boolean;
+  supportsBifocal?: boolean;
+  isEnabled: boolean;
+  prices: Record<string, MerchantLensPriceCell>;
 }
 
 export interface Product {
@@ -152,6 +231,10 @@ export interface Product {
   isPublished?: boolean;
   images?: ProductImage[];
   isDeleted?: boolean;
+  frameShapeTag?: FrameShapeTag;
+  isPatterned?: boolean;
+  colorFamily?: FrameColorFamily;
+  createdAt?: string;
 }
 
 export interface LensType {
@@ -272,8 +355,12 @@ export interface SponsoredSupplier {
 
 export interface PlatformSettings {
   enablePrescriptionLenses: boolean;
+  enableLensesSystem?: boolean;
   allowMerchantLensBrandingToggle: boolean;
   enableSponsoredSuppliers: boolean;
+  enableStoresDirectory?: boolean;
+  landingPreviewFrames?: LandingPreviewFrame[];
+  officialLensBrands?: OfficialLensBrand[];
   plans: Plan[];
   annualDiscountMonths: number;
   trialDays: number;

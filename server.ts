@@ -18,6 +18,7 @@ interface SplitSheetRequestBody {
   isClipOnAttachment?: unknown;
   keepLensBranding?: unknown;
   isCrystalFrame?: unknown;
+  isPatterned?: unknown;
   modelCode?: unknown;
   frameColor?: unknown;
   phash?: unknown;
@@ -38,6 +39,7 @@ interface CacheSaveBody {
   phash?: unknown;
   keepLensBranding?: unknown;
   isCrystalFrame?: unknown;
+  isPatterned?: unknown;
   frameType?: unknown;
   imagePath?: unknown;
   frontCatalogPath?: unknown;
@@ -58,6 +60,7 @@ interface BatchSplitItem {
   isClipOnAttachment?: boolean;
   keepLensBranding?: boolean;
   isCrystalFrame?: boolean;
+  isPatterned?: boolean;
   modelCode?: string;
   frameColor?: string;
   phash?: string;
@@ -91,6 +94,7 @@ interface SharedCacheEntry {
   phash?: string | null;
   keepLensBranding: boolean;
   isCrystalFrame: boolean;
+  isPatterned?: boolean;
   frameType: string;
   imagePath?: string | null;
   frontCatalogPath?: string | null;
@@ -137,12 +141,14 @@ const ALLOWED_MIME_TYPES = new Set<string>([
 ]);
 
 const MAX_BATCH_SIZE = 50;
+const MAX_AI_LOGO_GENERATIONS = 2;
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX_REQUESTS = 45;
 
 const rateLimitStore = new Map<string, number[]>();
 const memorySharedCache = new Map<string, SharedCacheEntry>();
 const memoryDemoCredits = new Map<string, number>();
+const memoryLogoGenerations = new Map<string, number>();
 const batchJobsStore = new Map<string, BatchJobState>();
 
 let cachedSupabaseAdmin: SupabaseClient | null | undefined;
@@ -182,13 +188,15 @@ export function buildSharedCacheKeys(params: {
   frameColor?: unknown;
   phash?: unknown;
   keepLensBranding?: boolean;
+  isPatterned?: boolean;
 }): { primaryKey: string; phashKey: string; modelCode: string; frameColor: string; phash: string } {
   const modelCode = normalizeCacheToken(params.modelCode);
   const frameColor = normalizeCacheToken(params.frameColor) || 'default';
   const phash = normalizeCacheToken(params.phash);
   const brandFlag = params.keepLensBranding ? 'brand1' : 'brand0';
-  const primaryKey = modelCode ? `mc:${modelCode}:${frameColor}:${brandFlag}` : '';
-  const phashKey = phash ? `ph:${phash}:${brandFlag}` : '';
+  const patFlag = params.isPatterned ? 'pat1' : 'pat0';
+  const primaryKey = modelCode ? `mc:${modelCode}:${frameColor}:${brandFlag}:${patFlag}` : '';
+  const phashKey = phash ? `ph:${phash}:${brandFlag}:${patFlag}` : '';
   return { primaryKey, phashKey, modelCode, frameColor, phash };
 }
 
@@ -440,9 +448,10 @@ async function findSharedCacheMatch(params: {
   frameColor?: unknown;
   phash?: unknown;
   keepLensBranding: boolean;
-}): Promise<SharedCacheEntry | null> {
+  isPatterned?: boolean;
+}): Promise<{ exact: SharedCacheEntry | null; solidTemplate: SharedCacheEntry | null }> {
   const keys = buildSharedCacheKeys(params);
-  if (!keys.primaryKey && !keys.phashKey) return null;
+  if (!keys.primaryKey && !keys.phashKey) return { exact: null, solidTemplate: null };
 
   const supabaseAdmin = getSupabaseAdminClient();
   if (supabaseAdmin) {
@@ -458,21 +467,25 @@ async function findSharedCacheMatch(params: {
           .update({ hit_count: Number(data.hit_count ?? 0) + 1 })
           .eq('id', data.id);
         return {
-          cacheKey: data.cache_key,
-          modelCode: data.model_code,
-          frameColor: data.frame_color,
-          phash: data.phash,
-          keepLensBranding: Boolean(data.keep_lens_branding),
-          isCrystalFrame: Boolean(data.is_crystal_frame),
-          frameType: data.frame_type || 'prescription',
-          imagePath: data.image_path,
-          frontCatalogPath: data.front_catalog_path,
-          sideImagePath: data.side_image_path,
-          lensMaskUrl: data.lens_mask_url,
-          lensWidthMm: data.lens_width_mm,
-          bridgeWidthMm: data.bridge_width_mm,
-          templeLengthMm: data.temple_length_mm,
-          totalFrameWidthMm: data.total_frame_width_mm,
+          exact: {
+            cacheKey: data.cache_key,
+            modelCode: data.model_code,
+            frameColor: data.frame_color,
+            phash: data.phash,
+            keepLensBranding: Boolean(data.keep_lens_branding),
+            isCrystalFrame: Boolean(data.is_crystal_frame),
+            isPatterned: String(data.cache_key || '').includes(':pat1'),
+            frameType: data.frame_type || 'prescription',
+            imagePath: data.image_path,
+            frontCatalogPath: data.front_catalog_path,
+            sideImagePath: data.side_image_path,
+            lensMaskUrl: data.lens_mask_url,
+            lensWidthMm: data.lens_width_mm,
+            bridgeWidthMm: data.bridge_width_mm,
+            templeLengthMm: data.temple_length_mm,
+            totalFrameWidthMm: data.total_frame_width_mm,
+          },
+          solidTemplate: null,
         };
       }
     }
@@ -491,33 +504,85 @@ async function findSharedCacheMatch(params: {
           .update({ hit_count: Number(data.hit_count ?? 0) + 1 })
           .eq('id', data.id);
         return {
-          cacheKey: data.cache_key,
-          modelCode: data.model_code,
-          frameColor: data.frame_color,
-          phash: data.phash,
-          keepLensBranding: Boolean(data.keep_lens_branding),
-          isCrystalFrame: Boolean(data.is_crystal_frame),
-          frameType: data.frame_type || 'prescription',
-          imagePath: data.image_path,
-          frontCatalogPath: data.front_catalog_path,
-          sideImagePath: data.side_image_path,
-          lensMaskUrl: data.lens_mask_url,
-          lensWidthMm: data.lens_width_mm,
-          bridgeWidthMm: data.bridge_width_mm,
-          templeLengthMm: data.temple_length_mm,
-          totalFrameWidthMm: data.total_frame_width_mm,
+          exact: {
+            cacheKey: data.cache_key,
+            modelCode: data.model_code,
+            frameColor: data.frame_color,
+            phash: data.phash,
+            keepLensBranding: Boolean(data.keep_lens_branding),
+            isCrystalFrame: Boolean(data.is_crystal_frame),
+            isPatterned: String(data.cache_key || '').includes(':pat1'),
+            frameType: data.frame_type || 'prescription',
+            imagePath: data.image_path,
+            frontCatalogPath: data.front_catalog_path,
+            sideImagePath: data.side_image_path,
+            lensMaskUrl: data.lens_mask_url,
+            lensWidthMm: data.lens_width_mm,
+            bridgeWidthMm: data.bridge_width_mm,
+            templeLengthMm: data.temple_length_mm,
+            totalFrameWidthMm: data.total_frame_width_mm,
+          },
+          solidTemplate: null,
+        };
+      }
+    }
+
+    // Solid-color cross-store template match ONLY when incoming frame is uniform solid color (!isPatterned)
+    if (!params.isPatterned && keys.modelCode) {
+      const { data: siblings } = await supabaseAdmin
+        .from('shared_eyewear_cache')
+        .select('*')
+        .eq('model_code', keys.modelCode)
+        .eq('keep_lens_branding', params.keepLensBranding)
+        .limit(5);
+      const solidRow = (siblings || []).find(
+        (r: any) => !String(r.cache_key || '').includes(':pat1') && (r.front_catalog_path || r.image_path)
+      );
+      if (solidRow) {
+        return {
+          exact: null,
+          solidTemplate: {
+            cacheKey: solidRow.cache_key,
+            modelCode: solidRow.model_code,
+            frameColor: solidRow.frame_color,
+            phash: solidRow.phash,
+            keepLensBranding: Boolean(solidRow.keep_lens_branding),
+            isCrystalFrame: Boolean(solidRow.is_crystal_frame),
+            isPatterned: false,
+            frameType: solidRow.frame_type || 'prescription',
+            imagePath: solidRow.image_path,
+            frontCatalogPath: solidRow.front_catalog_path,
+            sideImagePath: solidRow.side_image_path,
+            lensMaskUrl: solidRow.lens_mask_url,
+            lensWidthMm: solidRow.lens_width_mm,
+            bridgeWidthMm: solidRow.bridge_width_mm,
+            templeLengthMm: solidRow.temple_length_mm,
+            totalFrameWidthMm: solidRow.total_frame_width_mm,
+          },
         };
       }
     }
   }
 
   if (keys.primaryKey && memorySharedCache.has(keys.primaryKey)) {
-    return memorySharedCache.get(keys.primaryKey)!;
+    return { exact: memorySharedCache.get(keys.primaryKey)!, solidTemplate: null };
   }
   if (keys.phashKey && memorySharedCache.has(keys.phashKey)) {
-    return memorySharedCache.get(keys.phashKey)!;
+    return { exact: memorySharedCache.get(keys.phashKey)!, solidTemplate: null };
   }
-  return null;
+  if (!params.isPatterned && keys.modelCode) {
+    for (const entry of memorySharedCache.values()) {
+      if (
+        normalizeCacheToken(entry.modelCode) === keys.modelCode &&
+        entry.keepLensBranding === params.keepLensBranding &&
+        !entry.isPatterned &&
+        (entry.frontCatalogPath || entry.imagePath)
+      ) {
+        return { exact: null, solidTemplate: entry };
+      }
+    }
+  }
+  return { exact: null, solidTemplate: null };
 }
 
 async function saveSharedCacheEntry(entry: SharedCacheEntry): Promise<void> {
@@ -526,6 +591,7 @@ async function saveSharedCacheEntry(entry: SharedCacheEntry): Promise<void> {
     frameColor: entry.frameColor,
     phash: entry.phash,
     keepLensBranding: entry.keepLensBranding,
+    isPatterned: entry.isPatterned,
   });
 
   if (keys.primaryKey) memorySharedCache.set(keys.primaryKey, entry);
@@ -837,6 +903,9 @@ export function createEyewearServerApp() {
                 '1. Printed optical sizing specification on the inner temple arm, nose bridge, lens sticker, or price tag (e.g., 52□18-140, 50-19-142, 48[]17 135).',
                 '2. Brand or model code printed on the temple or lens (e.g., RB3025, RB2140, GG0061S, TF5178) — set null if absent.',
                 '3. Whether the eyewear frame material is transparent/crystal/clear acetate (is_crystal_frame=true if see-through clear plastic/crystal; false otherwise).',
+                '4. Frame silhouette shape (frame_shape): choose one of round, oval, square, cat_eye, aviator.',
+                '5. Whether the frame has a multi-color or patterned texture (is_patterned=true for tortoiseshell, havana, leopard, marbled, two-tone, mix-color acetate; false for single solid color or uniform metal).',
+                '6. Frame color family (color_family): choose one of black, brown_tortoise, clear, metal, other.',
                 'Extract three integer millimeter values if clearly legible: lens_width_mm (35..70), bridge_width_mm (10..30), temple_length_mm (110..165).',
                 'If sizing numbers are absent, set found=false and return null for unknown numbers. Never invent numbers.',
               ].join('\n'),
@@ -854,9 +923,18 @@ export function createEyewearServerApp() {
               temple_length_mm: { type: Type.INTEGER, nullable: true },
               model_code: { type: Type.STRING, nullable: true },
               is_crystal_frame: { type: Type.BOOLEAN },
+              frame_shape: {
+                type: Type.STRING,
+                enum: ['round', 'oval', 'square', 'cat_eye', 'aviator'],
+              },
+              is_patterned: { type: Type.BOOLEAN },
+              color_family: {
+                type: Type.STRING,
+                enum: ['black', 'brown_tortoise', 'clear', 'metal', 'other'],
+              },
               raw_text: { type: Type.STRING, nullable: true },
             },
-            required: ['found', 'is_crystal_frame'],
+            required: ['found', 'is_crystal_frame', 'frame_shape', 'is_patterned', 'color_family'],
           },
         },
       });
@@ -876,6 +954,18 @@ export function createEyewearServerApp() {
         typeof parsed.model_code === 'string' && parsed.model_code.trim()
           ? parsed.model_code.trim().slice(0, 48)
           : null;
+      const allowedShapes = new Set(['round', 'oval', 'square', 'cat_eye', 'aviator']);
+      const allowedColors = new Set(['black', 'brown_tortoise', 'clear', 'metal', 'other']);
+      const frameShape =
+        typeof parsed.frame_shape === 'string' && allowedShapes.has(parsed.frame_shape)
+          ? parsed.frame_shape
+          : 'square';
+      const colorFamily =
+        typeof parsed.color_family === 'string' && allowedColors.has(parsed.color_family)
+          ? parsed.color_family
+          : parsed.is_crystal_frame
+          ? 'clear'
+          : 'other';
 
       res.json({
         ok: true,
@@ -886,6 +976,9 @@ export function createEyewearServerApp() {
         total_frame_width_mm: lens !== null && bridge !== null ? 2 * lens + bridge + 10 : null,
         model_code: modelCode,
         is_crystal_frame: Boolean(parsed.is_crystal_frame),
+        frame_shape: frameShape,
+        is_patterned: Boolean(parsed.is_patterned),
+        color_family: colorFamily,
         raw_text: typeof parsed.raw_text === 'string' ? parsed.raw_text.slice(0, 64) : null,
       });
     } catch (err) {
@@ -905,6 +998,7 @@ export function createEyewearServerApp() {
       await authenticateRequest(req, { requireCredits: false });
       const body = (req.body || {}) as CacheSaveBody;
       const keepLensBranding = Boolean(body.keepLensBranding);
+      const isPatterned = Boolean(body.isPatterned);
       const modelCode = typeof body.modelCode === 'string' ? body.modelCode.trim() : '';
       const frameColor = typeof body.frameColor === 'string' ? body.frameColor.trim() : '';
       const phash = typeof body.phash === 'string' ? body.phash.trim() : '';
@@ -914,7 +1008,7 @@ export function createEyewearServerApp() {
         return;
       }
 
-      const keys = buildSharedCacheKeys({ modelCode, frameColor, phash, keepLensBranding });
+      const keys = buildSharedCacheKeys({ modelCode, frameColor, phash, keepLensBranding, isPatterned });
       await saveSharedCacheEntry({
         cacheKey: keys.primaryKey || keys.phashKey,
         modelCode: modelCode || null,
@@ -922,6 +1016,7 @@ export function createEyewearServerApp() {
         phash: phash || null,
         keepLensBranding,
         isCrystalFrame: Boolean(body.isCrystalFrame),
+        isPatterned,
         frameType: typeof body.frameType === 'string' ? body.frameType : 'prescription',
         imagePath: typeof body.imagePath === 'string' ? body.imagePath : null,
         frontCatalogPath: typeof body.frontCatalogPath === 'string' ? body.frontCatalogPath : null,
@@ -949,22 +1044,38 @@ export function createEyewearServerApp() {
       const body = (req.body || {}) as SplitSheetRequestBody;
       const keepLensBranding = Boolean(body.keepLensBranding);
       const isCrystalFrame = Boolean(body.isCrystalFrame);
+      const isPatterned = Boolean(body.isPatterned);
 
       // Step A: Query Global Shared Catalog Cache BEFORE touching Gemini or image buffers
-      const cacheHit = await findSharedCacheMatch({
+      const cacheMatch = await findSharedCacheMatch({
         modelCode: body.modelCode,
         frameColor: body.frameColor,
         phash: body.phash,
         keepLensBranding,
+        isPatterned,
       });
 
-      if (cacheHit && (cacheHit.frontCatalogPath || cacheHit.imagePath)) {
+      if (cacheMatch.exact && (cacheMatch.exact.frontCatalogPath || cacheMatch.exact.imagePath)) {
         // Immediately discard incoming uploaded image data — $0.00 Gemini cost & 0 credit deduction
         res.json({
           ok: true,
           cacheHit: true,
-          cachedAssets: cacheHit,
+          cachedAssets: cacheMatch.exact,
           messageAr: 'تم استرجاع الموديل من الكتالوج المشترك بدون استهلاك رصيد ⚡',
+        });
+        return;
+      }
+
+      if (
+        !isPatterned &&
+        cacheMatch.solidTemplate &&
+        (cacheMatch.solidTemplate.frontCatalogPath || cacheMatch.solidTemplate.imagePath)
+      ) {
+        res.json({
+          ok: true,
+          cacheHit: false,
+          solidModelTemplate: cacheMatch.solidTemplate,
+          messageAr: 'تمت مطابقة الموديل بلون سادة لإعادة التلوين محلياً بدون استهلاك رصيد 🎨',
         });
         return;
       }
@@ -1136,17 +1247,18 @@ export function createEyewearServerApp() {
             const current = items[idx++];
             try {
               const keepLensBranding = Boolean(current.keepLensBranding);
-              const cacheHit = await findSharedCacheMatch({
+              const cacheMatch = await findSharedCacheMatch({
                 modelCode: current.modelCode,
                 frameColor: current.frameColor,
                 phash: current.phash,
                 keepLensBranding,
+                isPatterned: Boolean(current.isPatterned),
               });
 
-              if (cacheHit && (cacheHit.frontCatalogPath || cacheHit.imagePath)) {
+              if (cacheMatch.exact && (cacheMatch.exact.frontCatalogPath || cacheMatch.exact.imagePath)) {
                 job.results[current.localId] = {
                   cacheHit: true,
-                  cachedAssets: cacheHit,
+                  cachedAssets: cacheMatch.exact,
                 };
               } else {
                 const prompt = buildEyewearSplitSheetPrompt({
@@ -1228,6 +1340,139 @@ export function createEyewearServerApp() {
       res.status(code).json({
         error: err instanceof Error ? err.message : 'غير مصرح',
       });
+    }
+  });
+
+  // 6. Protected AI Merchant Logo Designer (strictly capped at 2 generations per merchant)
+  app.post('/api/merchant/generate-logo', async (req: Request, res: Response) => {
+    try {
+      const ctx = await authenticateRequest(req, { requireCredits: false });
+      const body = (req.body || {}) as {
+        imageBase64?: unknown;
+        mimeType?: unknown;
+        shopName?: unknown;
+      };
+
+      const rawBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64.trim() : '';
+      const rawMime = typeof body.mimeType === 'string' ? body.mimeType.trim() : 'image/jpeg';
+      const shopName =
+        typeof body.shopName === 'string' && body.shopName.trim()
+          ? body.shopName.trim().slice(0, 60)
+          : 'Optical Store';
+
+      if (!rawBase64) {
+        res.status(400).json({ error: 'يرجى رفع صورة يافطة المحل أولاً.' });
+        return;
+      }
+
+      const cleanBase64 = rawBase64.replace(/^data:[^;]+;base64,/, '');
+      if (cleanBase64.length > 20_000_000) {
+        res.status(413).json({ error: 'حجم الصورة يتجاوز الحد المسموح به (15MB).' });
+        return;
+      }
+
+      const safeMimeType = ALLOWED_MIME_TYPES.has(rawMime) ? rawMime : 'image/jpeg';
+      const shopKey = ctx.shopId || ctx.userId;
+      let usedCount = memoryLogoGenerations.get(shopKey) ?? 0;
+
+      const supabaseAdmin = getSupabaseAdminClient();
+      if (supabaseAdmin && ctx.shopId) {
+        try {
+          const { data: row } = await supabaseAdmin
+            .from('shops')
+            .select('ai_logo_generations')
+            .eq('id', ctx.shopId)
+            .maybeSingle();
+          if (row && typeof row.ai_logo_generations === 'number') {
+            usedCount = Math.max(usedCount, row.ai_logo_generations);
+          }
+        } catch {
+          // Optional column may not exist yet in older Supabase schemas
+        }
+      }
+
+      if (usedCount >= MAX_AI_LOGO_GENERATIONS) {
+        res.status(403).json({
+          error: 'لقد استنفدت الحد الأقصى لتصميم اللوجو بالذكاء الاصطناعي (محاولتان فقط لكل متجر). يمكنك رفع لوجو جاهز من جهازك.',
+          usedGenerations: usedCount,
+          maxGenerations: MAX_AI_LOGO_GENERATIONS,
+        });
+        return;
+      }
+
+      const ai = getGeminiClient();
+      const prompt = [
+        `Design a minimalist, luxury optical storefront vector emblem logo for "${shopName}" inspired by the storefront signboard photo attached.`,
+        'Rules:',
+        '- Output a clean, flat, centered square emblem/logo on a pure solid #FFFFFF white background.',
+        '- Extract the core brand symbol, geometric eyewear motif, and clean luxury typography aesthetic from the signboard.',
+        '- Remove all street background, walls, wires, sky, reflections, and photographic noise.',
+        '- Crisp sharp edges, luxury optical boutique aesthetic (Deep Royal Navy #0F172A, Optical Sapphire #0284C7, or Warm Gold #D97706).',
+        '- Zero watermark, zero mockup frame, zero border.',
+      ].join('\n');
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.1-flash-lite-image',
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                data: cleanBase64,
+                mimeType: safeMimeType,
+              },
+            },
+            { text: prompt },
+          ],
+        },
+        config: {
+          imageConfig: {
+            aspectRatio: '1:1',
+          },
+        },
+      });
+
+      const parts = response.candidates?.[0]?.content?.parts ?? [];
+      let outBase64 = '';
+      let outMime = 'image/png';
+      for (const part of parts) {
+        if (part.inlineData?.data) {
+          outBase64 = part.inlineData.data;
+          outMime = part.inlineData.mimeType || 'image/png';
+          break;
+        }
+      }
+
+      if (!outBase64) {
+        res.status(502).json({ error: 'لم يتمكن الذكاء الاصطناعي من استخراج اللوجو — حاول بصورة أوضح لليافطة.' });
+        return;
+      }
+
+      const nextCount = usedCount + 1;
+      memoryLogoGenerations.set(shopKey, nextCount);
+      if (supabaseAdmin && ctx.shopId) {
+        try {
+          await supabaseAdmin
+            .from('shops')
+            .update({ ai_logo_generations: nextCount })
+            .eq('id', ctx.shopId);
+        } catch {
+          // Ignore if column doesn't exist yet
+        }
+      }
+
+      res.json({
+        ok: true,
+        logoDataUrl: `data:${outMime};base64,${outBase64}`,
+        usedGenerations: nextCount,
+        maxGenerations: MAX_AI_LOGO_GENERATIONS,
+      });
+    } catch (err) {
+      const code = (err as Error & { statusCode?: number }).statusCode;
+      const message = err instanceof Error ? err.message : 'تعذر تصميم اللوجو بالذكاء الاصطناعي';
+      const status =
+        code ||
+        (message.includes('GEMINI_API_KEY') || message.includes('Settings > Secrets') ? 503 : 500);
+      res.status(status).json({ error: message });
     }
   });
 

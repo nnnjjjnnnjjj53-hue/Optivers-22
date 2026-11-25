@@ -1,13 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { CATS, DEFAULT_SHOP_ID, EGYPT_GOVERNORATES, TYPES } from '../data/seed';
 import { useOptiVerse } from '../services/optiverseStore';
-import { Inquiry, Product } from '../types';
+import { FrameCat, FrameShapeTag, Inquiry, Product } from '../types';
 import { BeforeAfter, MiniGlasses, Rx } from './GlassesGraphics';
 import { Eyewear3DViewer } from './Eyewear3DARStage';
 import { GuidedCaptureWizard } from './GuidedCaptureWizard';
 import { I } from './Icons';
-import { Egp, Modal, fmt, waNum } from './UiShared';
+import { Egp, Modal, Switch, fmt, waNum } from './UiShared';
 import { formatOpticalDimensions, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
+import { resolveStoreFrontUrl } from '../utils/bulkFrameProcessor';
+
+const SHAPE_TAG_OPTIONS: { key: FrameShapeTag; label: string }[] = [
+  { key: 'round', label: 'دائري (Round)' },
+  { key: 'oval', label: 'بيضاوي (Oval)' },
+  { key: 'square', label: 'مربع (Square)' },
+  { key: 'cat_eye', label: 'كات آي (Cat-Eye)' },
+  { key: 'aviator', label: 'أفياتور (Aviator)' },
+];
 
 function ZoomModal({ q, onClose }: { q: Inquiry; onClose: () => void }) {
   const [z, setZ] = useState(1.4);
@@ -29,79 +38,122 @@ function ZoomModal({ q, onClose }: { q: Inquiry; onClose: () => void }) {
 
 function VoteModal({
   p,
+  p2,
   link,
   onClose,
   toast,
 }: {
   p: Product;
+  p2?: Product;
   link: string;
   onClose: () => void;
   toast: (m: string) => void;
 }) {
-  const [v, setV] = useState({ fire: 7, other: 2 });
-  const [me, setMe] = useState<'fire' | 'other' | null>(null);
-  const tot = v.fire + v.other;
-  const vote = (k: 'fire' | 'other') => {
+  const [v, setV] = useState({ a: p2 ? 5 : 7, b: p2 ? 4 : 2 });
+  const [me, setMe] = useState<'a' | 'b' | null>(null);
+  const tot = Math.max(1, v.a + v.b);
+  const vote = (k: 'a' | 'b') => {
     if (me) return;
     setMe(k);
     setV((x) => ({ ...x, [k]: x[k] + 1 }));
   };
-  const msg = encodeURIComponent(
-    `شوف نظارة ${p.name} عليا واختار: تحفة عليك 🔥 ولا جرب إطار تاني 🤔\n${link}`
-  );
+
+  const pImg = resolveStoreFrontUrl(p) || p.processedImage || p.images?.[0]?.imageUrl;
+  const p2Img = p2 ? resolveStoreFrontUrl(p2) || p2.processedImage || p2.images?.[0]?.imageUrl : undefined;
+
+  const msg = p2
+    ? encodeURIComponent(
+        `أيهما أحلى عليّ؟ ⚖️\n🅰️ ${p.name}\n🅱️ ${p2.name}\nصوّت وساعدني في الاختيار:\n${link}`
+      )
+    : encodeURIComponent(
+        `شوف نظارة ${p.name} وقولي رأيك: جميلة ومناسبة جداً 👍 ولا جرّب موديلاً آخر 🔄\n${link}`
+      );
+
   return (
-    <Modal title="شارك مع صحابك اختيار نظارتك" onClose={onClose}>
-      <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center gap-3 mb-4">
-        <div className="rounded-xl bg-white border border-slate-200 p-2">
-          <MiniGlasses
-            type={p.type}
-            frame={p.frame}
-            lens={p.lens}
-            w={90}
-            imageUrl={p.processedImage || p.images?.[0]?.imageUrl}
-          />
+    <Modal
+      title={p2 ? 'اسأل أصدقاءك: أيهما أحلى عليّ؟ ⚖️' : 'شارك مع أصدقائك رأيهم في النظارة'}
+      onClose={onClose}
+      w={p2 ? 'max-w-lg' : 'max-w-md'}
+    >
+      {p2 ? (
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          {[
+            { tag: 'A', item: p, img: pImg },
+            { tag: 'B', item: p2, img: p2Img },
+          ].map(({ tag, item, img }) => (
+            <div key={item.id} className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 text-center">
+              <div className="inline-flex items-center px-2 py-0.5 rounded-full bg-[#0F172A] text-white text-[0.65rem] font-extrabold mb-2">
+                اختيار {tag}
+              </div>
+              <div className="h-24 rounded-xl bg-white border border-slate-200 flex items-center justify-center p-2 mb-2">
+                <MiniGlasses type={item.type} frame={item.frame} lens={item.lens} w={100} imageUrl={img} />
+              </div>
+              <div className="font-extrabold text-xs text-[#0F172A] truncate">{item.name}</div>
+              <div className="text-[0.7rem] font-bold text-[#D97706] mt-0.5 tabular-nums">
+                <Egp v={item.salePrice && item.salePrice > 0 && item.salePrice < item.price ? item.salePrice : item.price} />
+              </div>
+            </div>
+          ))}
         </div>
-        <div>
-          <div className="font-bold text-[#0F172A]">{p.name}</div>
-          <div className="text-xs text-slate-600">دي الصفحة اللي هتوصل لصاحبك — جرّب التصويت بنفسك</div>
+      ) : (
+        <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center gap-3 mb-4">
+          <div className="rounded-xl bg-white border border-slate-200 p-2 shrink-0">
+            <MiniGlasses type={p.type} frame={p.frame} lens={p.lens} w={90} imageUrl={pImg} />
+          </div>
+          <div className="min-w-0">
+            <div className="font-bold text-[#0F172A] truncate">{p.name}</div>
+            <div className="text-xs text-slate-600">شارك الرابط مع أصدقائك وشاهد تصويتهم فوراً</div>
+          </div>
         </div>
-      </div>
+      )}
+
       <div className="space-y-2.5">
-        {(
-          [
-            ['fire', 'تحفة عليك 🔥'],
-            ['other', 'جرب إطار تاني 🤔'],
-          ] as const
-        ).map((o) => (
-          <button
-            key={o[0]}
-            onClick={() => vote(o[0])}
-            className={
-              'relative w-full overflow-hidden rounded-2xl border p-3.5 text-start font-bold cursor-pointer bg-white ' +
-              (me === o[0] ? 'border-[#0284C7] bg-sky-50' : 'border-[#E2E8F0]')
-            }
-          >
-            <span
-              className="absolute inset-y-0 start-0 bg-sky-500/15 transition-all"
-              style={{ width: (v[o[0]] / tot) * 100 + '%' }}
-            />
-            <span className="relative flex justify-between text-[#0F172A]">
-              <span>{o[1]}</span>
-              <span className="text-[#0284C7] tabular-nums">
-                {v[o[0]]} صوت · {Math.round((v[o[0]] / tot) * 100)}%
+        {(p2
+          ? [
+              ['a', `🅰️ ${p.name}`] as const,
+              ['b', `🅱️ ${p2.name}`] as const,
+            ]
+          : [
+              ['a', 'جميلة ومناسبة جداً 👍'] as const,
+              ['b', 'جرّب موديلاً آخر 🔄'] as const,
+            ]
+        ).map((o) => {
+          const pct = Math.round((v[o[0]] / tot) * 100);
+          return (
+            <button
+              key={o[0]}
+              type="button"
+              onClick={() => vote(o[0])}
+              className={
+                'relative w-full overflow-hidden rounded-2xl border p-3.5 text-start font-bold cursor-pointer bg-white transition ' +
+                (me === o[0] ? 'border-[#0284C7] ring-1 ring-[#0284C7] bg-sky-50' : 'border-[#E2E8F0] hover:border-slate-300')
+              }
+            >
+              <span
+                className="absolute inset-y-0 start-0 bg-sky-500/15 transition-all duration-300"
+                style={{ width: `${pct}%` }}
+              />
+              <span className="relative flex justify-between items-center gap-2 text-[#0F172A] text-xs sm:text-sm">
+                <span className="truncate">{o[1]}</span>
+                <span className="text-[#0284C7] tabular-nums shrink-0">
+                  {v[o[0]]} صوت · {pct}%
+                </span>
               </span>
-            </span>
-          </button>
-        ))}
+            </button>
+          );
+        })}
       </div>
-      {me && <p className="text-xs text-center text-[#059669] font-bold mt-2">تم تسجيل صوتك ✓</p>}
+
+      {me && <p className="text-xs text-center text-[#059669] font-bold mt-2">تم تسجيل صوتك بنجاح ✓</p>}
+
       <div className="grid grid-cols-2 gap-2 mt-4">
         <button
+          type="button"
           className="btn btn-g"
           onClick={() => {
             navigator.clipboard
               ?.writeText(link)
-              .then(() => toast('تم نسخ الرابط ✓'))
+              .then(() => toast('تم نسخ رابط التصويت ✓'))
               .catch(() => toast('انسخ الرابط يدوياً'));
           }}
         >
@@ -111,6 +163,15 @@ function VoteModal({
           <I n="msg" s={15} /> إرسال واتساب
         </a>
       </div>
+
+      <button
+        type="button"
+        onClick={onClose}
+        className="btn btn-g btn-sm w-full mt-2.5 text-xs font-bold text-[#0F172A]"
+      >
+        تصفّح باقي نظارات المتجر
+      </button>
+
       <div className="p-2.5 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] text-[#0F172A] font-mono text-xs mt-3 truncate" dir="ltr">
         {link}
       </div>
@@ -220,6 +281,275 @@ function AltModal({ q, onClose }: { q: Inquiry; onClose: () => void }) {
   );
 }
 
+function QuickEditProductModal({ p, onClose }: { p: Product; onClose: () => void }) {
+  const { activeShop, updateProduct, uploadAssetToStorage, toast } = useOptiVerse();
+  const [name, setName] = useState(p.name);
+  const [code, setCode] = useState(p.modelCode || p.code || '');
+  const [price, setPrice] = useState(String(p.price || 0));
+  const [disc, setDisc] = useState(String(p.disc || 0));
+  const resolveInitialCategoryChoice = (): 'prescription' | 'sunglasses' | 'metal' | 'clip_on' | 'kids' => {
+    if (p.frameType === 'clip_on') return 'clip_on';
+    if (p.frameType === 'kids') return 'kids';
+    if (p.frameType === 'metal' || (p.modelCalibration?.material === 'metal' && p.cat === 'sun')) return 'metal';
+    if (p.frameType === 'sunglasses' || p.cat === 'sun') return 'sunglasses';
+    return 'prescription';
+  };
+  const [categoryChoice, setCategoryChoice] = useState<'prescription' | 'sunglasses' | 'metal' | 'clip_on' | 'kids'>(
+    resolveInitialCategoryChoice
+  );
+  const [frameShapeTag, setFrameShapeTag] = useState<FrameShapeTag>(
+    p.frameShapeTag ||
+      p.modelCalibration?.frameShapeTag ||
+      (p.type === 'aviator'
+        ? 'aviator'
+        : p.type === 'round'
+        ? 'round'
+        : p.type === 'cat'
+        ? 'cat_eye'
+        : 'square')
+  );
+  const [isPublished, setIsPublished] = useState(p.isPublished !== false);
+  const [previewImgUrl, setPreviewImgUrl] = useState<string | undefined>(
+    resolveStoreFrontUrl(p) || p.processedImage || p.images?.[0]?.imageUrl
+  );
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photoChanged, setPhotoChanged] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const numPrice = Math.max(0, Math.round(Number(price) || 0));
+  const numDisc = Math.max(0, Math.min(90, Math.round(Number(disc) || 0)));
+  const finalPrice = Math.round(numPrice * (1 - numDisc / 100));
+
+  const handlePhotoChange = async (file: File) => {
+    setUploadingPhoto(true);
+    try {
+      const uploadedUrl = await uploadAssetToStorage(file, `products/${activeShop.id}/front`, 'webp');
+      setPreviewImgUrl(uploadedUrl);
+      setPhotoChanged(true);
+      toast('تم رفع الصورة الجديدة — اضغط حفظ التعديلات للتأكيد ✓');
+    } catch {
+      toast('تعذر رفع الصورة');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const save = async () => {
+    setSaving(true);
+    const cleanName = name.trim() || p.name;
+    const cleanCode = code.trim().toUpperCase() || p.code;
+    const mappedCat: FrameCat =
+      categoryChoice === 'sunglasses' || categoryChoice === 'metal'
+        ? 'sun'
+        : categoryChoice === 'kids' && (p.subCategory === 'sun' || p.cat === 'sun')
+        ? 'sun'
+        : 'med';
+    const mappedSubCategory =
+      categoryChoice === 'sunglasses' || categoryChoice === 'metal'
+        ? ('sun' as const)
+        : categoryChoice === 'kids'
+        ? p.subCategory || (p.cat === 'sun' ? 'sun' : 'optical')
+        : ('optical' as const);
+    const mappedMaterial =
+      categoryChoice === 'metal'
+        ? ('metal' as const)
+        : p.modelCalibration?.material === 'metal' && categoryChoice !== 'prescription'
+        ? ('metal' as const)
+        : ('tr_plastic' as const);
+
+    const nextPatch: Partial<Omit<Product, 'id' | 'shopId'>> = {
+      name: cleanName,
+      code: cleanCode,
+      modelCode: cleanCode,
+      price: numPrice,
+      disc: numDisc,
+      salePrice: numDisc > 0 && finalPrice < numPrice ? finalPrice : undefined,
+      cat: mappedCat,
+      frameType: categoryChoice,
+      subCategory: mappedSubCategory,
+      frameShapeTag,
+      isPublished,
+      modelCalibration: {
+        ...(p.modelCalibration || {}),
+        material: mappedMaterial,
+        frameShapeTag,
+        modelCode: cleanCode,
+        ...(photoChanged && previewImgUrl ? { storeFrontUrl: previewImgUrl } : {}),
+      },
+      ...(photoChanged && previewImgUrl
+        ? {
+            processedImage: previewImgUrl,
+            storeFrontUrl: previewImgUrl,
+            frontCatalogPath: previewImgUrl,
+          }
+        : {}),
+    };
+
+    const nextImages =
+      photoChanged && previewImgUrl
+        ? [
+            ...(p.images || []).filter((img) => img.kind === 'front_tryon'),
+            {
+              id: `img-${Date.now()}-front`,
+              productId: p.id,
+              angleYaw: 0,
+              label: 'الصورة الأمامية للكتالوج',
+              imageUrl: previewImgUrl,
+              kind: 'gallery' as const,
+              sortOrder: 1,
+            },
+            ...(p.images || []).filter((img) => img.kind !== 'front_tryon' && img.angleYaw !== 0),
+          ]
+        : undefined;
+
+    await updateProduct(p.id, nextPatch, nextImages);
+    setSaving(false);
+    toast(`تم تحديث "${cleanName}" ✓`);
+    onClose();
+  };
+
+  return (
+    <Modal title="تعديل بيانات النظارة" onClose={onClose}>
+      <div className="space-y-4">
+        {/* Field 1: Frame Thumbnail + Change Photo */}
+        <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="rounded-xl bg-white border border-slate-200 p-2 shrink-0">
+              <MiniGlasses
+                type={p.type}
+                frame={p.frame}
+                lens={p.lens}
+                w={88}
+                imageUrl={previewImgUrl}
+              />
+            </div>
+            <div className="min-w-0">
+              <div className="font-bold text-sm text-[#0F172A] truncate">{name || p.name}</div>
+              <div className="text-xs text-slate-500 font-mono truncate" dir="ltr" style={{ textAlign: 'start' }}>
+                {code || p.code}
+              </div>
+            </div>
+          </div>
+
+          <label className="btn btn-g btn-sm shrink-0 cursor-pointer">
+            <I n="camera" s={14} /> {uploadingPhoto ? 'جاري الرفع...' : 'تغيير الصورة'}
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              disabled={uploadingPhoto}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (file) void handlePhotoChange(file);
+              }}
+            />
+          </label>
+        </div>
+
+        {/* Field 2: Frame Name & Code */}
+        <div className="grid grid-cols-12 gap-2.5">
+          <div className="col-span-7">
+            <label className="text-xs font-bold text-slate-600 block mb-1">اسم النظارة</label>
+            <input className="inp" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div className="col-span-5">
+            <label className="text-xs font-bold text-slate-600 block mb-1">الكود / الموديل</label>
+            <input
+              className="inp font-mono"
+              dir="ltr"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {/* Field 3: Price & Discount % */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-bold text-slate-600 block mb-1">السعر الأساسي (ج.م)</label>
+            <input
+              className="inp"
+              type="number"
+              min="0"
+              dir="ltr"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="text-xs font-bold text-slate-600 block mb-1">نسبة الخصم % (0–90)</label>
+            <input
+              className="inp"
+              type="number"
+              min="0"
+              max="90"
+              dir="ltr"
+              value={disc}
+              onChange={(e) => setDisc(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {/* Field 4: Category & Frame Shape */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-bold text-slate-600 block mb-1">الفئة</label>
+            <select
+              className="inp"
+              value={categoryChoice}
+              onChange={(e) =>
+                setCategoryChoice(e.target.value as 'prescription' | 'sunglasses' | 'metal' | 'clip_on' | 'kids')
+              }
+            >
+              <option value="prescription">نظارات طبية</option>
+              <option value="sunglasses">نظارات شمسية</option>
+              <option value="metal">نظارات شمس معادن</option>
+              <option value="clip_on">نظارات بغيار شمس</option>
+              <option value="kids">نظارات أطفال</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-bold text-slate-600 block mb-1">شكل الإطار</label>
+            <select
+              className="inp"
+              value={frameShapeTag}
+              onChange={(e) => setFrameShapeTag(e.target.value as FrameShapeTag)}
+            >
+              {SHAPE_TAG_OPTIONS.map((opt) => (
+                <option key={opt.key} value={opt.key}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Field 5: Publish Toggle + Save */}
+        <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center justify-between gap-3">
+          <div>
+            <div className="font-bold text-sm text-[#0F172A]">نشر النظارة في المتجر</div>
+            <div className="text-xs text-slate-500">
+              {isPublished ? 'منشورة وتظهر للعملاء' : 'مسودة مخفية عن العملاء'} · السعر النهائي:{' '}
+              <b className="text-[#D97706]"><Egp v={finalPrice} /></b>
+            </div>
+          </div>
+          <Switch on={isPublished} onChange={setIsPublished} />
+        </div>
+
+        <button
+          type="button"
+          disabled={saving || uploadingPhoto}
+          onClick={save}
+          className="btn bg-[#D97706] hover:bg-[#B45309] text-white w-full !py-3 shadow-sm"
+        >
+          <I n="check" s={17} /> {saving ? 'جاري الحفظ...' : 'حفظ التعديلات'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 export function Modals() {
   const {
     modal,
@@ -265,7 +595,7 @@ export function Modals() {
   }
 
   if (t === 'editprod' && typeof modal !== 'string' && modal.t === 'editprod') {
-    return <GuidedCaptureWizard product={modal.p} onClose={close} />;
+    return <QuickEditProductModal p={modal.p} onClose={close} />;
   }
 
   if (t === 'delprod' && typeof modal !== 'string' && modal.t === 'delprod') {
@@ -519,7 +849,7 @@ export function Modals() {
                 plan: selectedPlanName,
                 planTier: chosenTier,
                 price: customPrice,
-                aiCreditsLimit: matchedPlan?.monthlyAiCredits || s.aiCreditsLimit || 100,
+                aiCreditsLimit: matchedPlan?.monthlyAiCredits || s.aiCreditsLimit || 110,
               });
               await logAudit('تعديل الباقة', `${s.name}: باقة ${selectedPlanName} (${customPrice} ج.م)`, s.id);
               close();
@@ -687,7 +1017,7 @@ export function Modals() {
   }
 
   if (t === 'vote' && typeof modal !== 'string' && modal.t === 'vote') {
-    return <VoteModal p={modal.p} link={modal.link} onClose={close} toast={toast} />;
+    return <VoteModal p={modal.p} p2={modal.p2} link={modal.link} onClose={close} toast={toast} />;
   }
 
   if (t === 'catitem' && typeof modal !== 'string' && modal.t === 'catitem') {
@@ -899,7 +1229,7 @@ export function Modals() {
   if (t === 'sent' && typeof modal !== 'string' && modal.t === 'sent') {
     const q = modal.q;
     const msg = encodeURIComponent(
-      `مرحباً ${activeShop.name}، أنا ${q.cust}.\nاخترت ${q.frameName} مع ${q.lensName} (${q.brandName}) — الإضافات: ${q.extrasTxt}.\nالسعر المبدئي: ${fmt(q.price)} ج.م${
+      `مرحباً ${activeShop.name}، أنا ${q.cust}.\nاخترت ${q.frameName} مع ${q.lensName} (${q.brandName}) — التفاصيل: ${q.extrasTxt}.\nالسعر المبدئي: ${fmt(q.price)} ج.م${
         q.pd ? '\nPD: ' + q.pd : ''
       }${q.notes ? '\nملاحظات: ' + q.notes : ''}\nرقم الاستفسار ${q.id} — برجاء مراجعة الكشف وتأكيد الملاءمة والسعر النهائي.`
     );

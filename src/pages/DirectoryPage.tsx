@@ -5,9 +5,10 @@ import { I } from '../components/Icons';
 import { waNum } from '../components/UiShared';
 
 export function DirectoryPage() {
-  const { shops, navigate } = useOptiVerse();
+  const { shops, navigate, platformSettings } = useOptiVerse();
   const [search, setSearch] = useState('');
   const [govFilter, setGovFilter] = useState('الكل');
+  const directoryEnabled = Boolean(platformSettings.enableStoresDirectory);
 
   const activeShops = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -129,7 +130,18 @@ export function DirectoryPage() {
           )}
         </div>
 
-        {activeShops.length === 0 ? (
+        {!directoryEnabled ? (
+          <div className="bg-white rounded-3xl border border-[#E2E8F0] p-12 text-center space-y-3">
+            <span className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-500 inline-flex items-center justify-center">
+              <I n="lock" s={24} />
+            </span>
+            <div className="font-extrabold text-base text-[#0F172A]">دليل المحلات العام مخفي حالياً</div>
+            <p className="text-xs text-slate-500">يمكن تفعيل ظهور دليل المحلات المعتمدة عبر لوحة تحكم إدارة المنصة</p>
+            <button type="button" className="btn btn-p btn-sm" onClick={() => navigate('/')}>
+              العودة للرئيسية
+            </button>
+          </div>
+        ) : activeShops.length === 0 ? (
           <div className="bg-white rounded-3xl border border-[#E2E8F0] p-12 text-center space-y-3">
             <span className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-500 inline-flex items-center justify-center">
               <I n="store" s={24} />
@@ -154,6 +166,7 @@ export function DirectoryPage() {
               const waHref = `https://wa.me/${waNum(s.wa)}?text=${encodeURIComponent(
                 `مرحباً ${s.name}، وجدت متجركم عبر دليل محلات OptiVerse وأرغب في الاستفسار عن النظارات.`
               )}`;
+              const isImgLogo = Boolean(s.logo && /^(https?:|data:image\/|blob:|\/)/i.test(s.logo));
               return (
                 <article
                   key={s.id}
@@ -166,8 +179,12 @@ export function DirectoryPage() {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3 min-w-0">
-                      <span className="w-12 h-12 rounded-2xl bg-[#0F172A] text-white text-2xl flex items-center justify-center shrink-0">
-                        {s.logo || '👓'}
+                      <span className="w-12 h-12 rounded-2xl bg-[#0F172A] text-white text-2xl flex items-center justify-center shrink-0 overflow-hidden">
+                        {isImgLogo ? (
+                          <img src={s.logo} alt={s.name} className="w-full h-full object-contain bg-white p-0.5" />
+                        ) : (
+                          s.logo || '👓'
+                        )}
                       </span>
                       <div className="min-w-0">
                         <h2 className="font-extrabold text-base text-[#0F172A] truncate">{s.name}</h2>

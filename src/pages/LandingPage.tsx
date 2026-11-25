@@ -1,18 +1,76 @@
-import React, { useEffect, useState } from 'react';
-import heroPortraitImg from '../assets/images/hero_portrait_eyewear_1795571804020.jpg';
-import { useOptiVerse } from '../services/optiverseStore';
-import { BillingCycle, FrameType } from '../types';
-import { Corners, MiniGlasses } from '../components/GlassesGraphics';
+import React, { useEffect, useRef, useState } from 'react';
+import landingEditorialPortrait from '../assets/images/landing_editorial_portrait_1795613820913.jpg';
+import { DEFAULT_LANDING_PREVIEW_FRAMES } from '../data/seed';
+import { isAdminRole, useOptiVerse } from '../services/optiverseStore';
+import { BillingCycle, LandingPreviewFrame } from '../types';
+import { Corners, Glasses, MiniGlasses } from '../components/GlassesGraphics';
 import { I } from '../components/Icons';
 import { fmt } from '../components/UiShared';
 
 export function LandingPage() {
-  const { navigate, platformSettings, plans, shops } = useOptiVerse();
-  const [k, setK] = useState<FrameType>('aviator');
+  const { navigate, platformSettings, plans, shops, session } = useOptiVerse();
+  const previewFrames: LandingPreviewFrame[] =
+    platformSettings.landingPreviewFrames && platformSettings.landingPreviewFrames.length
+      ? platformSettings.landingPreviewFrames
+      : DEFAULT_LANDING_PREVIEW_FRAMES;
+  const [activeFrameId, setActiveFrameId] = useState<string>(previewFrames[0]?.id || 'lp-aviator');
   const [billing, setBilling] = useState<BillingCycle>('monthly');
   const [showBottomPricingBar, setShowBottomPricingBar] = useState<boolean>(() =>
-    typeof window !== 'undefined' ? window.scrollY < 150 : true
+    typeof window !== 'undefined' ? window.scrollY < 140 : true
   );
+  const [arrivedPricingGlow, setArrivedPricingGlow] = useState(false);
+  const pricingGlowTimerRef = useRef<number | null>(null);
+  const pricingScrollRafRef = useRef<number>(0);
+
+  useEffect(() => {
+    return () => {
+      if (pricingGlowTimerRef.current) window.clearTimeout(pricingGlowTimerRef.current);
+      if (pricingScrollRafRef.current) window.cancelAnimationFrame(pricingScrollRafRef.current);
+    };
+  }, []);
+
+  const scrollToPricing = (e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
+    const target = document.getElementById('pricing');
+    if (!target) return;
+    if (pricingGlowTimerRef.current) window.clearTimeout(pricingGlowTimerRef.current);
+    if (pricingScrollRafRef.current) window.cancelAnimationFrame(pricingScrollRafRef.current);
+
+    const startY = window.scrollY || window.pageYOffset || 0;
+    const rect = target.getBoundingClientRect();
+    const targetY = Math.max(0, startY + rect.top - 72);
+    const distance = targetY - startY;
+    const prefersReduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (prefersReduced || Math.abs(distance) < 4) {
+      window.scrollTo(0, targetY);
+      setArrivedPricingGlow(true);
+      pricingGlowTimerRef.current = window.setTimeout(() => setArrivedPricingGlow(false), 1400);
+      return;
+    }
+
+    const duration = 720;
+    const startTime = performance.now();
+    const easeInOutCubic = (t: number) =>
+      t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+    const step = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / duration);
+      window.scrollTo(0, startY + distance * easeInOutCubic(progress));
+      if (progress < 1) {
+        pricingScrollRafRef.current = window.requestAnimationFrame(step);
+      } else {
+        pricingScrollRafRef.current = 0;
+        setArrivedPricingGlow(true);
+        pricingGlowTimerRef.current = window.setTimeout(() => setArrivedPricingGlow(false), 1400);
+      }
+    };
+    pricingScrollRafRef.current = window.requestAnimationFrame(step);
+  };
 
   useEffect(() => {
     let rafId = 0;
@@ -20,7 +78,7 @@ export function LandingPage() {
       if (rafId) return;
       rafId = window.requestAnimationFrame(() => {
         rafId = 0;
-        setShowBottomPricingBar((window.scrollY || 0) < 150);
+        setShowBottomPricingBar((window.scrollY || 0) < 140);
       });
     };
 
@@ -32,15 +90,19 @@ export function LandingPage() {
     };
   }, []);
 
-  const opts: [FrameType, string, string, string, string][] = [
-    ['aviator', 'Aviator', '#C9A24B', '#475569', '54□16-142'],
-    ['wayfarer', 'Wayfarer', '#1a1a1a', '#334155', '52□18-140'],
-    ['rimless', 'Rimless', '#C0C7D1', '#cfe8ff', '51□19-138'],
-  ];
-  const cur = opts.find((o) => o[0] === k) || opts[0];
+  const cur = previewFrames.find((f) => f.id === activeFrameId) || previewFrames[0];
   const demoSlug = shops[0]?.slug || 'dahab-optics';
+  const directoryEnabled = Boolean(platformSettings.enableStoresDirectory);
+  const isMerchantLoggedIn = Boolean(
+    session && (session.role === 'merchant' || isAdminRole(session.role))
+  );
 
-  const activePlans = (platformSettings?.plans?.length ? platformSettings.plans : plans).filter((p) => p.on);
+  const allPlans = platformSettings?.plans?.length ? platformSettings.plans : plans;
+  const activePlans = allPlans.filter((p) => p.on);
+  const basicPlan = allPlans.find((p) => p.tierKey === 'basic') || allPlans[0];
+  const proPlan = allPlans.find((p) => p.tierKey === 'pro') || allPlans[1];
+  const premiumPlan = allPlans.find((p) => p.tierKey === 'premium') || allPlans[2];
+
   const discountMonths = Math.max(0, Math.min(6, platformSettings?.annualDiscountMonths ?? 2));
   const paidMonthsPerYear = Math.max(6, 12 - discountMonths);
 
@@ -137,16 +199,18 @@ export function LandingPage() {
             <a href="#features" className="hover:text-[#0F172A] transition-colors whitespace-nowrap shrink-0">
               المميزات
             </a>
-            <a
-              href="/stores"
-              onClick={(e) => {
-                e.preventDefault();
-                navigate('/stores');
-              }}
-              className="hover:text-[#0284C7] transition-colors whitespace-nowrap shrink-0"
-            >
-              دليل المحلات
-            </a>
+            {directoryEnabled && (
+              <a
+                href="/stores"
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigate('/stores');
+                }}
+                className="hover:text-[#0284C7] transition-colors whitespace-nowrap shrink-0"
+              >
+                دليل المحلات
+              </a>
+            )}
             <a href="#pricing" className="hover:text-[#0F172A] transition-colors whitespace-nowrap shrink-0">
               الباقات
             </a>
@@ -163,19 +227,21 @@ export function LandingPage() {
           </nav>
 
           <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              className="md:hidden btn btn-g btn-sm whitespace-nowrap shrink-0"
-              onClick={() => navigate('/stores')}
-            >
-              دليل المحلات
-            </button>
+            {directoryEnabled && (
+              <button
+                type="button"
+                className="md:hidden btn btn-g btn-sm whitespace-nowrap shrink-0"
+                onClick={() => navigate('/stores')}
+              >
+                دليل المحلات
+              </button>
+            )}
             <button
               type="button"
               className="btn btn-g btn-sm sm:btn border-[#0F172A]/20 text-[#0F172A] hover:bg-slate-100 font-extrabold whitespace-nowrap shrink-0"
-              onClick={() => navigate('/merchant?mode=login')}
+              onClick={() => navigate(isMerchantLoggedIn ? '/merchant' : '/merchant?mode=login')}
             >
-              دخول التاجر
+              {isMerchantLoggedIn ? 'لوحة تحكم متجري' : 'دخول التاجر'}
             </button>
           </div>
         </div>
@@ -206,20 +272,32 @@ export function LandingPage() {
           </p>
 
           <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white !py-3.5 !px-6 !text-sm sm:!text-base shadow-md"
-              onClick={() => navigate('/merchant?mode=signup')}
-            >
-              <I n="store" s={18} /> ابدأ متجرك الآن
-            </button>
-            <button
-              type="button"
-              className="btn !bg-white hover:!bg-slate-50 !border-2 !border-[#0F172A] !text-[#0F172A] !py-3.5 !px-6 !text-sm sm:!text-base"
-              onClick={() => navigate('/stores')}
-            >
-              <I n="map" s={18} /> دليل المحلات المعتمدة ⭐
-            </button>
+            {isMerchantLoggedIn ? (
+              <button
+                type="button"
+                className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white !py-3.5 !px-6 !text-sm sm:!text-base shadow-md"
+                onClick={() => navigate('/merchant')}
+              >
+                <I n="store" s={18} /> لوحة تحكم متجري
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white !py-3.5 !px-6 !text-sm sm:!text-base shadow-md"
+                onClick={() => navigate('/merchant?mode=login')}
+              >
+                <I n="store" s={18} /> تسجيل الدخول
+              </button>
+            )}
+            {directoryEnabled && (
+              <button
+                type="button"
+                className="btn !bg-white hover:!bg-slate-50 !border-2 !border-[#0F172A] !text-[#0F172A] !py-3.5 !px-6 !text-sm sm:!text-base"
+                onClick={() => navigate('/stores')}
+              >
+                <I n="map" s={18} /> دليل المحلات المعتمدة ⭐
+              </button>
+            )}
             <button
               type="button"
               className="btn btn-g !py-3.5 !px-4 !text-sm"
@@ -268,25 +346,75 @@ export function LandingPage() {
 
             <div className="relative bg-[#F1F5F9] aspect-[4/4.4] max-h-[440px] w-full overflow-hidden">
               <img
-                src={heroPortraitImg}
-                alt="عميلة ترتدي نظارة طبية أنيقة ضمن تجربة OptiVerse الذكية بمقياس 1:1 mm"
-                referrerPolicy="no-referrer"
+                src={landingEditorialPortrait}
+                alt="معاينة تفاعلية حية لتركيب النظارة على الوجه بتقنية OptiVerse"
                 className="w-full h-full object-cover object-top select-none"
               />
               <div
                 className="pointer-events-none absolute inset-0"
                 style={{
                   background:
-                    'linear-gradient(180deg, rgba(15,23,42,0.18) 0%, rgba(15,23,42,0) 24%, rgba(15,23,42,0) 64%, rgba(15,23,42,0.62) 100%)',
+                    'linear-gradient(180deg, rgba(15,23,42,0.16) 0%, rgba(15,23,42,0) 24%, rgba(15,23,42,0) 64%, rgba(15,23,42,0.58) 100%)',
                 }}
               />
 
+              {/* Live Eyewear Frame Overlaid Directly Onto Her Eye Pupils & Nose Bridge */}
+              <div
+                className="pointer-events-none absolute z-[4] flex items-center justify-center transition-all duration-200"
+                style={{
+                  top: '37.5%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: '38%',
+                }}
+              >
+                {cur.imageUrl ? (
+                  <img
+                    src={cur.imageUrl}
+                    alt={cur.name}
+                    className="w-full h-auto object-contain drop-shadow-[0_6px_12px_rgba(15,23,42,0.35)]"
+                  />
+                ) : (
+                  <svg viewBox="-115 -44 230 88" className="w-full h-auto overflow-visible drop-shadow-[0_6px_10px_rgba(15,23,42,0.28)]">
+                    <Glasses
+                      type={cur.type}
+                      frame={cur.frameColor}
+                      lens={cur.lensColor}
+                      isSun={false}
+                    />
+                  </svg>
+                )}
+              </div>
+
               <Corners />
 
-              {/* Golden Biometric Facial Landmarks & Optical Scan Overlay */}
+              {/* 5 Calibrated Percentage-Positioned Biometric Landmark Dots (No Mesh Lines) */}
+              <div className="pointer-events-none absolute inset-0 z-[5]" aria-hidden="true">
+                {[
+                  { id: 'left-pupil', top: '37%', left: '42.5%' },
+                  { id: 'right-pupil', top: '37%', left: '57.5%' },
+                  { id: 'nose-bridge', top: '37.5%', left: '50%' },
+                  { id: 'nose-tip', top: '47.5%', left: '50%' },
+                  { id: 'chin', top: '61.5%', left: '50%' },
+                ].map((pt) => (
+                  <span
+                    key={pt.id}
+                    className="absolute flex items-center justify-center w-3.5 h-3.5 rounded-full bg-amber-400/25"
+                    style={{
+                      top: pt.top,
+                      left: pt.left,
+                      transform: 'translate(-50%, -50%)',
+                    }}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#FBBF24] shadow-[0_0_8px_rgba(251,191,36,0.9)]" />
+                  </span>
+                ))}
+              </div>
+
+              {/* Subtle Horizontal Optical Scan Sweep */}
               <svg
                 viewBox="0 0 300 330"
-                className="pointer-events-none absolute inset-0 w-full h-full"
+                className="pointer-events-none absolute inset-0 w-full h-full z-[5]"
                 aria-hidden="true"
               >
                 <defs>
@@ -296,92 +424,75 @@ export function LandingPage() {
                     <stop offset="1" stopColor="#F59E0B" stopOpacity="0" />
                   </linearGradient>
                 </defs>
-
-                {/* Biometric measurement vectors across eyes, bridge, cheekbones & temples */}
-                <g stroke="#FBBF24" strokeWidth="1" strokeDasharray="3 3" opacity="0.72" fill="none">
-                  <path d="M90,141 L122,138 L150,141 L178,138 L210,141" />
-                  <path d="M122,138 L150,170 L178,138" />
-                  <path d="M98,178 L150,218 L202,178" />
-                  <path d="M150,96 L150,170" />
-                </g>
-
-                {/* Golden landmark nodes */}
-                {[
-                  [90, 141],
-                  [122, 138],
-                  [150, 141],
-                  [178, 138],
-                  [210, 141],
-                  [150, 170],
-                  [98, 178],
-                  [202, 178],
-                  [150, 218],
-                  [150, 96],
-                ].map(([cx, cy], idx) => (
-                  <g key={idx}>
-                    <circle cx={cx} cy={cy} r="5.5" fill="rgba(217, 119, 6, 0.25)" />
-                    <circle cx={cx} cy={cy} r="2.4" fill="#FBBF24" />
-                  </g>
-                ))}
-
-                {/* Dynamic subtle optical scan sweep */}
                 <rect x="34" y="0" width="232" height="2" fill="url(#heroBioLine)" className="scanline" />
               </svg>
 
               {/* Top Status & Biometric PD Badges */}
               <span
                 dir="ltr"
-                className="absolute top-3 start-3 badge !bg-[#0284C7] !text-white !border-0 shadow-sm"
+                className="absolute top-3 start-3 z-[6] badge !bg-[#0284C7] !text-white !border-0 shadow-sm"
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-white dotp" /> AI LIVE
               </span>
 
-              <span className="absolute top-3 end-3 badge !bg-[#059669] !text-white !border-0 shadow-sm">
+              <span className="absolute top-3 end-3 z-[6] badge !bg-[#059669] !text-white !border-0 shadow-sm">
                 <span>مقاس مثالي</span>{' '}
                 <span dir="ltr" className="inline-block font-mono">
-                  98% · {cur[4]}
+                  98% · {cur.dimensions}
                 </span>
               </span>
 
               {/* PD: 63mm Golden Biometric Badge */}
               <div
                 dir="ltr"
-                className="absolute bottom-3 start-3 inline-flex items-center gap-1.5 rounded-xl bg-[#0F172A]/85 backdrop-blur-md border border-[#FBBF24]/50 px-3 py-1.5 text-xs font-extrabold text-[#FDE68A] shadow-md tabular-nums"
+                className="absolute bottom-3 start-3 z-[6] inline-flex items-center gap-1.5 rounded-xl bg-[#0F172A]/85 backdrop-blur-md border border-[#FBBF24]/50 px-3 py-1.5 text-xs font-extrabold text-[#FDE68A] shadow-md tabular-nums"
               >
                 <span className="w-2 h-2 rounded-full bg-[#FBBF24] shrink-0" />
                 <span>PD: 63mm</span>
               </div>
 
               {/* Active Frame Preview Pill overlaid cleanly bottom-end */}
-              <div className="absolute bottom-3 end-3 inline-flex items-center gap-2 rounded-xl bg-white/95 backdrop-blur-md border border-[#E2E8F0] px-2.5 py-1.5 shadow-md">
-                <MiniGlasses type={cur[0]} frame={cur[2]} lens={cur[3]} w={52} />
+              <div className="absolute bottom-3 end-3 z-[6] inline-flex items-center gap-2 rounded-xl bg-white/95 backdrop-blur-md border border-[#E2E8F0] px-2.5 py-1.5 shadow-md">
+                <MiniGlasses
+                  type={cur.type}
+                  frame={cur.frameColor}
+                  lens={cur.lensColor}
+                  w={52}
+                  imageUrl={cur.imageUrl}
+                />
                 <div className="text-start leading-tight">
                   <div dir="ltr" className="text-[0.7rem] font-extrabold text-[#0F172A]">
-                    {cur[1]}
+                    {cur.name}
                   </div>
                   <div dir="ltr" className="text-[0.62rem] font-mono text-[#0284C7]">
-                    {cur[4]} mm
+                    {cur.dimensions} mm
                   </div>
                 </div>
               </div>
             </div>
 
             <div className="grid grid-cols-3 gap-2 p-3 border-t border-[#E2E8F0] bg-white">
-              {opts.map((o) => (
+              {previewFrames.slice(0, 6).map((f) => (
                 <button
-                  key={o[0]}
+                  key={f.id}
                   type="button"
-                  onClick={() => setK(o[0])}
+                  onClick={() => setActiveFrameId(f.id)}
                   className={
                     'rounded-2xl p-2 flex flex-col items-center gap-1 border transition cursor-pointer ' +
-                    (k === o[0]
+                    (cur.id === f.id
                       ? 'border-[#0284C7] bg-sky-50 text-[#0F172A]'
                       : 'border-[#E2E8F0] bg-[#F8F9FA] text-slate-700 hover:bg-slate-100')
                   }
                 >
-                  <MiniGlasses type={o[0]} frame={o[2]} lens={o[3]} w={86} />
-                  <span dir="ltr" className="text-xs font-bold">
-                    {o[1]}
+                  <MiniGlasses
+                    type={f.type}
+                    frame={f.frameColor}
+                    lens={f.lensColor}
+                    w={86}
+                    imageUrl={f.imageUrl}
+                  />
+                  <span dir="ltr" className="text-xs font-bold truncate max-w-full">
+                    {f.name}
                   </span>
                 </button>
               ))}
@@ -487,7 +598,7 @@ export function LandingPage() {
         </div>
 
         <div className="grid md:grid-cols-3 gap-5">
-          {activePlans.map((p) => {
+          {activePlans.map((p, planIdx) => {
             const isPopular = p.tierKey === 'pro';
             const isPremium = p.tierKey === 'premium';
             const displayMonthly = computeDisplayedMonthly(p.price);
@@ -495,13 +606,15 @@ export function LandingPage() {
             return (
               <div
                 key={p.id}
+                style={arrivedPricingGlow ? { animationDelay: `${planIdx * 110}ms` } : undefined}
                 className={
-                  'rounded-3xl p-6 bg-white border flex flex-col ' +
+                  'rounded-3xl p-6 bg-white border flex flex-col transition-all duration-300 ' +
                   (isPopular
                     ? 'border-[#0284C7] ring-2 ring-[#0284C7]/20 shadow-md'
                     : isPremium
                     ? 'border-[#D97706]/60 shadow-sm'
-                    : 'border-[#E2E8F0] shadow-sm')
+                    : 'border-[#E2E8F0] shadow-sm') +
+                  (arrivedPricingGlow ? ' pricing-arrive-glow ring-2 ring-amber-400/50' : '')
                 }
               >
                 <div className="flex items-center justify-between gap-2 mb-2 min-h-[26px]">
@@ -577,77 +690,87 @@ export function LandingPage() {
         <span dir="ltr" className="inline-block font-bold">
           OptiVerse
         </span>{' '}
-        — منصة محلات البصريات الذكية ·{' '}
-        <button
-          type="button"
-          className="text-[#0284C7] font-bold hover:underline cursor-pointer"
-          onClick={() => navigate('/stores')}
-        >
-          دليل المحلات المعتمدة
-        </button>
+        — منصة محلات البصريات الذكية
+        {directoryEnabled && (
+          <>
+            {' '}
+            ·{' '}
+            <button
+              type="button"
+              className="text-[#0284C7] font-bold hover:underline cursor-pointer"
+              onClick={() => navigate('/stores')}
+            >
+              دليل المحلات المعتمدة
+            </button>
+          </>
+        )}
       </footer>
 
-      {/* Scroll-Aware Fixed Bottom Pricing Bar (ONLY on LandingPage, visible near top scrollY < 150) */}
-      <div
-        aria-hidden={!showBottomPricingBar}
-        className={
-          'fixed bottom-0 inset-x-0 z-40 transition-all duration-300 ease-out px-2.5 sm:px-4 pb-2.5 sm:pb-3 ' +
-          (showBottomPricingBar
-            ? 'translate-y-0 opacity-100 pointer-events-auto'
-            : 'translate-y-full opacity-0 pointer-events-none')
-        }
-      >
-        <div className="max-w-5xl mx-auto">
-          <div className="bg-white/95 backdrop-blur-md border border-[#E2E8F0] shadow-xl rounded-2xl px-3 sm:px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5 text-xs sm:text-sm font-extrabold text-[#0F172A] min-w-0">
-              <I n="crown" s={16} c="text-[#D97706] shrink-0" />
-              <span className="truncate">
-                باقات{' '}
-                <span dir="ltr" className="inline-block">
-                  OptiVerse
-                </span>{' '}
-                للمحلات
+      {/* Scroll-Aware Elevated 3-Column Fixed Bottom Pricing Bar + Golden Triple-Chevron Button (Guests Only) */}
+      {!isMerchantLoggedIn && (
+        <div
+          aria-hidden={!showBottomPricingBar}
+          className={
+            'fixed bottom-2 sm:bottom-3 inset-x-0 z-40 transition-all duration-300 ease-out px-2 sm:px-4 ' +
+            (showBottomPricingBar
+              ? 'translate-y-0 opacity-100 pointer-events-auto'
+              : 'translate-y-full opacity-0 pointer-events-none')
+          }
+        >
+          <div className="max-w-4xl mx-auto flex flex-col items-center gap-1.5">
+            <a
+              href="#pricing"
+              onClick={scrollToPricing}
+              className="w-full grid grid-cols-3 bg-white/95 backdrop-blur-md border border-[#E2E8F0] shadow-xl rounded-2xl overflow-hidden divide-x divide-x-reverse divide-[#E2E8F0]"
+            >
+              <div className="px-2 sm:px-4 py-2.5 text-center hover:bg-slate-50 transition">
+                <div className="text-[0.68rem] sm:text-xs font-extrabold text-[#0F172A] truncate">
+                  الباقة الأساسية
+                </div>
+                <div className="text-[0.68rem] sm:text-xs font-bold text-[#0284C7] mt-0.5 tabular-nums">
+                  <span dir="ltr">{fmt(basicPlan?.price ?? 599)}</span> ج.م / شهرياً
+                </div>
+              </div>
+              <div className="px-2 sm:px-4 py-2.5 text-center bg-sky-50/70 hover:bg-sky-50 transition">
+                <div className="text-[0.68rem] sm:text-xs font-extrabold text-[#0F172A] truncate">
+                  الباقة المتقدمة
+                </div>
+                <div className="text-[0.68rem] sm:text-xs font-bold text-[#0284C7] mt-0.5 tabular-nums">
+                  <span dir="ltr">{fmt(proPlan?.price ?? 999)}</span> ج.م / شهرياً
+                </div>
+              </div>
+              <div className="px-2 sm:px-4 py-2.5 text-center hover:bg-amber-50/60 transition">
+                <div className="text-[0.68rem] sm:text-xs font-extrabold text-[#0F172A] truncate">
+                  باقة البريميوم
+                </div>
+                <div className="text-[0.68rem] sm:text-xs font-bold text-[#D97706] mt-0.5 tabular-nums">
+                  <span dir="ltr">{fmt(premiumPlan?.price ?? 1399)}</span> ج.م / شهرياً
+                </div>
+              </div>
+            </a>
+
+            <button
+              type="button"
+              onClick={scrollToPricing}
+              aria-label="الانتقال إلى تفاصيل الباقات"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-slate-900/90 hover:bg-slate-900 border border-amber-400/50 text-amber-400 shadow-lg cursor-pointer transition hover:scale-[1.03]"
+            >
+              <span className="text-[0.65rem] font-extrabold text-amber-200 tracking-wide">تفاصيل الباقات</span>
+              <span className="inline-flex flex-col items-center -space-y-2 leading-none" aria-hidden="true">
+                <svg viewBox="0 0 16 10" className="w-3 h-2 chevron-pulse-1 text-amber-300" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 2.5L8 7.5L13 2.5" />
+                </svg>
+                <svg viewBox="0 0 16 10" className="w-3 h-2 chevron-pulse-2 text-amber-400" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 2.5L8 7.5L13 2.5" />
+                </svg>
+                <svg viewBox="0 0 16 10" className="w-3 h-2 chevron-pulse-3 text-amber-500" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 2.5L8 7.5L13 2.5" />
+                </svg>
               </span>
-            </div>
-
-            <div className="flex items-center gap-1 bg-[#F8F9FA] p-1 rounded-xl border border-[#E2E8F0] text-[0.7rem] sm:text-xs font-bold shrink-0">
-              <button
-                type="button"
-                onClick={() => setBilling('monthly')}
-                className={
-                  'px-2.5 sm:px-3 py-1 rounded-lg transition cursor-pointer whitespace-nowrap ' +
-                  (billing === 'monthly' ? 'bg-[#0F172A] text-white' : 'text-slate-600')
-                }
-              >
-                شهري
-              </button>
-              <button
-                type="button"
-                onClick={() => setBilling('annual')}
-                className={
-                  'px-2.5 sm:px-3 py-1 rounded-lg transition cursor-pointer whitespace-nowrap ' +
-                  (billing === 'annual' ? 'bg-[#059669] text-white' : 'text-slate-600')
-                }
-              >
-                سنوي (وفّر {discountMonths} شهور)
-              </button>
-            </div>
-
-            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 ms-auto sm:ms-0">
-              <a href="#pricing" className="btn btn-g btn-sm !text-[0.72rem] sm:!text-xs whitespace-nowrap shrink-0">
-                مقارنة الباقات
-              </a>
-              <button
-                type="button"
-                className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white btn-sm !text-[0.72rem] sm:!text-xs whitespace-nowrap shrink-0"
-                onClick={() => navigate('/merchant?mode=signup')}
-              >
-                ابدأ متجرك الآن
-              </button>
-            </div>
+            </button>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

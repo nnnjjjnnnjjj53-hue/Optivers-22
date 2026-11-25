@@ -14,6 +14,7 @@ import {
   ProtectionExtra,
   Shop,
 } from '../types';
+import { DEFAULT_OFFICIAL_LENS_BRANDS } from './opticalLensMatrix';
 
 export const FRAME_COLORS: [string, string][] = [
   ['ذهبي', '#C9A24B'],
@@ -80,14 +81,14 @@ export const PLANS0: Plan[] = [
     name: 'الأساسية',
     price: 599,
     maxProducts: 100,
-    monthlyAiCredits: 100,
+    monthlyAiCredits: 110,
     turboUploadEnabled: false,
     cameraPdRulerEnabled: false,
     featuredBoostEnabled: false,
     on: true,
     feats: [
       'حتى 100 نظارة نشطة بالمتجر',
-      'معالجة AI قياسية (Gemini Batch)',
+      'معالجة AI قياسية وتجهيز صور الاستوديو',
       'تجربة حية 1:1 على الوجه + رابط واتساب مباشر',
       'قاعدة عملاء وتذكير 6 و12 شهر',
     ],
@@ -98,14 +99,14 @@ export const PLANS0: Plan[] = [
     name: 'الاحترافية',
     price: 999,
     maxProducts: 200,
-    monthlyAiCredits: 250,
+    monthlyAiCredits: 220,
     turboUploadEnabled: true,
     cameraPdRulerEnabled: true,
     featuredBoostEnabled: false,
     on: true,
     feats: [
       'حتى 200 نظارة نشطة بالمتجر',
-      'رفع فوري تيربو ⚡ (Turbo Instant Upload)',
+      'رفع فوري تيربو ⚡ + إضافة سريعة لنظارة واحدة',
       'مسطرة قياس PD بالكاميرا بدقة طبية',
       'تجميع الألوان التلقائي + تصويت الأصدقاء',
     ],
@@ -116,7 +117,7 @@ export const PLANS0: Plan[] = [
     name: 'بريميوم',
     price: 1399,
     maxProducts: 300,
-    monthlyAiCredits: 400,
+    monthlyAiCredits: 330,
     turboUploadEnabled: true,
     cameraPdRulerEnabled: true,
     featuredBoostEnabled: true,
@@ -124,16 +125,125 @@ export const PLANS0: Plan[] = [
     feats: [
       'حتى 300 نظارة نشطة بالمتجر',
       'ظهور مميز ⭐ في صدارة دليل المحلات المعتمدة',
-      'رفع فوري تيربو ⚡ + مسطرة PD بالكاميرا',
+      'رفع فوري تيربو ⚡ + إضافة سريعة + مسطرة PD بالكاميرا',
       'أولوية الدعم الفني وتقارير العملاء المتقدمة',
     ],
   },
 ];
 
+export interface StoreThemeConfig {
+  key: 'royal_classic' | 'clinical_pure' | 'modern_dark' | 'emerald_elite';
+  nameAr: string;
+  descAr: string;
+  primary: string;
+  accent: string;
+  cta: string;
+  pageBg: string;
+  cardBg: string;
+  text: string;
+  isDark?: boolean;
+  swatches: [string, string, string];
+}
+
+export const STORE_THEMES: StoreThemeConfig[] = [
+  {
+    key: 'royal_classic',
+    nameAr: 'الملكية الكلاسيكية',
+    descAr: 'كحلي داكن + ذهبي دافئ على خلفية بيضاء',
+    primary: '#0F172A',
+    accent: '#0284C7',
+    cta: '#D97706',
+    pageBg: '#F8F9FA',
+    cardBg: '#FFFFFF',
+    text: '#0F172A',
+    swatches: ['#0F172A', '#D97706', '#F8F9FA'],
+  },
+  {
+    key: 'clinical_pure',
+    nameAr: 'الطبية النقية',
+    descAr: 'تركواز سماوي هادئ + أبيض سريري نقي',
+    primary: '#0369A1',
+    accent: '#0284C7',
+    cta: '#0284C7',
+    pageBg: '#F4F9FC',
+    cardBg: '#FFFFFF',
+    text: '#0F172A',
+    swatches: ['#0284C7', '#38BDF8', '#FFFFFF'],
+  },
+  {
+    key: 'modern_dark',
+    nameAr: 'العصرية الداكنة',
+    descAr: 'جرافيت فخم + لمسات برتقالية ذهبية',
+    primary: '#111827',
+    accent: '#F59E0B',
+    cta: '#D97706',
+    pageBg: '#0F172A',
+    cardBg: '#1E293B',
+    text: '#F8FAFC',
+    isDark: true,
+    swatches: ['#111827', '#F59E0B', '#1E293B'],
+  },
+  {
+    key: 'emerald_elite',
+    nameAr: 'النخبة الزمردية',
+    descAr: 'أخضر زمردي داكن + عاجي دافئ',
+    primary: '#065F46',
+    accent: '#059669',
+    cta: '#059669',
+    pageBg: '#F7FBF9',
+    cardBg: '#FFFFFF',
+    text: '#064E3B',
+    swatches: ['#065F46', '#10B981', '#FAF7F0'],
+  },
+];
+
+export function resolveStoreTheme(themeKey?: string, legacyColor?: string): StoreThemeConfig {
+  const byKey = STORE_THEMES.find((t) => t.key === themeKey);
+  if (byKey) return byKey;
+  if (legacyColor === '#059669') return STORE_THEMES[3];
+  if (legacyColor === '#0F172A') return STORE_THEMES[2];
+  if (legacyColor === '#0284C7') return STORE_THEMES[1];
+  return STORE_THEMES[0];
+}
+
+export const DEFAULT_LANDING_PREVIEW_FRAMES = [
+  {
+    id: 'lp-aviator',
+    name: 'Aviator',
+    type: 'aviator' as const,
+    frameColor: '#C9A24B',
+    lensColor: '#475569',
+    dimensions: '54□16-142',
+    widthPx: 146,
+  },
+  {
+    id: 'lp-wayfarer',
+    name: 'Wayfarer',
+    type: 'wayfarer' as const,
+    frameColor: '#1a1a1a',
+    lensColor: '#334155',
+    dimensions: '52□18-140',
+    widthPx: 142,
+  },
+  {
+    id: 'lp-rimless',
+    name: 'Rimless',
+    type: 'rimless' as const,
+    frameColor: '#C0C7D1',
+    lensColor: '#cfe8ff',
+    dimensions: '51□19-138',
+    widthPx: 138,
+  },
+];
+
 export const PLATFORM_SETTINGS0: PlatformSettings = {
   enablePrescriptionLenses: false,
+  enableLensesSystem: false,
   allowMerchantLensBrandingToggle: false,
   enableSponsoredSuppliers: false,
+  enableStoresDirectory: false,
+  landingPreviewFrames: DEFAULT_LANDING_PREVIEW_FRAMES,
+  officialLensBrands: DEFAULT_OFFICIAL_LENS_BRANDS,
   plans: PLANS0,
   annualDiscountMonths: 2,
   trialDays: 14,
@@ -180,7 +290,7 @@ export const SHOPS0: Shop[] = [
     isFeatured: true,
     recall6mEnabled: true,
     recall12mEnabled: true,
-    aiCreditsLimit: 250,
+    aiCreditsLimit: 220,
     aiCreditsUsed: 18,
     topupCredits: 0,
     planTier: 'pro',
@@ -195,6 +305,7 @@ export const SHOPS0: Shop[] = [
     color: '#0284C7',
     wa: '01001234567',
     logo: '👓',
+    tagline: 'تشكيلة منتقاة من أرقى الإطارات الطبية والشمسية الأصلية',
   },
   {
     id: '11111111-1111-4111-8111-111111111102',
@@ -212,7 +323,7 @@ export const SHOPS0: Shop[] = [
     isFeatured: true,
     recall6mEnabled: true,
     recall12mEnabled: true,
-    aiCreditsLimit: 400,
+    aiCreditsLimit: 330,
     aiCreditsUsed: 42,
     topupCredits: 50,
     planTier: 'premium',
@@ -226,6 +337,7 @@ export const SHOPS0: Shop[] = [
     color: '#D97706',
     wa: '01012345678',
     logo: '🕶️',
+    tagline: 'أحدث موديلات النظارات الشمسية والإطارات العصرية',
   },
   {
     id: '11111111-1111-4111-8111-111111111103',
@@ -243,7 +355,7 @@ export const SHOPS0: Shop[] = [
     isFeatured: false,
     recall6mEnabled: true,
     recall12mEnabled: false,
-    aiCreditsLimit: 100,
+    aiCreditsLimit: 110,
     aiCreditsUsed: 9,
     topupCredits: 0,
     planTier: 'basic',
@@ -258,6 +370,7 @@ export const SHOPS0: Shop[] = [
     color: '#0F172A',
     wa: '01112345678',
     logo: '👁️',
+    tagline: 'إطارات خفيفة ومريحة للاستخدام اليومي',
   },
   {
     id: '11111111-1111-4111-8111-111111111104',
@@ -275,7 +388,7 @@ export const SHOPS0: Shop[] = [
     isFeatured: false,
     recall6mEnabled: true,
     recall12mEnabled: true,
-    aiCreditsLimit: 100,
+    aiCreditsLimit: 110,
     aiCreditsUsed: 20,
     topupCredits: 0,
     planTier: 'basic',
@@ -289,6 +402,7 @@ export const SHOPS0: Shop[] = [
     color: '#0284C7',
     wa: '01223344556',
     logo: '✨',
+    tagline: 'تصميمات شبابية عصرية بأسعار تنافسية',
   },
   {
     id: '11111111-1111-4111-8111-111111111105',
@@ -321,6 +435,7 @@ export const SHOPS0: Shop[] = [
     color: '#0284C7',
     wa: '01099887766',
     logo: '👓',
+    tagline: 'خبراء البصريات والإطارات الطبية في صعيد مصر',
   },
   {
     id: '11111111-1111-4111-8111-111111111106',
@@ -338,7 +453,7 @@ export const SHOPS0: Shop[] = [
     isFeatured: false,
     recall6mEnabled: true,
     recall12mEnabled: true,
-    aiCreditsLimit: 250,
+    aiCreditsLimit: 220,
     aiCreditsUsed: 61,
     topupCredits: 0,
     planTier: 'pro',
@@ -352,6 +467,7 @@ export const SHOPS0: Shop[] = [
     color: '#D97706',
     wa: '01554433221',
     logo: '🌟',
+    tagline: 'جودة أصلية وضمان شامل على كل إطار',
   },
 ];
 

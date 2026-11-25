@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { InquiryStatus, OrderStage, ShopStatus } from '../types';
 import { I } from './Icons';
 
@@ -336,6 +336,8 @@ export function Shell({
   highlight,
   headerAction,
   onSignOut,
+  mobileMode = 'drawer',
+  primaryDockIds,
 }: {
   items: ShellNavItem[];
   active: string;
@@ -346,14 +348,57 @@ export function Shell({
   highlight?: string;
   headerAction?: React.ReactNode;
   onSignOut?: () => void;
+  mobileMode?: 'drawer' | 'dock';
+  primaryDockIds?: string[];
 }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [dockVisible, setDockVisible] = useState(true);
+  const lastScrollYRef = useRef(0);
   const totalBadges = items.reduce((sum, it) => sum + (it[3] || 0), 0);
+
+  useEffect(() => {
+    if (mobileMode !== 'dock' || typeof window === 'undefined') return;
+    lastScrollYRef.current = window.scrollY || 0;
+    let rafId = 0;
+
+    const handleScroll = () => {
+      if (rafId) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = 0;
+        const y = window.scrollY || 0;
+        const prev = lastScrollYRef.current;
+        if (y <= 40) {
+          setDockVisible(true);
+        } else if (y > 80 && y - prev > 6) {
+          setDockVisible(false);
+        } else if (prev - y > 6) {
+          setDockVisible(true);
+        }
+        lastScrollYRef.current = y;
+      });
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      if (rafId) window.cancelAnimationFrame(rafId);
+    };
+  }, [mobileMode]);
 
   const selectTab = (id: string) => {
     setActive(id);
     setDrawerOpen(false);
+    setDockVisible(true);
   };
+
+  const primaryIds = primaryDockIds?.length ? primaryDockIds : items.slice(0, 3).map((x) => x[0]);
+  const primaryDockItems = primaryIds
+    .map((id) => items.find((it) => it[0] === id))
+    .filter((x): x is ShellNavItem => Boolean(x))
+    .slice(0, 3);
+  const primarySet = new Set(primaryDockItems.map((x) => x[0]));
+  const secondaryDockItems = items.filter((it) => !primarySet.has(it[0]));
+  const secondaryBadges = secondaryDockItems.reduce((sum, it) => sum + (it[3] || 0), 0);
 
   return (
     <div className="min-h-screen lg:flex bg-[#F8F9FA] text-[#0F172A]">
@@ -408,7 +453,7 @@ export function Shell({
         )}
       </aside>
 
-      {/* Clean Minimal Mobile Header (No Cramped Scrolling Chips) */}
+      {/* Clean Minimal Mobile Header */}
       <header className="lg:hidden sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-[#E2E8F0]">
         <div className="flex items-center justify-between gap-3 px-4 py-3">
           <div className="min-w-0">
@@ -419,100 +464,234 @@ export function Shell({
         </div>
       </header>
 
-      {/* Main Content Area (extra bottom clearance above mobile floating ☰ القائمة button) */}
-      <main className="flex-1 p-4 lg:p-7 pb-28 lg:pb-8 min-w-0 fade" key={active}>
+      {/* Main Content Area (safe bottom clearance for dock or floating menu) */}
+      <main
+        className={'flex-1 p-4 lg:p-7 min-w-0 fade ' + (mobileMode === 'dock' ? 'pb-24 lg:pb-8' : 'pb-28 lg:pb-8')}
+        key={active}
+      >
         {children}
       </main>
 
-      {/* Mobile Floating Bottom-Left Drawer Trigger (☰ القائمة) */}
-      <button
-        type="button"
-        onClick={() => setDrawerOpen(true)}
-        aria-label="فتح القائمة"
-        className="lg:hidden fixed bottom-4 left-4 z-40 inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-[#0F172A] text-white font-extrabold text-sm shadow-lg hover:bg-slate-800 active:scale-95 transition cursor-pointer whitespace-nowrap"
-      >
-        <I n="menu" s={18} />
-        <span>☰ القائمة</span>
-        {totalBadges > 0 && (
-          <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-[#D97706] text-white text-[0.7rem] flex items-center justify-center tabular-nums">
-            {totalBadges}
-          </span>
-        )}
-      </button>
-
-      {/* Smooth Slide-Over Drawer (Compositor transform + opacity) */}
-      <div
-        className={
-          'lg:hidden fixed inset-0 z-50 transition-opacity duration-200 ' +
-          (drawerOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none')
-        }
-        aria-hidden={!drawerOpen}
-      >
-        <div
-          className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]"
-          onClick={() => setDrawerOpen(false)}
-        />
-        <div
-          className={
-            'fixed inset-y-0 left-0 w-[82vw] max-w-[310px] bg-white border-e border-[#E2E8F0] shadow-2xl p-4 flex flex-col transition-transform duration-200 ease-out ' +
-            (drawerOpen ? 'translate-x-0' : '-translate-x-full')
-          }
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="flex items-center justify-between gap-2 pb-3 mb-3 border-b border-[#E2E8F0]">
-            <div className="min-w-0">
-              <div className="font-extrabold text-[#0F172A] truncate">{title}</div>
-              <div className="text-xs text-slate-500 truncate">{sub}</div>
-            </div>
-            <button
-              type="button"
-              className="btn btn-g btn-sm !p-2 shrink-0"
-              onClick={() => setDrawerOpen(false)}
-              aria-label="إغلاق القائمة"
-            >
-              <I n="x" s={16} />
-            </button>
-          </div>
-
-          <nav className="flex-1 overflow-y-auto space-y-1 py-1">
-            {items.map((it) => {
+      {mobileMode === 'dock' ? (
+        <>
+          {/* Smart Auto-Hide Mobile Bottom Dock */}
+          <nav
+            aria-label="التنقل السريع للتاجر"
+            className={
+              'lg:hidden fixed bottom-0 inset-x-0 z-40 h-16 bg-white/95 backdrop-blur-md border-t border-[#E2E8F0] shadow-[0_-4px_18px_rgba(15,23,42,0.06)] grid grid-cols-4 items-center px-2 transition-all duration-200 ' +
+              (dockVisible ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0 pointer-events-none')
+            }
+          >
+            {primaryDockItems.map((it) => {
               const isAct = active === it[0];
+              const badge = it[3] || 0;
+              const shortLabel = it[0] === 'crm' ? 'العملاء' : it[1];
               return (
                 <button
                   key={it[0]}
                   type="button"
                   onClick={() => selectTab(it[0])}
                   className={
-                    'w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-bold transition text-start cursor-pointer ' +
-                    (isAct
-                      ? 'bg-[#0F172A] text-white'
-                      : 'text-slate-700 hover:bg-[#F8F9FA]')
+                    'relative h-full flex flex-col items-center justify-center gap-0.5 text-[0.7rem] font-bold cursor-pointer transition ' +
+                    (isAct ? 'text-[#0284C7]' : 'text-slate-600 hover:text-[#0F172A]')
                   }
                 >
-                  <I n={it[2]} s={18} />
-                  <span className="truncate">{it[1]}</span>
-                  {(it[3] || 0) > 0 && <span className="ms-auto badge b-bad tabular-nums">{it[3]}</span>}
+                  <div className="relative">
+                    <I n={it[2]} s={20} />
+                    {badge > 0 && (
+                      <span className="absolute -top-1.5 -end-2.5 min-w-[16px] h-4 px-1 rounded-full bg-[#D97706] text-white text-[0.6rem] font-extrabold flex items-center justify-center tabular-nums">
+                        {badge}
+                      </span>
+                    )}
+                  </div>
+                  <span className="truncate max-w-full px-1">{shortLabel}</span>
+                  {isAct && <span className="absolute top-0 inset-x-4 h-0.5 rounded-full bg-[#0284C7]" />}
                 </button>
               );
             })}
+
+            <button
+              type="button"
+              onClick={() => setDrawerOpen(true)}
+              className={
+                'relative h-full flex flex-col items-center justify-center gap-0.5 text-[0.7rem] font-bold cursor-pointer transition ' +
+                (!primarySet.has(active) ? 'text-[#0284C7]' : 'text-slate-600 hover:text-[#0F172A]')
+              }
+            >
+              <div className="relative">
+                <I n="menu" s={20} />
+                {secondaryBadges > 0 && (
+                  <span className="absolute -top-1.5 -end-2.5 min-w-[16px] h-4 px-1 rounded-full bg-[#D97706] text-white text-[0.6rem] font-extrabold flex items-center justify-center tabular-nums">
+                    {secondaryBadges}
+                  </span>
+                )}
+              </div>
+              <span>المزيد</span>
+              {!primarySet.has(active) && <span className="absolute top-0 inset-x-4 h-0.5 rounded-full bg-[#0284C7]" />}
+            </button>
           </nav>
 
-          <div className="pt-3 mt-3 border-t border-[#E2E8F0] space-y-2">
-            {onSignOut && (
-              <button
-                type="button"
-                onClick={() => {
-                  setDrawerOpen(false);
-                  onSignOut();
-                }}
-                className="w-full btn btn-d justify-center"
-              >
-                <I n="logout" s={16} /> تسجيل الخروج
-              </button>
-            )}
+          {/* Clean Slide-Up Bottom Sheet Drawer for Secondary Sections */}
+          <div
+            className={
+              'lg:hidden fixed inset-0 z-50 transition-opacity duration-200 ' +
+              (drawerOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none')
+            }
+            aria-hidden={!drawerOpen}
+          >
+            <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]" onClick={() => setDrawerOpen(false)} />
+            <div
+              className={
+                'fixed inset-x-0 bottom-0 bg-white border-t border-[#E2E8F0] rounded-t-3xl shadow-2xl p-4 pb-6 max-h-[82vh] flex flex-col transition-transform duration-200 ease-out ' +
+                (drawerOpen ? 'translate-y-0' : 'translate-y-full')
+              }
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="w-10 h-1 rounded-full bg-slate-300 mx-auto mb-3 shrink-0" />
+              <div className="flex items-center justify-between gap-2 pb-3 mb-2 border-b border-[#E2E8F0]">
+                <div className="min-w-0">
+                  <div className="font-extrabold text-[#0F172A] truncate">{title}</div>
+                  <div className="text-xs text-slate-500 truncate">{sub}</div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-g btn-sm !p-2 shrink-0"
+                  onClick={() => setDrawerOpen(false)}
+                  aria-label="إغلاق القائمة"
+                >
+                  <I n="x" s={16} />
+                </button>
+              </div>
+
+              <nav className="flex-1 overflow-y-auto space-y-1 py-1">
+                {secondaryDockItems.map((it) => {
+                  const isAct = active === it[0];
+                  return (
+                    <button
+                      key={it[0]}
+                      type="button"
+                      onClick={() => selectTab(it[0])}
+                      className={
+                        'w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-bold transition text-start cursor-pointer ' +
+                        (isAct ? 'bg-[#0F172A] text-white' : 'text-slate-700 hover:bg-[#F8F9FA]')
+                      }
+                    >
+                      <I n={it[2]} s={18} />
+                      <span className="truncate">{it[1]}</span>
+                      {(it[3] || 0) > 0 && <span className="ms-auto badge b-bad tabular-nums">{it[3]}</span>}
+                    </button>
+                  );
+                })}
+              </nav>
+
+              {onSignOut && (
+                <div className="pt-3 mt-2 border-t border-[#E2E8F0]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDrawerOpen(false);
+                      onSignOut();
+                    }}
+                    className="w-full btn btn-d justify-center"
+                  >
+                    <I n="logout" s={16} /> تسجيل الخروج
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      </div>
+        </>
+      ) : (
+        <>
+          {/* Mobile Floating Bottom-Left Drawer Trigger (☰ القائمة) */}
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            aria-label="فتح القائمة"
+            className="lg:hidden fixed bottom-4 left-4 z-40 inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-[#0F172A] text-white font-extrabold text-sm shadow-lg hover:bg-slate-800 active:scale-95 transition cursor-pointer whitespace-nowrap"
+          >
+            <I n="menu" s={18} />
+            <span>☰ القائمة</span>
+            {totalBadges > 0 && (
+              <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-[#D97706] text-white text-[0.7rem] flex items-center justify-center tabular-nums">
+                {totalBadges}
+              </span>
+            )}
+          </button>
+
+          {/* Smooth Slide-Over Drawer (Compositor transform + opacity) */}
+          <div
+            className={
+              'lg:hidden fixed inset-0 z-50 transition-opacity duration-200 ' +
+              (drawerOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none')
+            }
+            aria-hidden={!drawerOpen}
+          >
+            <div
+              className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]"
+              onClick={() => setDrawerOpen(false)}
+            />
+            <div
+              className={
+                'fixed inset-y-0 left-0 w-[82vw] max-w-[310px] bg-white border-e border-[#E2E8F0] shadow-2xl p-4 flex flex-col transition-transform duration-200 ease-out ' +
+                (drawerOpen ? 'translate-x-0' : '-translate-x-full')
+              }
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-2 pb-3 mb-3 border-b border-[#E2E8F0]">
+                <div className="min-w-0">
+                  <div className="font-extrabold text-[#0F172A] truncate">{title}</div>
+                  <div className="text-xs text-slate-500 truncate">{sub}</div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-g btn-sm !p-2 shrink-0"
+                  onClick={() => setDrawerOpen(false)}
+                  aria-label="إغلاق القائمة"
+                >
+                  <I n="x" s={16} />
+                </button>
+              </div>
+
+              <nav className="flex-1 overflow-y-auto space-y-1 py-1">
+                {items.map((it) => {
+                  const isAct = active === it[0];
+                  return (
+                    <button
+                      key={it[0]}
+                      type="button"
+                      onClick={() => selectTab(it[0])}
+                      className={
+                        'w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-bold transition text-start cursor-pointer ' +
+                        (isAct ? 'bg-[#0F172A] text-white' : 'text-slate-700 hover:bg-[#F8F9FA]')
+                      }
+                    >
+                      <I n={it[2]} s={18} />
+                      <span className="truncate">{it[1]}</span>
+                      {(it[3] || 0) > 0 && <span className="ms-auto badge b-bad tabular-nums">{it[3]}</span>}
+                    </button>
+                  );
+                })}
+              </nav>
+
+              <div className="pt-3 mt-3 border-t border-[#E2E8F0] space-y-2">
+                {onSignOut && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDrawerOpen(false);
+                      onSignOut();
+                    }}
+                    className="w-full btn btn-d justify-center"
+                  >
+                    <I n="logout" s={16} /> تسجيل الخروج
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

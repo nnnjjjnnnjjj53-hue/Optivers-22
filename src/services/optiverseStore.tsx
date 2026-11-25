@@ -3,6 +3,7 @@ import {
   AUDIT0,
   BRANDS0,
   CRM_CUSTOMERS0,
+  DEFAULT_LANDING_PREVIEW_FRAMES,
   DEFAULT_SHOP_ID,
   EXTRAS0,
   INQ0,
@@ -13,6 +14,7 @@ import {
   PRODUCTS0,
   SHOPS0,
 } from '../data/seed';
+import { DEFAULT_OFFICIAL_LENS_BRANDS } from '../data/opticalLensMatrix';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { idbLoadSnapshot, idbSaveSnapshot } from '../utils/indexedDbStore';
 import {
@@ -23,6 +25,7 @@ import {
   CrmCustomer,
   Inquiry,
   LensType,
+  MerchantLensBrandConfig,
   PaymentRecord,
   Plan,
   PlatformSettings,
@@ -49,7 +52,7 @@ export type ModalState =
   | { t: 'addpayment'; s?: Shop }
   | { t: 'view3d'; p: Product }
   | { t: 'share'; link: string }
-  | { t: 'vote'; p: Product; link: string }
+  | { t: 'vote'; p: Product; p2?: Product; link: string }
   | { t: 'catitem'; kind: 'lens' | 'brand' | 'extra'; item?: any }
   | { t: 'catdel'; kind: 'lens' | 'brand' | 'extra'; item: any }
   | { t: 'disc'; kind: 'lens' | 'brand' | 'extra' | 'prod'; item: any }
@@ -245,6 +248,7 @@ export interface StoreCtxValue {
   activeShop: Shop;
   setActiveShopSlug: (slug: string) => void;
   updateShop: (shopId: string, patch: Partial<Shop>) => Promise<void>;
+  saveShopLensConfigs: (shopId: string, configs: MerchantLensBrandConfig[]) => Promise<void>;
   addTopUpCredits: (shopId: string, packFrames?: number, packPrice?: number) => Promise<void>;
   addShopManual: (opts: {
     name: string;
@@ -411,7 +415,20 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       if (idbSnap.brands?.length) setBrands(normalizeCatalogShopIds(idbSnap.brands));
       if (idbSnap.extras?.length) setExtras(normalizeCatalogShopIds(idbSnap.extras));
       if (idbSnap.plans?.length) setPlans(idbSnap.plans);
-      if (idbSnap.platformSettings) setPlatformSettings(idbSnap.platformSettings);
+      if (idbSnap.platformSettings) {
+        const ps = idbSnap.platformSettings;
+        const lensesOn = Boolean(ps.enableLensesSystem ?? ps.enablePrescriptionLenses);
+        setPlatformSettings({
+          ...PLATFORM_SETTINGS0,
+          ...ps,
+          enablePrescriptionLenses: lensesOn,
+          enableLensesSystem: lensesOn,
+          officialLensBrands:
+            Array.isArray(ps.officialLensBrands) && ps.officialLensBrands.length
+              ? ps.officialLensBrands
+              : DEFAULT_OFFICIAL_LENS_BRANDS,
+        });
+      }
       if (idbSnap.payments?.length) setPayments(idbSnap.payments);
       if (idbSnap.auditLogs?.length) setAuditLogs(idbSnap.auditLogs);
       if (typeof idbSnap.extraShops === 'number') setExtraShops(idbSnap.extraShops);
@@ -482,7 +499,20 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         setProducts(p.products);
         if (p.reviews) setReviews(p.reviews);
         if (p.crmCustomers) setCrmCustomers(p.crmCustomers);
-        if (p.platformSettings) setPlatformSettings(p.platformSettings);
+        if (p.platformSettings) {
+          const ps = p.platformSettings;
+          const lensesOn = Boolean(ps.enableLensesSystem ?? ps.enablePrescriptionLenses);
+          setPlatformSettings({
+            ...PLATFORM_SETTINGS0,
+            ...ps,
+            enablePrescriptionLenses: lensesOn,
+            enableLensesSystem: lensesOn,
+            officialLensBrands:
+              Array.isArray(ps.officialLensBrands) && ps.officialLensBrands.length
+                ? ps.officialLensBrands
+                : DEFAULT_OFFICIAL_LENS_BRANDS,
+          });
+        }
         const mineIds = getMyInquiryIds();
         setInq(p.inq.map((q) => (mineIds.includes(q.id) ? { ...q, mine: true } : q)));
         setLensTypes(p.lensTypes);
@@ -658,7 +688,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             isFeatured: Boolean(r.is_featured),
             recall6mEnabled: r.recall_6m_enabled !== false,
             recall12mEnabled: r.recall_12m_enabled !== false,
-            aiCreditsLimit: typeof r.ai_credits_limit === 'number' ? r.ai_credits_limit : 100,
+            aiCreditsLimit: typeof r.ai_credits_limit === 'number' ? r.ai_credits_limit : 110,
             aiCreditsUsed: typeof r.ai_credits_used === 'number' ? r.ai_credits_used : 0,
             topupCredits: typeof r.topup_credits === 'number' ? r.topup_credits : 0,
             isDemoAdminStore: Boolean(r.is_demo_admin_store),
@@ -672,8 +702,12 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             trialEndsAt: r.trial_ends_at || undefined,
             exp: r.expires_label,
             logo: r.logo,
+            tagline: r.tagline || undefined,
             color: r.color,
+            themeKey: r.theme_key || undefined,
+            aiLogoGenerations: typeof r.ai_logo_generations === 'number' ? r.ai_logo_generations : undefined,
             wa: r.wa_phone,
+            merchantLensConfigs: Array.isArray(r.merchant_lens_configs) ? r.merchant_lens_configs : undefined,
           }))
         );
       }
@@ -685,10 +719,21 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       if (settingsRes.data) {
         const sRow = settingsRes.data as any;
         const dbPlans: Plan[] = Array.isArray(sRow.plans) && sRow.plans.length ? sRow.plans : PLANS0;
+        const lensesFlag = Boolean(sRow.enable_lenses_system ?? sRow.enable_prescription_lenses);
         setPlatformSettings({
-          enablePrescriptionLenses: Boolean(sRow.enable_prescription_lenses),
+          enablePrescriptionLenses: lensesFlag,
+          enableLensesSystem: lensesFlag,
           allowMerchantLensBrandingToggle: Boolean(sRow.allow_merchant_lens_branding_toggle),
           enableSponsoredSuppliers: Boolean(sRow.enable_sponsored_suppliers),
+          enableStoresDirectory: Boolean(sRow.enable_stores_directory),
+          landingPreviewFrames:
+            Array.isArray(sRow.landing_preview_frames) && sRow.landing_preview_frames.length
+              ? sRow.landing_preview_frames
+              : DEFAULT_LANDING_PREVIEW_FRAMES,
+          officialLensBrands:
+            Array.isArray(sRow.official_lens_brands) && sRow.official_lens_brands.length
+              ? sRow.official_lens_brands
+              : DEFAULT_OFFICIAL_LENS_BRANDS,
           plans: dbPlans,
           annualDiscountMonths: Number(sRow.annual_discount_months ?? 2),
           trialDays: Number(sRow.trial_days ?? 14),
@@ -707,7 +752,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             name: r.name,
             price: r.price,
             maxProducts: r.max_products || (idx === 0 ? 100 : idx === 1 ? 200 : 300),
-            monthlyAiCredits: r.monthly_ai_credits || (idx === 0 ? 100 : idx === 1 ? 250 : 400),
+            monthlyAiCredits: r.monthly_ai_credits || (idx === 0 ? 110 : idx === 1 ? 220 : 330),
             turboUploadEnabled: Boolean(r.turbo_upload_enabled ?? idx > 0),
             cameraPdRulerEnabled: Boolean(r.camera_pd_ruler_enabled ?? idx > 0),
             featuredBoostEnabled: Boolean(r.featured_boost_enabled ?? idx > 1),
@@ -806,6 +851,11 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
                 model3dUrl: resolvedModel3d,
                 modelCalibration:
                   r.model_calibration && typeof r.model_calibration === 'object' ? r.model_calibration : {},
+                frameShapeTag: r.model_calibration?.frameShapeTag || undefined,
+                isPatterned: typeof r.model_calibration?.isPatterned === 'boolean' ? r.model_calibration.isPatterned : undefined,
+                colorFamily: r.model_calibration?.colorFamily || undefined,
+                modelCode: r.model_calibration?.modelCode || undefined,
+                createdAt: r.created_at || undefined,
                 frameColors: colorsList,
                 availableColors: colorsList,
                 availableSizes:
@@ -1521,9 +1571,41 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           ...(patch.exp !== undefined ? { expires_label: patch.exp } : {}),
         };
         await supabase.from('shops').update(payload).eq('id', shopId);
+        if (
+          patch.themeKey !== undefined ||
+          patch.aiLogoGenerations !== undefined ||
+          patch.merchantLensConfigs !== undefined ||
+          patch.tagline !== undefined
+        ) {
+          try {
+            await supabase
+              .from('shops')
+              .update({
+                ...(patch.themeKey !== undefined ? { theme_key: patch.themeKey } : {}),
+                ...(patch.tagline !== undefined ? { tagline: patch.tagline } : {}),
+                ...(patch.aiLogoGenerations !== undefined
+                  ? { ai_logo_generations: patch.aiLogoGenerations }
+                  : {}),
+                ...(patch.merchantLensConfigs !== undefined
+                  ? { merchant_lens_configs: patch.merchantLensConfigs }
+                  : {}),
+              })
+              .eq('id', shopId);
+          } catch {
+            // Optional columns may not exist yet in older Supabase schemas
+          }
+        }
       }
     },
     []
+  );
+
+  const saveShopLensConfigs = useCallback(
+    async (shopId: string, configs: MerchantLensBrandConfig[]) => {
+      await updateShop(shopId, { merchantLensConfigs: configs });
+      await logAudit('تحديث أسعار العدسات والشركات', `تحديث مصفوفة عدسات المتجر (${configs.length} شركة)`, shopId);
+    },
+    [logAudit, updateShop]
   );
 
   const addTopUpCredits = useCallback(
@@ -1540,9 +1622,18 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
 
   const savePlatformSettings = useCallback(
     async (patch: Partial<PlatformSettings>) => {
+      const syncedLensesFlag =
+        patch.enableLensesSystem !== undefined
+          ? Boolean(patch.enableLensesSystem)
+          : patch.enablePrescriptionLenses !== undefined
+          ? Boolean(patch.enablePrescriptionLenses)
+          : Boolean(platformSettings.enableLensesSystem ?? platformSettings.enablePrescriptionLenses);
+
       const next: PlatformSettings = {
         ...platformSettings,
         ...patch,
+        enablePrescriptionLenses: syncedLensesFlag,
+        enableLensesSystem: syncedLensesFlag,
       };
       setPlatformSettings(next);
       if (patch.plans) {
@@ -1552,7 +1643,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       if (supabase) {
         await supabase.from('platform_settings').upsert({
           id: 'default',
-          enable_prescription_lenses: next.enablePrescriptionLenses,
+          enable_prescription_lenses: syncedLensesFlag,
           allow_merchant_lens_branding_toggle: next.allowMerchantLensBrandingToggle,
           enable_sponsored_suppliers: next.enableSponsoredSuppliers,
           plans: next.plans,
@@ -1565,6 +1656,27 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           sponsored_suppliers: next.sponsoredSuppliers,
           updated_at: new Date().toISOString(),
         });
+        if (
+          patch.enableStoresDirectory !== undefined ||
+          patch.landingPreviewFrames !== undefined ||
+          patch.enableLensesSystem !== undefined ||
+          patch.enablePrescriptionLenses !== undefined ||
+          patch.officialLensBrands !== undefined
+        ) {
+          try {
+            await supabase
+              .from('platform_settings')
+              .update({
+                enable_stores_directory: Boolean(next.enableStoresDirectory),
+                landing_preview_frames: next.landingPreviewFrames || DEFAULT_LANDING_PREVIEW_FRAMES,
+                enable_lenses_system: syncedLensesFlag,
+                official_lens_brands: next.officialLensBrands || DEFAULT_OFFICIAL_LENS_BRANDS,
+              })
+              .eq('id', 'default');
+          } catch {
+            // Optional columns may not exist yet in older Supabase schemas
+          }
+        }
       }
     },
     [logAudit, platformSettings]
@@ -1608,7 +1720,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         onboardingCompleted: true,
         enableDeliveryService: false,
         isFeatured: Boolean(matchedPlan?.featuredBoostEnabled),
-        aiCreditsLimit: matchedPlan?.monthlyAiCredits ?? 100,
+        aiCreditsLimit: matchedPlan?.monthlyAiCredits ?? 110,
         aiCreditsUsed: 0,
         topupCredits: 0,
         planTier: matchedPlan?.tierKey || 'basic',
@@ -2544,6 +2656,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         activeShop,
         setActiveShopSlug,
         updateShop,
+        saveShopLensConfigs,
         addTopUpCredits,
         addShopManual,
         extraShops,

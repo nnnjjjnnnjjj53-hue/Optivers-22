@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
+import { DEFAULT_LANDING_PREVIEW_FRAMES, TYPES } from '../data/seed';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { getShopDaysLeft, isAdminRole, useOptiVerse } from '../services/optiverseStore';
-import { Plan, SponsoredSupplier } from '../types';
+import { FrameType, LandingPreviewFrame, Plan, SponsoredSupplier } from '../types';
+import { AdminLensMatrixManager } from '../components/AdminLensMatrixManager';
 import { I } from '../components/Icons';
 import {
   Bars,
@@ -78,6 +80,7 @@ export function AdminPage() {
     auditLogs,
     logAudit,
     exportFullBackup,
+    uploadAssetToStorage,
   } = useOptiVerse();
 
   const [email, setEmail] = useState('');
@@ -118,6 +121,15 @@ export function AdminPage() {
   const [q, setQ] = useState('');
   const [flt, setFlt] = useState('all');
 
+  const [draftPreviewFrames, setDraftPreviewFrames] = useState<LandingPreviewFrame[]>(() =>
+    platformSettings.landingPreviewFrames?.length
+      ? platformSettings.landingPreviewFrames
+      : DEFAULT_LANDING_PREVIEW_FRAMES
+  );
+  const [newFrameName, setNewFrameName] = useState('');
+  const [newFrameDim, setNewFrameDim] = useState('52-18-140');
+  const [newFrameType, setNewFrameType] = useState<FrameType>('aviator');
+
   useEffect(() => {
     setDraftPlans(platformSettings.plans?.length ? platformSettings.plans : plans);
     setDraftCommerce({
@@ -128,6 +140,11 @@ export function AdminPage() {
       topupPackFrames: platformSettings.topupPackFrames,
       topupPackPrice: platformSettings.topupPackPrice,
     });
+    setDraftPreviewFrames(
+      platformSettings.landingPreviewFrames?.length
+        ? platformSettings.landingPreviewFrames
+        : DEFAULT_LANDING_PREVIEW_FRAMES
+    );
   }, [platformSettings, plans]);
 
   useEffect(() => {
@@ -350,6 +367,7 @@ export function AdminPage() {
   const items: ShellNavItem[] = [
     ['over', 'نظرة عامة والإيرادات', 'chart'],
     ['shops', 'إدارة المحلات المشتركة', 'store'],
+    ['lenses', 'مصفوفة العدسات والرعاة', 'eye'],
     ['plans', 'الباقات والاشتراكات', 'crown'],
     ['pay', 'المدفوعات والفواتير', 'receipt'],
     ['stats', 'إحصائيات التجربة بالذكاء الاصطناعي', 'box'],
@@ -442,7 +460,7 @@ export function AdminPage() {
             const dLeft = getShopDaysLeft(s);
             const shopPath = `/s/${s.slug}`;
             const gov = s.governorate || s.city || 'القاهرة';
-            const creditsCap = (s.aiCreditsLimit || 100) + (s.topupCredits || 0);
+            const creditsCap = (s.aiCreditsLimit || 110) + (s.topupCredits || 0);
             const creditsUsed = s.aiCreditsUsed || 0;
             const waHref = `https://wa.me/${waNum(s.wa)}?text=${encodeURIComponent(
               `مرحباً ${s.ownerName || s.name}، معك إدارة منصة OptiVerse بخصوص متجرك "${s.name}".`
@@ -1077,18 +1095,31 @@ export function AdminPage() {
             <div className="divide-y divide-slate-100">
               <div className="flex items-center justify-between gap-4 py-3">
                 <div>
-                  <div className="font-bold text-sm text-[#0F172A]">تفعيل نظام الكشوفات الطبية والعدسات</div>
+                  <div className="font-bold text-sm text-[#0F172A]">تفعيل نظام العدسات الطبية والرعاة</div>
                   <div className="text-xs text-slate-500">
-                    إظهار قسم العدسات والشركات ورفع روشتة الكشف في متاجر العملاء ولوحات التجار
+                    إظهار مصفوفة العدسات والرعاة ورفع كشف النظر في متاجر العملاء ولوحات التجار (أو إظهارها كـ قريباً ✨ للتجار عند الإيقاف)
                   </div>
                 </div>
-                <Switch
-                  on={Boolean(platformSettings.enablePrescriptionLenses)}
-                  onChange={async (v) => {
-                    await savePlatformSettings({ enablePrescriptionLenses: v });
-                    toast(v ? 'تم تفعيل نظام الكشوفات الطبية والعدسات ✓' : 'تم إخفاء نظام الكشوفات الطبية');
-                  }}
-                />
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    className="btn btn-g btn-sm text-xs"
+                    onClick={() => setSec('lenses')}
+                  >
+                    فتح مصفوفة العدسات والرعاة
+                  </button>
+                  <Switch
+                    on={Boolean(platformSettings.enableLensesSystem ?? platformSettings.enablePrescriptionLenses)}
+                    onChange={async (v) => {
+                      await savePlatformSettings({ enableLensesSystem: v, enablePrescriptionLenses: v });
+                      toast(
+                        v
+                          ? 'تم تفعيل نظام العدسات الطبية والرعاة ✓'
+                          : 'تم إغلاق نظام العدسات — سيظهر للتجار كـ قريباً ✨'
+                      );
+                    }}
+                  />
+                </div>
               </div>
 
               <div className="flex items-center justify-between gap-4 py-3">
@@ -1122,6 +1153,242 @@ export function AdminPage() {
                   }}
                 />
               </div>
+
+              <div className="flex items-center justify-between gap-4 py-3">
+                <div>
+                  <div className="font-bold text-sm text-[#0F172A]">تفعيل دليل المحلات المعتمدة العام</div>
+                  <div className="text-xs text-slate-500">
+                    إظهار أزرار وروابط «دليل المحلات» للزوار في الصفحة الرئيسية ومتاجر العملاء
+                  </div>
+                </div>
+                <Switch
+                  on={Boolean(platformSettings.enableStoresDirectory)}
+                  onChange={async (v) => {
+                    await savePlatformSettings({ enableStoresDirectory: v });
+                    toast(v ? 'تم تفعيل دليل المحلات المعتمدة العام ✓' : 'تم إخفاء دليل المحلات المعتمدة العام');
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Landing Page Interactive Preview Frames Manager */}
+          <div className="glass rounded-2xl p-5 mb-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-[#0F172A]">نظارات المعاينة التفاعلية بالرئيسية</h3>
+                <p className="text-xs text-slate-500">
+                  أضف أو ارفع صور نظارات شفافة (PNG / WebP) وعدّل ترتيبها لتظهر فوق وجه المعاينة في الصفحة الرئيسية
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="btn btn-g btn-sm"
+                  onClick={async () => {
+                    setDraftPreviewFrames(DEFAULT_LANDING_PREVIEW_FRAMES);
+                    await savePlatformSettings({ landingPreviewFrames: DEFAULT_LANDING_PREVIEW_FRAMES });
+                    toast('تمت استعادة نظارات المعاينة الافتراضية ✓');
+                  }}
+                >
+                  استعادة الافتراضي
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-p btn-sm"
+                  onClick={async () => {
+                    await savePlatformSettings({ landingPreviewFrames: draftPreviewFrames });
+                    toast('تم حفظ نظارات المعاينة بالرئيسية ✓');
+                  }}
+                >
+                  <I n="check" s={14} /> حفظ القائمة
+                </button>
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2">
+              <input
+                className="inp text-xs"
+                placeholder="اسم النظارة (مثال: Classic Gold)"
+                value={newFrameName}
+                onChange={(e) => setNewFrameName(e.target.value)}
+              />
+              <input
+                className="inp text-xs font-mono"
+                dir="ltr"
+                placeholder="52-18-140"
+                value={newFrameDim}
+                onChange={(e) => setNewFrameDim(e.target.value)}
+              />
+              <select
+                className="inp text-xs"
+                value={newFrameType}
+                onChange={(e) => setNewFrameType(e.target.value as FrameType)}
+              >
+                {(Object.entries(TYPES) as [FrameType, string][]).map(([k, label]) => (
+                  <option key={k} value={k}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="btn btn-p btn-sm"
+                onClick={async () => {
+                  if (!newFrameName.trim()) {
+                    toast('اكتب اسم النظارة أولاً');
+                    return;
+                  }
+                  const nextItem: LandingPreviewFrame = {
+                    id: `lp-${Date.now().toString(36)}`,
+                    name: newFrameName.trim(),
+                    type: newFrameType,
+                    frameColor: '#0F172A',
+                    lensColor: '#dbeafe',
+                    dimensions: newFrameDim.trim() || '52-18-140',
+                  };
+                  const nextList = [...draftPreviewFrames, nextItem];
+                  setDraftPreviewFrames(nextList);
+                  setNewFrameName('');
+                  await savePlatformSettings({ landingPreviewFrames: nextList });
+                  toast(`تمت إضافة "${nextItem.name}" إلى نظارات المعاينة ✓`);
+                }}
+              >
+                <I n="plus" s={14} /> إضافة نظارة
+              </button>
+            </div>
+
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {draftPreviewFrames.map((pf, idx) => (
+                <div
+                  key={pf.id}
+                  className="rounded-2xl p-3.5 bg-[#F8F9FA] border border-[#E2E8F0] space-y-2.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="badge b-acc tabular-nums">#{idx + 1}</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={idx === 0}
+                        title="تحريك لأعلى"
+                        className="btn btn-g btn-sm !p-1.5 disabled:opacity-40"
+                        onClick={async () => {
+                          const next = [...draftPreviewFrames];
+                          const tmp = next[idx - 1];
+                          next[idx - 1] = next[idx];
+                          next[idx] = tmp;
+                          setDraftPreviewFrames(next);
+                          await savePlatformSettings({ landingPreviewFrames: next });
+                        }}
+                      >
+                        ▲
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === draftPreviewFrames.length - 1}
+                        title="تحريك لأسفل"
+                        className="btn btn-g btn-sm !p-1.5 disabled:opacity-40"
+                        onClick={async () => {
+                          const next = [...draftPreviewFrames];
+                          const tmp = next[idx + 1];
+                          next[idx + 1] = next[idx];
+                          next[idx] = tmp;
+                          setDraftPreviewFrames(next);
+                          await savePlatformSettings({ landingPreviewFrames: next });
+                        }}
+                      >
+                        ▼
+                      </button>
+                      <button
+                        type="button"
+                        disabled={draftPreviewFrames.length <= 1}
+                        title="حذف"
+                        className="btn btn-d btn-sm !p-1.5 disabled:opacity-40"
+                        onClick={async () => {
+                          const next = draftPreviewFrames.filter((x) => x.id !== pf.id);
+                          setDraftPreviewFrames(next);
+                          await savePlatformSettings({ landingPreviewFrames: next });
+                          toast('تم حذف نظارة المعاينة ✓');
+                        }}
+                      >
+                        <I n="trash" s={13} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {pf.imageUrl && (
+                    <div className="rounded-xl bg-white border border-slate-200 p-2 flex items-center justify-center h-20">
+                      <img src={pf.imageUrl} alt={pf.name} className="max-h-16 object-contain" />
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      className="inp text-xs"
+                      value={pf.name}
+                      onChange={(e) =>
+                        setDraftPreviewFrames((prev) =>
+                          prev.map((x) => (x.id === pf.id ? { ...x, name: e.target.value } : x))
+                        )
+                      }
+                      placeholder="الاسم"
+                    />
+                    <input
+                      className="inp text-xs font-mono"
+                      dir="ltr"
+                      value={pf.dimensions}
+                      onChange={(e) =>
+                        setDraftPreviewFrames((prev) =>
+                          prev.map((x) => (x.id === pf.id ? { ...x, dimensions: e.target.value } : x))
+                        )
+                      }
+                      placeholder="52-18-140"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="btn btn-g btn-sm flex-1 cursor-pointer text-xs">
+                      <I n="upload" s={13} /> {pf.imageUrl ? 'تغيير صورة PNG' : 'رفع صورة PNG شفافة'}
+                      <input
+                        type="file"
+                        accept="image/png,image/webp,image/*"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = '';
+                          if (!file) return;
+                          try {
+                            const url = await uploadAssetToStorage(file, 'landing-preview', 'png');
+                            const next = draftPreviewFrames.map((x) =>
+                              x.id === pf.id ? { ...x, imageUrl: url } : x
+                            );
+                            setDraftPreviewFrames(next);
+                            await savePlatformSettings({ landingPreviewFrames: next });
+                            toast(`تم رفع صورة "${pf.name}" ✓`);
+                          } catch {
+                            toast('تعذر رفع الصورة');
+                          }
+                        }}
+                      />
+                    </label>
+                    {pf.imageUrl && (
+                      <button
+                        type="button"
+                        className="btn btn-g btn-sm text-xs"
+                        onClick={async () => {
+                          const next = draftPreviewFrames.map((x) =>
+                            x.id === pf.id ? { ...x, imageUrl: undefined } : x
+                          );
+                          setDraftPreviewFrames(next);
+                          await savePlatformSettings({ landingPreviewFrames: next });
+                        }}
+                      >
+                        إزالة الصورة
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -1337,6 +1604,7 @@ export function AdminPage() {
           </div>
         </>
       )}
+      {sec === 'lenses' && <AdminLensMatrixManager />}
     </Shell>
   );
 }

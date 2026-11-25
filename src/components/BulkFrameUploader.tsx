@@ -4,7 +4,9 @@ import {
   EyewearFrameMode,
   EyewearSubMode,
   FrameCat,
+  FrameColorFamily,
   FrameMaterial,
+  FrameShapeTag,
   FrameSize,
   FrameType,
   ModelCalibration,
@@ -13,6 +15,7 @@ import {
 } from '../types';
 import { generateTintedCatalogAsset, processCutoutInWorker } from '../utils/cutoutWorkerClient';
 import {
+  computeFrameColorVariance,
   computePerceptualHash,
   extractOpticalDimensionsViaServer,
   generateSplitSheetViaServer,
@@ -29,7 +32,16 @@ import { Modal } from './UiShared';
 
 type CardProcessStatus = 'enhancing' | 'ready' | 'error';
 
-const MAX_BATCH_SIZE = 50;
+const BATCH_LIMITS_BY_MODE: Record<
+  EyewearFrameMode,
+  { min: number; max: number; label: string }
+> = {
+  prescription: { min: 10, max: 50, label: 'نظارات طبية' },
+  sunglasses: { min: 10, max: 50, label: 'نظارات شمسية' },
+  metal: { min: 10, max: 50, label: 'نظارات شمس معادن' },
+  clip_on: { min: 10, max: 30, label: 'نظارات بغيار شمس' },
+  kids: { min: 10, max: 30, label: 'نظارات أطفال' },
+};
 
 interface BulkFrameItem {
   localId: string;
@@ -75,6 +87,9 @@ interface BulkFrameItem {
   frameHexColor: string;
   frameColors?: string[];
   frameOpacity: number;
+  frameShapeTag?: FrameShapeTag;
+  isPatterned?: boolean;
+  colorFamily?: FrameColorFamily;
   calibration?: ModelCalibration;
   imagePath?: string; // 1200px transparent Try-On
   frontCatalogPath?: string; // 1200x900 #F8F9FA studio shot
@@ -226,6 +241,9 @@ function buildProductPayloadFromItem(
     availableColors: colorsList,
     availableSizes: sizeListFromWidth(it.frameWidthMm),
     shapes: ['oval', 'round', 'square'],
+    frameShapeTag: it.frameShapeTag,
+    isPatterned: it.isPatterned,
+    colorFamily: it.colorFamily,
     // Approval gate: never publish until merchant explicitly clicks اعتماد
     isPublished: Boolean(it.isPublished),
     modelCalibration: {
@@ -244,6 +262,10 @@ function buildProductPayloadFromItem(
       aspectRatio: it.aspectRatio ? Number((1 / Math.max(0.2, it.aspectRatio)).toFixed(4)) : 0.41,
       fitScale: it.fitScale,
       eyeLineOffset: it.eyeLineOffset,
+      frameShapeTag: it.frameShapeTag,
+      isPatterned: it.isPatterned,
+      colorFamily: it.colorFamily,
+      modelCode: it.modelCode,
     },
   };
 
@@ -433,23 +455,23 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
     () => products.filter((p) => p.shopId === activeShop.id && !p.isDeleted).length,
     [products, activeShop.id]
   );
-  const creditsCap = (activeShop.aiCreditsLimit || planCaps.monthlyAiCredits || 100) + (activeShop.topupCredits || 0);
+  const canSingleQuickUpload = planCaps.tierKey === 'pro' || planCaps.tierKey === 'premium';
+  const creditsCap = (activeShop.aiCreditsLimit || planCaps.monthlyAiCredits || 110) + (activeShop.topupCredits || 0);
   const creditsUsed = activeShop.aiCreditsUsed || 0;
   const remainingCredits = activeShop.isDemoAdminStore ? 999999 : Math.max(0, creditsCap - creditsUsed);
   const [outOfCreditsModal, setOutOfCreditsModal] = useState<'credits' | 'capacity' | null>(null);
 
-  // Step 1: 5 Frame Category Modes (BEFORE selecting photos)
+  // Step 1: 4 Streamlined 1-Tap Category Cards
   const [selectedMode, setSelectedMode] = useState<EyewearFrameMode>('prescription');
   const [subCategory, setSubCategory] = useState<EyewearSubMode>('optical');
-  const [turboMode, setTurboMode] = useState<boolean>(planCaps.turboUploadEnabled);
-  const [autoGroupColors, setAutoGroupColors] = useState<boolean>(true);
+  const [expandedCategory, setExpandedCategory] = useState<'sunglasses' | 'kids' | null>(null);
+  const autoGroupColors = true;
   const [keepLensBranding, setKeepLensBranding] = useState<boolean>(false);
   const [validationAlert, setValidationAlert] = useState<string | null>(null);
 
   const [items, setItems] = useState<BulkFrameItem[]>([]);
   const [processing, setProcessing] = useState(false);
   const [cancelled, setCancelled] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
 
@@ -463,11 +485,30 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
 
   const abortRef = useRef<AbortController | null>(null);
   const itemsRef = useRef<BulkFrameItem[]>([]);
+  const pickerRef = useRef<HTMLInputElement | null>(null);
+  const pendingPickRef = useRef<{
+    mode: EyewearFrameMode;
+    sub: EyewearSubMode;
+    material: FrameMaterial;
+    singleQuick?: boolean;
+  } | null>(null);
   itemsRef.current = items;
 
-  useEffect(() => {
-    setTurboMode(planCaps.turboUploadEnabled);
-  }, [planCaps.turboUploadEnabled]);
+  const openCategoryPicker = (
+    mode: EyewearFrameMode,
+    sub: EyewearSubMode,
+    material: FrameMaterial,
+    singleQuick = false
+  ) => {
+    pendingPickRef.current = { mode, sub, material, singleQuick };
+    setSelectedMode(mode);
+    setSubCategory(sub);
+    setExpandedCategory(null);
+    if (pickerRef.current) {
+      pickerRef.current.multiple = !singleQuick || mode === 'clip_on';
+    }
+    pickerRef.current?.click();
+  };
 
   useEffect(() => {
     if (!platformSettings.allowMerchantLensBrandingToggle) {
@@ -600,9 +641,9 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       qualityNoteAr: baseData.qualityNoteAr,
       status: 'ready',
       stageLabel: baseData.cacheHit
-        ? 'من الكتالوج المشترك بدون رصيد ⚡'
+        ? 'تجهيز فوري من الكتالوج ⚡'
         : baseData.autoColorSibling
-        ? 'لون مضاف محلياً (توفير AI) 🎨'
+        ? 'لون مضاف محلياً 🎨'
         : baseData.quality === 'check'
         ? 'يُرجى المراجعة'
         : 'جاهزة للاعتماد',
@@ -629,7 +670,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
   const processSingleCard = async (
     cardSnapshot: BulkFrameItem,
     signal?: AbortSignal,
-    precomputedSplit?: { blob?: Blob; cacheHit?: boolean; cachedAssets?: any }
+    precomputedSplit?: { blob?: Blob; cacheHit?: boolean; cachedAssets?: any; solidModelTemplate?: any }
   ): Promise<BulkFrameItem | null> => {
     if (signal?.aborted) return null;
 
@@ -652,14 +693,15 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       const effectiveSub: EyewearSubMode =
         cardSnapshot.frameType === 'clip_on' ? 'optical' : cardSnapshot.subCategory;
 
-      // Step 1: Zero-cost OCR dimension/model code extraction + pHash (unless already present)
+      // Step 1: Zero-cost OCR dimension/model/shape/pattern extraction + pHash + local color variance
       let workingCard = { ...cardSnapshot };
       if (!workingCard.phash || !workingCard.ocrFound) {
-        const [ocr, phash] = await Promise.all([
+        const [ocr, phash, colorVar] = await Promise.all([
           workingCard.ocrFound
             ? Promise.resolve(null)
             : extractOpticalDimensionsViaServer(srcFile, signal, authMeta),
           workingCard.phash ? Promise.resolve(workingCard.phash) : computePerceptualHash(srcFile),
+          computeFrameColorVariance(srcFile),
         ]);
         if (signal?.aborted) return null;
         if (ocr) {
@@ -674,12 +716,23 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
             totalFrameWidthMm: totalMm,
             frameWidthMm: totalMm,
             ocrFound: ocr.found,
+            frameShapeTag: workingCard.frameShapeTag || ocr.frameShape,
+            isPatterned: Boolean(workingCard.isPatterned || ocr.isPatterned || colorVar.isPatterned),
+            colorFamily: workingCard.colorFamily || (ocr.colorFamily !== 'other' ? ocr.colorFamily : colorVar.colorFamily),
+            frameHexColor: colorVar.dominantHex || workingCard.frameHexColor,
             opticalDimensions: formatOpticalString(
               ocr.lensWidthMm,
               ocr.bridgeWidthMm,
               ocr.templeLengthMm,
               workingCard.opticalDimensions
             ),
+          };
+        } else {
+          workingCard = {
+            ...workingCard,
+            isPatterned: Boolean(workingCard.isPatterned || colorVar.isPatterned),
+            colorFamily: workingCard.colorFamily || colorVar.colorFamily,
+            frameHexColor: colorVar.dominantHex || workingCard.frameHexColor,
           };
         }
         workingCard.phash = phash || workingCard.phash;
@@ -708,7 +761,9 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
             isClipOnAttachment: false,
             keepLensBranding: Boolean(workingCard.keepLensBranding),
             isCrystalFrame: Boolean(workingCard.isCrystalFrame),
+            isPatterned: Boolean(workingCard.isPatterned),
             modelCode: workingCard.modelCode,
+            frameColor: workingCard.frameHexColor,
             phash: workingCard.phash,
             lensWidthMm: workingCard.lensWidthMm,
             bridgeWidthMm: workingCard.bridgeWidthMm,
@@ -731,6 +786,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
         quality: 'good' | 'check';
         qualityNoteAr?: string;
         cacheHit?: boolean;
+        autoColorSibling?: boolean;
       };
 
       if (splitRes.cacheHit && splitRes.cachedAssets && (splitRes.cachedAssets.frontCatalogPath || splitRes.cachedAssets.imagePath)) {
@@ -761,6 +817,65 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
           detectedType: workingCard.type,
           quality: 'good',
           cacheHit: true,
+        };
+      } else if (
+        splitRes.solidModelTemplate &&
+        !workingCard.isPatterned &&
+        (splitRes.solidModelTemplate.frontCatalogPath || splitRes.solidModelTemplate.imagePath)
+      ) {
+        const tpl = splitRes.solidModelTemplate;
+        const targetHex = workingCard.frameHexColor || (await sampleRoughHexFromFile(srcFile));
+        const srcCutUrl = tpl.imagePath || tpl.frontCatalogPath || '';
+        const srcFrontUrl = tpl.frontCatalogPath || tpl.imagePath || '';
+        const [tintedCut, tintedFront, tintedSide] = await Promise.all([
+          generateTintedCatalogAsset(srcCutUrl, targetHex),
+          generateTintedCatalogAsset(srcFrontUrl, targetHex),
+          tpl.sideImagePath ? generateTintedCatalogAsset(tpl.sideImagePath, targetHex) : Promise.resolve(null),
+        ]);
+        if (signal?.aborted) return null;
+
+        const [imagePath, frontCatalogPath, sideImagePath] = await Promise.all([
+          uploadAssetToStorage(tintedCut.blob, `products/${activeShop.id}/cutouts`, 'webp'),
+          uploadAssetToStorage(tintedFront.blob, `products/${activeShop.id}/front`, 'webp'),
+          tintedSide
+            ? uploadAssetToStorage(tintedSide.blob, `products/${activeShop.id}/side`, 'webp')
+            : Promise.resolve(tpl.sideImagePath || ''),
+        ]);
+
+        baseUrls = {
+          imagePath,
+          frontCatalogPath,
+          sideImagePath: sideImagePath || frontCatalogPath,
+          maskUrl: tpl.lensMaskUrl || undefined,
+        };
+
+        void saveToSharedEyewearCache({
+          ...authMeta,
+          modelCode: workingCard.modelCode || workingCard.code,
+          frameColor: targetHex,
+          phash: workingCard.phash,
+          keepLensBranding: Boolean(workingCard.keepLensBranding),
+          isCrystalFrame: Boolean(workingCard.isCrystalFrame),
+          isPatterned: false,
+          frameType: workingCard.frameType,
+          imagePath: baseUrls.imagePath,
+          frontCatalogPath: baseUrls.frontCatalogPath,
+          sideImagePath: baseUrls.sideImagePath,
+          lensMaskUrl: baseUrls.maskUrl,
+          lensWidthMm: workingCard.lensWidthMm,
+          bridgeWidthMm: workingCard.bridgeWidthMm,
+          templeLengthMm: workingCard.templeLengthMm,
+          totalFrameWidthMm: workingCard.frameWidthMm,
+        });
+
+        baseMeta = {
+          aspectRatio: workingCard.aspectRatio || 2.4,
+          frameHexColor: targetHex,
+          frameOpacity: workingCard.isCrystalFrame ? 0.75 : 1.0,
+          detectedMaterial: workingCard.frameType === 'metal' ? 'metal' : 'tr_plastic',
+          detectedType: workingCard.type,
+          quality: 'good',
+          autoColorSibling: true,
         };
       } else {
         const baseRes = await processCutoutInWorker(
@@ -797,6 +912,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
           phash: workingCard.phash,
           keepLensBranding: Boolean(workingCard.keepLensBranding),
           isCrystalFrame: Boolean(workingCard.isCrystalFrame),
+          isPatterned: Boolean(workingCard.isPatterned),
           frameType: workingCard.frameType,
           imagePath: baseUrls.imagePath,
           frontCatalogPath: baseUrls.frontCatalogPath,
@@ -966,7 +1082,15 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
     }
   };
 
-  const handleFilesSelected = async (fileList: FileList | File[]) => {
+  const handleFilesSelected = async (
+    fileList: FileList | File[],
+    override?: {
+      mode: EyewearFrameMode;
+      sub: EyewearSubMode;
+      material: FrameMaterial;
+      singleQuick?: boolean;
+    } | null
+  ) => {
     setValidationAlert(null);
     const files = Array.from(fileList).filter(
       (f) => f.type.startsWith('image/') || /\.(png|jpe?g|webp|heic|avif)$/i.test(f.name)
@@ -976,23 +1100,57 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       return;
     }
 
-    // Strict 50-photo batch limit
-    if (files.length > MAX_BATCH_SIZE) {
-      const msg = `الحد الأقصى للدفعة الواحدة هو ${MAX_BATCH_SIZE} صورة. اخترت ${files.length} صورة — قسّم الرفع على دفعات.`;
-      setValidationAlert(msg);
-      toast(msg);
-      return;
-    }
+    const chosenMode = override?.mode ?? selectedMode;
+    const chosenSub: EyewearSubMode =
+      override?.sub ??
+      (chosenMode === 'sunglasses'
+        ? 'sun'
+        : chosenMode === 'prescription' || chosenMode === 'clip_on'
+        ? 'optical'
+        : subCategory);
+    const chosenCat = resolveCatFromMode(chosenMode, chosenSub);
+    const chosenMaterial: FrameMaterial = override?.material ?? (chosenMode === 'metal' ? 'metal' : 'tr_plastic');
+    const isSingleQuick = Boolean(override?.singleQuick && canSingleQuickUpload);
 
     // Clip-On strict even pairing check
-    if (selectedMode === 'clip_on' && files.length % 2 !== 0) {
+    if (chosenMode === 'clip_on' && files.length % 2 !== 0) {
       const msg = 'تنبيه: كل نظارة بغيار شمس تتطلب صورتين (بدون الغيار + بالغيار).';
       setValidationAlert(msg);
       toast(msg);
       return;
     }
 
-    const plannedPairsCount = selectedMode === 'clip_on' ? files.length / 2 : files.length;
+    const plannedPairsCount = chosenMode === 'clip_on' ? files.length / 2 : files.length;
+    const catLimit = BATCH_LIMITS_BY_MODE[chosenMode] || BATCH_LIMITS_BY_MODE.prescription;
+
+    if (isSingleQuick) {
+      if (plannedPairsCount !== 1) {
+        const msg =
+          chosenMode === 'clip_on'
+            ? 'في الإضافة السريعة اختر نظارة واحدة فقط (صورتين: بدون الغيار + بالغيار).'
+            : 'في الإضافة السريعة اختر صورة نظارة واحدة فقط.';
+        setValidationAlert(msg);
+        toast(msg);
+        return;
+      }
+    } else {
+      if (plannedPairsCount < catLimit.min) {
+        const msg = `الحد الأدنى لدفعة ${catLimit.label} هو ${catLimit.min} نظارات${
+          chosenMode === 'clip_on' ? ` (${catLimit.min * 2} صورة زوجية)` : ''
+        }. اخترت ${plannedPairsCount} فقط.`;
+        setValidationAlert(msg);
+        toast(msg);
+        return;
+      }
+      if (plannedPairsCount > catLimit.max) {
+        const msg = `الحد الأقصى لدفعة ${catLimit.label} هو ${catLimit.max} نظارة${
+          chosenMode === 'clip_on' ? ` (${catLimit.max * 2} صورة)` : ''
+        }. اخترت ${plannedPairsCount} — قسّم الرفع على دفعات.`;
+        setValidationAlert(msg);
+        toast(msg);
+        return;
+      }
+    }
     if (!activeShop.isDemoAdminStore && remainingCredits <= 0) {
       setOutOfCreditsModal('credits');
       return;
@@ -1010,15 +1168,6 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
-    const chosenMode = selectedMode;
-    const chosenSub: EyewearSubMode =
-      chosenMode === 'sunglasses'
-        ? 'sun'
-        : chosenMode === 'prescription' || chosenMode === 'clip_on'
-        ? 'optical'
-        : subCategory;
-    const chosenCat = resolveCatFromMode(chosenMode, chosenSub);
-    const chosenMaterial: FrameMaterial = chosenMode === 'metal' ? 'metal' : 'tr_plastic';
     const seedNum = Math.floor(2000 + Math.random() * 6000);
     const defaultPrice = Math.max(0, Number(bulkPrice) || 950);
 
@@ -1052,7 +1201,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       eyeLineOffset: 0.04,
       cat: chosenCat,
       material: chosenMaterial,
-      type: chosenMode === 'metal' ? 'rimless' : 'wayfarer',
+      type: chosenMaterial === 'metal' ? 'rimless' : 'wayfarer',
       aspectRatio: 2.4,
       frameHexColor: '#1f2937',
       frameOpacity: 1.0,
@@ -1066,19 +1215,21 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
     setVisibleLimit((lim) => Math.max(lim, PAGE_SIZE));
 
     const authMeta = await buildClientAuthMeta();
-    const useTurbo = Boolean(turboMode && planCaps.turboUploadEnabled);
+    const useTurbo = Boolean(planCaps.turboUploadEnabled);
 
-    // Pre-OCR + pHash on all cards when Auto-Color Grouping or Batch API is enabled
+    // Silent Pre-OCR + pHash + Local Color Variance on all cards
     const preparedCards = [...newCards];
     if (autoGroupColors || (!useTurbo && newCards.length > 1)) {
       await Promise.all(
         preparedCards.map(async (c, i) => {
           if (ctrl.signal.aborted || !c.sourceFile) return;
-          const [ocr, phash] = await Promise.all([
+          const [ocr, phash, colorVar] = await Promise.all([
             extractOpticalDimensionsViaServer(c.sourceFile, ctrl.signal, authMeta),
             computePerceptualHash(c.sourceFile),
+            computeFrameColorVariance(c.sourceFile),
           ]);
           const widthMm = ocr.totalFrameWidthMm || c.frameWidthMm;
+          const isPatterned = Boolean(ocr.isPatterned || colorVar.isPatterned);
           preparedCards[i] = {
             ...c,
             modelCode: ocr.modelCode || undefined,
@@ -1089,6 +1240,10 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
             totalFrameWidthMm: widthMm,
             frameWidthMm: widthMm,
             ocrFound: ocr.found,
+            frameShapeTag: ocr.frameShape || undefined,
+            isPatterned,
+            colorFamily: ocr.colorFamily !== 'other' ? ocr.colorFamily : colorVar.colorFamily,
+            frameHexColor: colorVar.dominantHex || c.frameHexColor,
             opticalDimensions: formatOpticalString(
               ocr.lensWidthMm,
               ocr.bridgeWidthMm,
@@ -1104,17 +1259,18 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       );
     }
 
-    // Auto-Color Grouping: pick 1 lead frame per model group; siblings use local Canvas tinting at $0 API cost
+    // Silent Hybrid Auto-Color Grouping: solid siblings recolor locally at $0 API cost; patterned frames stay in AI queue
     const leadByGroupKey = new Map<string, BulkFrameItem>();
     const siblingMap = new Map<string, BulkFrameItem>(); // sibling.localId -> leadCard
     const aiQueue: BulkFrameItem[] = [];
 
     for (const c of preparedCards) {
       const gKey = autoGroupColors ? extractColorGroupingKey(c.sourceFile?.name || c.name, c.modelCode) : '';
-      if (gKey && leadByGroupKey.has(gKey) && c.frameType !== 'clip_on') {
-        siblingMap.set(c.localId, leadByGroupKey.get(gKey)!);
+      const lead = gKey ? leadByGroupKey.get(gKey) : undefined;
+      if (gKey && lead && c.frameType !== 'clip_on' && !c.isPatterned && !lead.isPatterned) {
+        siblingMap.set(c.localId, lead);
       } else {
-        if (gKey && !leadByGroupKey.has(gKey)) {
+        if (gKey && !lead && !c.isPatterned) {
           leadByGroupKey.set(gKey, c);
         }
         aiQueue.push(c);
@@ -1139,7 +1295,9 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
             subCategory: c.frameType === 'clip_on' ? 'optical' : c.subCategory,
             keepLensBranding: Boolean(c.keepLensBranding),
             isCrystalFrame: Boolean(c.isCrystalFrame),
+            isPatterned: Boolean(c.isPatterned),
             modelCode: c.modelCode,
+            frameColor: c.frameHexColor,
             phash: c.phash,
             lensWidthMm: c.lensWidthMm,
             bridgeWidthMm: c.bridgeWidthMm,
@@ -1449,28 +1607,28 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
   const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
 
   return (
-    <div className="rounded-3xl bg-[#F8F9FA] text-[#0F172A] p-4 sm:p-6 mb-5 border border-[#E2E8F0] shadow-sm space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="w-10 h-10 rounded-xl bg-[#0F172A] text-white flex items-center justify-center shrink-0">
-            <I n="upload" s={20} />
-          </span>
-          <div>
-            <h3 className="font-extrabold text-base sm:text-lg text-[#0F172A]">
-              استوديو الرفع الذكي — تحويل صور النظارات إلى كتالوج{' '}
-              <span dir="ltr" className="inline-block">
-                3D
-              </span>{' '}
-              احترافي في ثوانٍ
-            </h3>
-            <p className="text-xs text-slate-600">
-              استخراج تلقائي لمقاسات الإطار وكود الموديل + عزل استوديو احترافي وصورة جانبية{' '}
-              <span dir="ltr" className="inline-block">
-                3/4
-              </span>{' '}
-              جاهزة لمتجرك
-            </p>
-          </div>
+    <div className="rounded-3xl bg-[#F8F9FA] text-[#0F172A] p-4 sm:p-5 mb-5 border border-[#E2E8F0] shadow-sm space-y-3.5">
+      {/* Shared Hidden File Picker triggered directly by 1-Tap Category Cards */}
+      <input
+        ref={pickerRef}
+        type="file"
+        multiple
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const picked = pendingPickRef.current;
+          pendingPickRef.current = null;
+          if (e.target.files?.length) {
+            void handleFilesSelected(e.target.files, picked);
+          }
+          e.target.value = '';
+        }}
+      />
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-extrabold text-[#0F172A] flex items-center gap-2">
+          <I n="upload" s={17} c="text-[#0284C7]" />
+          <span>رفع النظارات (اضغط على الفئة لاختيار الصور فوراً)</span>
         </div>
         {items.length > 0 && !processing && (
           <div className="flex items-center gap-2">
@@ -1494,163 +1652,211 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
         )}
       </div>
 
-      {/* Step 1: 5 Frame Category Modes BEFORE selecting files */}
-      <div className="rounded-2xl bg-white border border-[#E2E8F0] p-3.5 space-y-3">
-        <div className="text-xs font-extrabold text-[#0284C7]">
-          1. اختر وضع الإطارات أولاً (5 أوضاع مخصصة لعزل الخلفية والعدسات):
+      {/* 4 Clean 1-Tap Category Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+        {/* Card 1: نظارات طبية -> Direct File Picker */}
+        <button
+          type="button"
+          onClick={() => openCategoryPicker('prescription', 'optical', 'tr_plastic')}
+          className="rounded-2xl bg-white border border-[#E2E8F0] hover:border-[#0284C7] hover:shadow-md p-3.5 text-start transition cursor-pointer flex flex-col justify-between gap-2"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="w-9 h-9 rounded-xl bg-sky-50 text-[#0284C7] flex items-center justify-center shrink-0">
+              <I n="glasses" s={19} />
+            </span>
+            <span className="text-[0.65rem] font-bold px-2 py-0.5 rounded-md bg-sky-50 text-[#0284C7]">
+              رفع مباشر
+            </span>
+          </div>
+          <div>
+            <div className="font-extrabold text-sm text-[#0F172A]">نظارات طبية</div>
+            <div className="text-[0.7rem] text-slate-500 mt-0.5">تفريغ العدسات وتجهيز الكتالوج فوراً</div>
+            <div className="text-[0.65rem] font-bold text-[#0284C7] mt-1">
+              الدفعة: <span dir="ltr">10–50</span> نظارة
+            </div>
+          </div>
+        </button>
+
+        {/* Card 2: نظارات شمسية -> Expand 2 Sub-Options */}
+        <div className="rounded-2xl bg-white border border-[#E2E8F0] hover:border-[#0284C7] p-3.5 flex flex-col justify-between gap-2 transition">
+          <button
+            type="button"
+            onClick={() => setExpandedCategory((c) => (c === 'sunglasses' ? null : 'sunglasses'))}
+            className="w-full text-start cursor-pointer flex flex-col gap-2"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="w-9 h-9 rounded-xl bg-amber-50 text-[#D97706] flex items-center justify-center shrink-0">
+                <I n="sun" s={19} />
+              </span>
+              <span className="text-[0.65rem] font-bold px-2 py-0.5 rounded-md bg-amber-50 text-[#D97706]">
+                {expandedCategory === 'sunglasses' ? 'اختر الخامة' : 'خياران'}
+              </span>
+            </div>
+            <div>
+              <div className="font-extrabold text-sm text-[#0F172A]">نظارات شمسية</div>
+              <div className="text-[0.7rem] text-slate-500 mt-0.5">الحفاظ على لون وتظليل عدسة الشمس</div>
+              <div className="text-[0.65rem] font-bold text-[#D97706] mt-1">
+                الدفعة: <span dir="ltr">10–50</span> نظارة
+              </div>
+            </div>
+          </button>
+          {expandedCategory === 'sunglasses' && (
+            <div className="grid grid-cols-1 gap-1.5 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => openCategoryPicker('sunglasses', 'sun', 'tr_plastic')}
+                className="w-full py-2 px-2.5 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-white text-xs font-bold text-center cursor-pointer transition"
+              >
+                شمس بلاستيك / أسيتات
+              </button>
+              <button
+                type="button"
+                onClick={() => openCategoryPicker('sunglasses', 'sun', 'metal')}
+                className="w-full py-2 px-2.5 rounded-xl bg-[#0284C7] hover:bg-[#0369A1] text-white text-xs font-bold text-center cursor-pointer transition"
+              >
+                شمس معادن / هاف فريم
+              </button>
+            </div>
+          )}
         </div>
 
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
-          {FRAME_MODES.map((m) => {
-            const active = selectedMode === m.id;
-            return (
+        {/* Card 3: نظارات بغيار شمس -> Direct File Picker (Even Pairs) */}
+        <button
+          type="button"
+          onClick={() => openCategoryPicker('clip_on', 'optical', 'tr_plastic')}
+          className="rounded-2xl bg-white border border-[#E2E8F0] hover:border-[#0284C7] hover:shadow-md p-3.5 text-start transition cursor-pointer flex flex-col justify-between gap-2"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="w-9 h-9 rounded-xl bg-emerald-50 text-[#059669] flex items-center justify-center shrink-0">
+              <I n="spark" s={19} />
+            </span>
+            <span className="text-[0.65rem] font-bold px-2 py-0.5 rounded-md bg-emerald-50 text-[#059669]">
+              زوج صور
+            </span>
+          </div>
+          <div>
+            <div className="font-extrabold text-sm text-[#0F172A]">نظارات بغيار شمس</div>
+            <div className="text-[0.7rem] text-slate-500 mt-0.5">صورتان لكل نظارة (بدون + بالغيار)</div>
+            <div className="text-[0.65rem] font-bold text-[#059669] mt-1">
+              الدفعة: <span dir="ltr">10–30</span> نظارة
+            </div>
+          </div>
+        </button>
+
+        {/* Card 4: نظارات أطفال -> Expand 2 Sub-Options */}
+        <div className="rounded-2xl bg-white border border-[#E2E8F0] hover:border-[#0284C7] p-3.5 flex flex-col justify-between gap-2 transition">
+          <button
+            type="button"
+            onClick={() => setExpandedCategory((c) => (c === 'kids' ? null : 'kids'))}
+            className="w-full text-start cursor-pointer flex flex-col gap-2"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                <I n="eye" s={19} />
+              </span>
+              <span className="text-[0.65rem] font-bold px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700">
+                {expandedCategory === 'kids' ? 'اختر النوع' : 'خياران'}
+              </span>
+            </div>
+            <div>
+              <div className="font-extrabold text-sm text-[#0F172A]">نظارات أطفال</div>
+              <div className="text-[0.7rem] text-slate-500 mt-0.5">مقياس أطفال مخصص (0.90x)</div>
+              <div className="text-[0.65rem] font-bold text-indigo-700 mt-1">
+                الدفعة: <span dir="ltr">10–30</span> نظارة
+              </div>
+            </div>
+          </button>
+          {expandedCategory === 'kids' && (
+            <div className="grid grid-cols-2 gap-1.5 pt-2 border-t border-slate-100">
               <button
-                key={m.id}
                 type="button"
-                onClick={() => setSelectedMode(m.id)}
+                onClick={() => openCategoryPicker('kids', 'optical', 'tr_plastic')}
+                className="py-2 px-2 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-white text-xs font-bold text-center cursor-pointer transition"
+              >
+                أطفالي طبي
+              </button>
+              <button
+                type="button"
+                onClick={() => openCategoryPicker('kids', 'sun', 'tr_plastic')}
+                className="py-2 px-2 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white text-xs font-bold text-center cursor-pointer transition"
+              >
+                أطفالي شمس
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Pro & Premium Exclusive Single-Frame Quick Upload (Bypasses 10-frame batch minimum) */}
+      {canSingleQuickUpload && (
+        <div className="rounded-2xl bg-white border border-sky-200 p-3 flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-extrabold text-[#0F172A] ms-1">النوع للإضافة الفردية:</span>
+            {(
+              [
+                { mode: 'prescription', sub: 'optical', mat: 'tr_plastic', label: 'طبية' },
+                { mode: 'sunglasses', sub: 'sun', mat: 'tr_plastic', label: 'شمسية' },
+                { mode: 'clip_on', sub: 'optical', mat: 'tr_plastic', label: 'بغيار شمس' },
+                { mode: 'kids', sub: 'optical', mat: 'tr_plastic', label: 'أطفال' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.mode}
+                type="button"
+                onClick={() => {
+                  setSelectedMode(opt.mode);
+                  setSubCategory(opt.sub);
+                }}
                 className={
-                  'p-3 rounded-xl border text-start transition cursor-pointer flex flex-col gap-1 ' +
-                  (active
-                    ? 'bg-[#0F172A] text-white border-[#0F172A] shadow-md'
-                    : 'bg-[#F8F9FA] text-[#0F172A] border-[#E2E8F0] hover:border-[#0284C7]/50 hover:bg-white')
+                  'px-2.5 py-1 rounded-lg text-[0.7rem] font-bold border cursor-pointer transition ' +
+                  (selectedMode === opt.mode
+                    ? 'bg-[#0F172A] text-white border-[#0F172A]'
+                    : 'bg-[#F8F9FA] text-slate-700 border-[#E2E8F0]')
                 }
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs sm:text-sm font-extrabold">{m.title}</span>
-                  {m.badge && (
-                    <span
-                      className={
-                        'text-[0.62rem] font-bold px-2 py-0.5 rounded-md ' +
-                        (active ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-800')
-                      }
-                    >
-                      {m.badge}
-                    </span>
-                  )}
-                </div>
-                <div className={'text-[0.68rem] leading-4 ' + (active ? 'text-white/90' : 'text-slate-600')}>
-                  {m.desc}
-                </div>
+                {opt.label}
               </button>
-            );
-          })}
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              openCategoryPicker(
+                selectedMode,
+                selectedMode === 'sunglasses' ? 'sun' : selectedMode === 'kids' ? subCategory : 'optical',
+                selectedMode === 'metal' ? 'metal' : 'tr_plastic',
+                true
+              )
+            }
+            className="btn btn-sm bg-[#0284C7] hover:bg-[#0369A1] text-white font-extrabold cursor-pointer shrink-0"
+          >
+            + إضافة نظارة واحدة سريعاً
+          </button>
         </div>
+      )}
 
-        {/* Sub-toggles for Kids & Metal */}
-        {selectedMode === 'kids' && (
-          <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100">
-            <span className="text-xs font-bold text-slate-700">نوع نظارة الأطفال:</span>
-            <button
-              type="button"
-              onClick={() => setSubCategory('optical')}
-              className={
-                'px-3 py-1 rounded-lg text-xs font-bold border cursor-pointer transition ' +
-                (subCategory !== 'sun'
-                  ? 'bg-[#0F172A] text-white border-[#0F172A]'
-                  : 'bg-white text-slate-700 border-slate-300')
-              }
-            >
-              طبي أطفال
-            </button>
-            <button
-              type="button"
-              onClick={() => setSubCategory('sun')}
-              className={
-                'px-3 py-1 rounded-lg text-xs font-bold border cursor-pointer transition ' +
-                (subCategory === 'sun'
-                  ? 'bg-[#0F172A] text-white border-[#0F172A]'
-                  : 'bg-white text-slate-700 border-slate-300')
-              }
-            >
-              شمس أطفال
-            </button>
-          </div>
-        )}
-
-        {selectedMode === 'metal' && (
-          <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100">
-            <span className="text-xs font-bold text-slate-700">نوع الشنبر المعدني:</span>
-            <button
-              type="button"
-              onClick={() => setSubCategory('optical')}
-              className={
-                'px-3 py-1 rounded-lg text-xs font-bold border cursor-pointer transition ' +
-                (subCategory !== 'sun'
-                  ? 'bg-[#0F172A] text-white border-[#0F172A]'
-                  : 'bg-white text-slate-700 border-slate-300')
-              }
-            >
-              معدن طبي
-            </button>
-            <button
-              type="button"
-              onClick={() => setSubCategory('sun')}
-              className={
-                'px-3 py-1 rounded-lg text-xs font-bold border cursor-pointer transition ' +
-                (subCategory === 'sun'
-                  ? 'bg-[#0F172A] text-white border-[#0F172A]'
-                  : 'bg-white text-slate-700 border-slate-300')
-              }
-            >
-              معدن شمس
-            </button>
-          </div>
-        )}
-
-        {/* Speed Mode (Batch vs Turbo), Auto-Color Grouping & Conditional Lens Branding */}
-        <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-slate-100 text-xs">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={!planCaps.turboUploadEnabled}
-              onClick={() => planCaps.turboUploadEnabled && setTurboMode((v) => !v)}
-              className={
-                'px-3 py-1.5 rounded-xl border font-extrabold flex items-center gap-1.5 transition ' +
-                (!planCaps.turboUploadEnabled
-                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                  : turboMode
-                  ? 'bg-[#D97706] text-white border-[#D97706] cursor-pointer shadow-xs'
-                  : 'bg-white text-[#0F172A] border-slate-300 cursor-pointer hover:bg-slate-50')
-              }
-            >
-              <I n="spark" s={13} />
-              <span>رفع فوري تيربو ⚡</span>
-              {!planCaps.turboUploadEnabled && (
-                <span className="text-[0.62rem] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold">
-                  ترقية للاحترافية
-                </span>
-              )}
-            </button>
-
-            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] cursor-pointer font-bold text-[#0F172A]">
+      {/* Compact Options & Quota Strip (Auto-Color Grouping runs silently) */}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs pt-1">
+        <div className="flex flex-wrap items-center gap-2">
+          {platformSettings.allowMerchantLensBrandingToggle && (
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-50 border border-sky-200 cursor-pointer font-bold text-[#0284C7]">
               <input
                 type="checkbox"
-                checked={autoGroupColors}
-                onChange={(e) => setAutoGroupColors(e.target.checked)}
+                checked={keepLensBranding}
+                onChange={(e) => setKeepLensBranding(e.target.checked)}
                 className="accent-[#0284C7]"
               />
-              <span>تجميع الألوان التلقائي (توفير AI)</span>
+              <span>الحفاظ على كتابة العدسة التجريبية</span>
             </label>
-
-            {platformSettings.allowMerchantLensBrandingToggle && (
-              <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-50 border border-sky-200 cursor-pointer font-bold text-[#0284C7]">
-                <input
-                  type="checkbox"
-                  checked={keepLensBranding}
-                  onChange={(e) => setKeepLensBranding(e.target.checked)}
-                  className="accent-[#0284C7]"
-                />
-                <span>الحفاظ على كتابة العدسة التجريبية</span>
-              </label>
-            )}
-          </div>
-
-          <span className="text-[0.7rem] font-bold text-slate-600 tabular-nums">
-            حتى <span dir="ltr">{MAX_BATCH_SIZE}</span> صورة في الدفعة الواحدة — متاح في باقتك حتى{' '}
-            <span dir="ltr">{maxProducts}</span> نظارة (المضاف:{' '}
-            <span dir="ltr">{activeShopProductsCount}</span>)
-          </span>
+          )}
         </div>
+
+        <span className="text-[0.7rem] font-bold text-slate-600 tabular-nums">
+          السعة:{' '}
+          <span dir="ltr">
+            {activeShopProductsCount} / {maxProducts}
+          </span>
+        </span>
       </div>
 
       {validationAlert && (
@@ -1673,52 +1879,6 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       <div className="rounded-xl bg-sky-50/70 border border-sky-200 text-slate-800 p-1">
         <PhotoUploadGuidelines />
       </div>
-
-      {/* Multi-File Dropzone */}
-      <label
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragOver(false);
-          if (e.dataTransfer.files?.length) void handleFilesSelected(e.dataTransfer.files);
-        }}
-        className={
-          'block rounded-2xl border-2 border-dashed p-5 text-center transition cursor-pointer ' +
-          (dragOver
-            ? 'border-[#0284C7] bg-sky-50'
-            : 'border-slate-300 bg-white hover:border-[#0284C7] hover:bg-slate-50')
-        }
-      >
-        <input
-          type="file"
-          multiple
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files?.length) void handleFilesSelected(e.target.files);
-            e.target.value = '';
-          }}
-        />
-        <div className="flex flex-col items-center gap-1.5">
-          {processing ? (
-            <div className="w-7 h-7 rounded-full border-2 border-[#0284C7] border-t-transparent animate-spin" />
-          ) : (
-            <I n="upload" s={26} c="text-[#0284C7]" />
-          )}
-          <div className="font-bold text-sm text-[#0F172A]">
-            {selectedMode === 'clip_on'
-              ? 'اسحب أو اختر أزواج الصور بالترتيب: صورة بدون الغيار تليها صورة بالغيار (عدد زوجي)'
-              : `اسحب وأفلت صور النظارات هنا أو اضغط لاختيار حتى ${MAX_BATCH_SIZE} صورة في الدفعة`}
-          </div>
-          <div className="text-xs text-slate-500">
-            تُحفظ المسودات تلقائياً في المتصفح — لا تُنشر أي نظارة للعملاء قبل الضغط على «اعتماد»
-          </div>
-        </div>
-      </label>
 
       {/* Queue Progress Bar + Cancel Control */}
       {(processing || progress.total > 0) && (

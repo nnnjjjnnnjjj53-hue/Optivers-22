@@ -6,7 +6,7 @@ import { I } from './Icons';
 export const LENS_SHAPES: Record<FrameType, { d: string; w: number; fill: number }> = {
   aviator: { d: 'M-36,-15 Q0,-22 36,-15 Q40,14 9,26 Q-30,28 -38,3 Z', w: 2.7, fill: 0.05 },
   wayfarer: { d: 'M-37,-15 L35,-18 Q40,-18 39,-12 L35,12 Q31,23 12,23 L-23,23 Q-37,21 -38,7 Z', w: 6.2, fill: 0.055 },
-  rimless: { d: 'M0,-20 C27,-20 37,-9 37,2 C37,17 20,24 0,24 C-23,24 -37,15 -37,2 C-37,-11 -21,-20 0,-20Z', w: 1.1, fill: 0.04 },
+  rimless: { d: 'M0,-20 C27,-20 37,-9 37,2 C37,17 20,24 0,24 C-23,24 -37,15 -37,2 C-37,-11 -21,-20 0,-20Z', w: 2.0, fill: 0.18 },
   round: { d: 'M-29,1 a29,28 0 1 0 58,0 a29,28 0 1 0 -58,0', w: 3.4, fill: 0.05 },
   cat: { d: 'M-37,-4 Q-35,-21 -6,-18 Q22,-16 39,-23 Q41,5 33,16 Q25,25 4,25 Q-35,25 -37,-4Z', w: 4.5, fill: 0.055 },
 };
@@ -140,8 +140,11 @@ export function Glasses({
           </radialGradient>
         </defs>
 
-        {/* Crystal clear 92%-95% glass body (or tinted sun lens) */}
-        <path d={L.d} fill={`url(#tint-${sideId})`} />
+        {/* Crystal clear 92%-95% glass body (or tinted sun lens; tinted slate glass on rimless for clear visibility) */}
+        <path
+          d={L.d}
+          fill={type === 'rimless' && !isSun ? 'rgba(148,163,184,0.18)' : `url(#tint-${sideId})`}
+        />
 
         {/* Thin bevel sheen & subtle head-angle specular coating glint (screen blend, <= 0.18 opacity) */}
         <g clipPath={`url(#clip-${sideId})`}>
@@ -168,13 +171,18 @@ export function Glasses({
         {!isTransparentFrame && (
           type === 'rimless' ? (
             <>
-              {/* Diamond-cut chamfered glass edge */}
-              <path d={L.d} fill="none" stroke="rgba(255,255,255,0.42)" strokeWidth="1.2" strokeLinejoin="round" />
-              <path d={L.d} fill="none" stroke="rgba(148,163,184,0.35)" strokeWidth="0.55" strokeLinejoin="round" />
+              {/* Crisp visible bevel edge for Rimless frames */}
+              <path
+                d={L.d}
+                fill="rgba(148,163,184,0.18)"
+                stroke="#475569"
+                strokeWidth="2"
+                strokeLinejoin="round"
+              />
               {/* Drill-mount metallic studs at nasal & temporal mounts */}
-              <circle cx="-33" cy="-5" r="1.9" fill={`url(#metal-${uid})`} stroke={frameDark} strokeWidth="0.4" />
-              <circle cx="34" cy="-7" r="2.1" fill={`url(#metal-${uid})`} stroke={frameDark} strokeWidth="0.4" />
-              <rect x="33" y="-9.2" width="6.5" height="4.4" rx="1.4" fill={`url(#metal-${uid})`} />
+              <circle cx="-33" cy="-5" r="2.1" fill="#475569" stroke={frameDark} strokeWidth="0.4" />
+              <circle cx="34" cy="-7" r="2.2" fill="#475569" stroke={frameDark} strokeWidth="0.4" />
+              <rect x="33" y="-9.2" width="6.5" height="4.4" rx="1.4" fill="#475569" />
             </>
           ) : isMetallic ? (
             <>

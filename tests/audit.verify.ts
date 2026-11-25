@@ -58,7 +58,17 @@ import {
   validateEyewearAspectRatio,
 } from '../src/workers/cutoutWorker';
 import { PLANS0, PLATFORM_SETTINGS0 } from '../src/data/seed';
+import {
+  DEFAULT_OFFICIAL_LENS_BRANDS,
+  LENS_CATEGORIES,
+  clampMerchantPriceToVariance,
+  makeMatrixCellKey,
+  resolveCustomerLensBrands,
+  resolveMerchantBrandRowsForTrack,
+} from '../src/data/opticalLensMatrix';
 import { getShopMaxProducts } from '../src/services/optiverseStore';
+import { analyzeRgbaFrameColorVariance } from '../src/utils/splitSheetApi';
+import { buildSharedCacheKeys } from '../server';
 
 function makeImage(w: number, h: number, bg: [number, number, number]): Uint8ClampedArray {
   const arr = new Uint8ClampedArray(w * h * 4);
@@ -294,12 +304,12 @@ console.log('=== OptiVerse Automated Technical Verification ===');
 
   assert.ok(!merchantSrc.includes('رابط متجر العملاء الخاص بمحلك'), 'Global storefront link card removed from MerchantPage');
   assert.ok(merchantSrc.includes('إعداد متجر العملاء'), 'Store settings section properly named');
-  assert.ok(merchantSrc.includes('toggleProductPublished'), 'Merchant can publish/hide products');
+  assert.ok(modalsSrc.includes('isPublished'), 'Merchant can publish/hide products via edit modal');
   assert.ok(merchantSrc.includes("setModal({ t: 'editprod'"), 'Merchant can edit products');
   assert.ok(merchantSrc.includes("setModal({ t: 'delprod'"), 'Merchant uses delete confirmation modal');
 
   assert.ok(pdpSrc.includes('#F8F9FA'), 'PDP uses neutral #F8F9FA studio backdrop');
-  assert.ok(pdpSrc.includes('تجربة النظارة بالذكاء الاصطناعي'), 'PDP includes AI Virtual Try-On CTA');
+  assert.ok(pdpSrc.includes('جرّب على وجهك'), 'PDP includes AI Virtual Try-On CTA');
   assert.ok(pdpSrc.includes('Small') && pdpSrc.includes('Medium') && pdpSrc.includes('Large'), 'PDP includes S/M/L sizes');
 
   assert.ok(storefrontSrc.includes('p.isPublished !== false'), 'Storefront hides unpublished drafts from public');
@@ -647,7 +657,7 @@ console.log('=== OptiVerse Automated Technical Verification ===');
       bulkSrc.includes('نظارات شمسية') &&
       bulkSrc.includes('نظارات بغيار شمس') &&
       bulkSrc.includes('نظارات أطفال') &&
-      bulkSrc.includes('شنابر معادن')
+      bulkSrc.includes('شمس معادن / هاف فريم')
   );
   assert.ok(bulkSrc.includes('accept=".glb,.gltf"') && !bulkSrc.includes('عزل AI للخلفية'));
   assert.ok(bulkSrc.includes('multiple') && bulkSrc.includes('جاري التحسين') && bulkSrc.includes('إيقاف مؤقت / إلغاء'));
@@ -893,7 +903,7 @@ console.log('=== OptiVerse Automated Technical Verification ===');
       storefrontSrc.includes('بغيار شمس') &&
       storefrontSrc.includes('أطفال') &&
       storefrontSrc.includes('معادن') &&
-      storefrontSrc.includes('جربها الآن') &&
+      storefrontSrc.includes('جرّب على وجهك') &&
       storefrontSrc.includes('/s/'),
     'StorefrontPage supports /s/[slug]/f/[frameId] routing, 6 category filters, and Try-On CTAs on #F8F9FA'
   );
@@ -1082,32 +1092,301 @@ console.log('=== OptiVerse Automated Technical Verification ===');
     adminSrc.includes('switchToAdminDemoStore') &&
       adminSrc.includes('enablePrescriptionLenses') &&
       adminSrc.includes('allowMerchantLensBrandingToggle') &&
-      adminSrc.includes('enableSponsoredSuppliers'),
-    'AdminPage exposes demo store toggle & all 3 global feature flags'
+      adminSrc.includes('enableSponsoredSuppliers') &&
+      adminSrc.includes('enableStoresDirectory') &&
+      adminSrc.includes('landingPreviewFrames'),
+    'AdminPage exposes demo store toggle, directory toggle, landing preview frames & all global feature flags'
   );
   assert.ok(
     merchantSrc.includes('signInWithPhoneOtp') &&
       merchantSrc.includes('onboardingCompleted') &&
       merchantSrc.includes('markCrmRecallSent') &&
-      merchantSrc.includes('addTopUpCredits'),
-    'MerchantPage implements Phone OTP, onboarding gate, CRM 6m/12m recalls & top-up packs'
+      merchantSrc.includes('addTopUpCredits') &&
+      merchantSrc.includes('STORE_THEMES') &&
+      merchantSrc.includes('/api/merchant/generate-logo') &&
+      merchantSrc.includes('mobileMode="dock"'),
+    'MerchantPage implements Phone OTP, onboarding gate, CRM 6m/12m recalls, top-up packs, Store Themes, AI logo, and bottom dock'
   );
   assert.ok(
     storefrontSrc.includes('enablePrescriptionLenses') &&
+      storefrontSrc.includes('resolveStoreTheme') &&
       pdpSrc.includes('enablePrescriptionLenses') &&
       pdpSrc.includes('salePrice'),
-    'StorefrontPage & ProductDetailsView gate Rx UI cleanly and render salePrice'
+    'StorefrontPage & ProductDetailsView gate Rx UI cleanly, apply merchant theme, and render salePrice'
   );
   assert.ok(
     bulkSrc.includes('MAX_BATCH_SIZE = 50') &&
       bulkSrc.includes('submitBatchSplitSheetViaServer') &&
       bulkSrc.includes('extractOpticalDimensionsViaServer') &&
       bulkSrc.includes('generateTintedCatalogAsset'),
-    'BulkFrameUploader implements 50-item batch limit, Turbo vs Batch routing, OCR, and $0 Auto-Color variants'
+    'BulkFrameUploader implements 50-item batch limit, 1-tap category cards, OCR, and $0 Auto-Color variants'
   );
 
   console.log('✓ Test 14 passed: Crystal white-bg cutout, $0 tint variants, default-OFF flags, plan caps, Directory, Admin Demo, & CRM/OTP verified');
 }
 
+// 15. Precision Upgrade: Solid vs Patterned Variance, Cache Isolation, Warby Parker Storefront, 2-Frame Comparison, A/B Polls, Merchant 2-Photo Cards & Landing Portrait
+{
+  const root = process.cwd();
+
+  // A. Solid vs Patterned frame color variance detection
+  const vw = 80;
+  const vh = 40;
+  const solidBuf = makeImage(vw, vh, [248, 249, 250]);
+  paintRect(solidBuf, vw, vh, 10, 10, 70, 30, [24, 24, 28]);
+  const solidAnalysis = analyzeRgbaFrameColorVariance(solidBuf, vw, vh);
+  assert.equal(solidAnalysis.isPatterned, false, 'Uniform black frame detected as non-patterned solid');
+
+  const patternBuf = makeImage(vw, vh, [248, 249, 250]);
+  // Multi-hue tortoise / striped pattern across frame body
+  paintRect(patternBuf, vw, vh, 10, 10, 30, 30, [220, 140, 20]);
+  paintRect(patternBuf, vw, vh, 31, 10, 50, 30, [30, 18, 12]);
+  paintRect(patternBuf, vw, vh, 51, 10, 70, 30, [15, 110, 195]);
+  const patternAnalysis = analyzeRgbaFrameColorVariance(patternBuf, vw, vh);
+  assert.equal(patternAnalysis.isPatterned, true, 'Multi-color tortoise/striped frame detected as patterned');
+
+  // B. Server cache keys separate pat1 vs pat0 cleanly
+  const solidKey = buildSharedCacheKeys({
+    modelCode: 'RB3025',
+    frameColor: '#111827',
+    phash: 'abcd1234abcd1234',
+    keepLensBranding: false,
+    isPatterned: false,
+  });
+  const patKey = buildSharedCacheKeys({
+    modelCode: 'RB3025',
+    frameColor: '#111827',
+    phash: 'abcd1234abcd1234',
+    keepLensBranding: false,
+    isPatterned: true,
+  });
+  assert.ok(solidKey.primaryKey.endsWith(':pat0') && solidKey.phashKey.endsWith(':pat0'));
+  assert.ok(patKey.primaryKey.endsWith(':pat1') && patKey.phashKey.endsWith(':pat1'));
+  assert.notEqual(solidKey.primaryKey, patKey.primaryKey);
+
+  // C. Wiring assertions across server, storefront, PDP, modals, merchant & landing
+  const serverSrc = fs.readFileSync(path.join(root, 'server.ts'), 'utf8');
+  const bulkSrc = fs.readFileSync(path.join(root, 'src/components/BulkFrameUploader.tsx'), 'utf8');
+  const storefrontSrc = fs.readFileSync(path.join(root, 'src/pages/StorefrontPage.tsx'), 'utf8');
+  const pdpSrc = fs.readFileSync(path.join(root, 'src/components/ProductDetailsView.tsx'), 'utf8');
+  const modalsSrc = fs.readFileSync(path.join(root, 'src/components/Modals.tsx'), 'utf8');
+  const merchantSrc = fs.readFileSync(path.join(root, 'src/pages/MerchantPage.tsx'), 'utf8');
+  const landingSrc = fs.readFileSync(path.join(root, 'src/pages/LandingPage.tsx'), 'utf8');
+  const cssSrc = fs.readFileSync(path.join(root, 'src/index.css'), 'utf8');
+
+  assert.ok(
+    serverSrc.includes('!params.isPatterned && keys.modelCode') && serverSrc.includes('solidModelTemplate'),
+    'server.ts blocks solid recoloring shortcut for patterned frames'
+  );
+  assert.ok(
+    bulkSrc.includes('computeFrameColorVariance') &&
+      bulkSrc.includes('solidModelTemplate') &&
+      bulkSrc.includes('autoGroupColors = true') &&
+      !bulkSrc.includes('تجميع الألوان التلقائي (توفير AI)'),
+    'BulkFrameUploader silently auto-groups solid siblings and guards patterned frames'
+  );
+  assert.ok(
+    storefrontSrc.includes('أنت الآن في وضع المعاينة كعميل') &&
+      storefrontSrc.includes('العودة للوحة التحكم') &&
+      storefrontSrc.includes('shop.videoUrl') &&
+      storefrontSrc.includes('مجموعة النظارات الكاملة') &&
+      storefrontSrc.includes('وصل حديثاً') &&
+      storefrontSrc.includes('تسوّق حسب شكل الإطار') &&
+      storefrontSrc.includes('تسوّق حسب الفئة واللون') &&
+      storefrontSrc.includes('cardSelectedColors') &&
+      storefrontSrc.includes('compareModalOpen') &&
+      storefrontSrc.includes('قارن بين النظارتين الآن') &&
+      storefrontSrc.includes("params.get('poll')"),
+    'StorefrontPage implements Warby Parker editorial layout, live swatches, 2-frame comparison, and A/B poll deep-linking'
+  );
+  assert.ok(
+    pdpSrc.includes('الصورة الأمامية (بالوش)') &&
+      pdpSrc.includes('الصورة الجانبية (بالجنب 3/4)') &&
+      pdpSrc.includes('أشكال الوجه المناسبة') &&
+      pdpSrc.includes('مشاركة للأصدقاء') &&
+      pdpSrc.includes('اطلب الآن عبر واتساب'),
+    'ProductDetailsView implements 2-photo swipeable gallery, face-shape fit, share & WhatsApp CTA'
+  );
+  assert.ok(
+    modalsSrc.includes('p2?: Product') &&
+      modalsSrc.includes('اسأل أصدقاءك: أيهما أحلى عليّ؟') &&
+      modalsSrc.includes('تغيير الصورة') &&
+      modalsSrc.includes('حفظ التعديلات'),
+    'Modals implements A/B VoteModal and simplified 5-field QuickEditProductModal'
+  );
+  assert.ok(
+    merchantSrc.includes('?preview=1') &&
+      merchantSrc.includes('أكثر النظارات تجربةً وطلبًا من عملائك') &&
+      merchantSrc.includes('بالوش') &&
+      merchantSrc.includes('بالجنب'),
+    'MerchantPage exposes ?preview=1 return flow, radar copy, and 2-photo product cards'
+  );
+  assert.ok(
+    landingSrc.includes('landing_editorial_portrait') &&
+      landingSrc.includes('تفاصيل الباقات') &&
+      cssSrc.includes('chevron-pulse-') &&
+      cssSrc.includes('pricing-arrive-glow'),
+    'LandingPage & index.css include studio portrait alignment, triple-chevron scroll, and arrival glow'
+  );
+
+  console.log('✓ Test 15 passed: Pattern/solid variance, cache isolation, Warby Parker storefront, 2-frame comparison, A/B polls & 1-screen merchant edit verified');
+}
+
+// 16. Complete Optical Lens Matrix & Sponsorship Engine Verification
+{
+  const root = process.cwd();
+
+  // A. Global default-OFF master flags
+  assert.equal(PLATFORM_SETTINGS0.enableLensesSystem, false, 'enableLensesSystem defaults to false');
+  assert.equal(PLATFORM_SETTINGS0.enablePrescriptionLenses, false, 'enablePrescriptionLenses defaults to false');
+
+  // B. Two-track seeded brands & exact 6 categories / refractive indices
+  const svBrands = DEFAULT_OFFICIAL_LENS_BRANDS.filter((b) => b.track === 'single_vision');
+  const labBrands = DEFAULT_OFFICIAL_LENS_BRANDS.filter((b) => b.track === 'custom_lab');
+  assert.ok(
+    ['Pixel', 'Kodak', 'Scope', 'HCL', 'Best', 'Biven', 'Square'].every((n) =>
+      svBrands.some((b) => b.nameEn.includes(n))
+    ),
+    'Track A seeds Pixel, Kodak, Scope, HCL, Best, Biven, and Square'
+  );
+  assert.ok(
+    ['Kodak', 'Pixel', 'Scope', 'HCL'].every((n) =>
+      labBrands.some((b) => b.nameEn.includes(n) && typeof b.estimatedDays === 'number' && b.estimatedDays > 0)
+    ),
+    'Track B seeds custom lab brands with estimatedDays'
+  );
+  assert.equal(LENS_CATEGORIES.length, 6, 'Exact 6 optical lens categories defined');
+
+  const whiteMeta = LENS_CATEGORIES.find((c) => c.key === 'white_plastic')!;
+  const arMeta = LENS_CATEGORIES.find((c) => c.key === 'anti_reflection')!;
+  const blueMeta = LENS_CATEGORIES.find((c) => c.key === 'blue_cut')!;
+  const photoMeta = LENS_CATEGORIES.find((c) => c.key === 'photochromic')!;
+  const nightMeta = LENS_CATEGORIES.find((c) => c.key === 'night_drive')!;
+  const triMeta = LENS_CATEGORIES.find((c) => c.key === 'three_in_one')!;
+
+  assert.equal(blueMeta.nameAr, 'بلو كات', 'Blue Cut is cleanly labeled بلو كات');
+  assert.deepEqual(whiteMeta.indices, ['1.56', '1.60', '1.67', '1.74']);
+  assert.deepEqual(arMeta.indices, ['1.56', '1.60', '1.67', '1.74']);
+  assert.deepEqual(blueMeta.indices, ['1.56', '1.60', '1.67', '1.74']);
+  assert.deepEqual(photoMeta.indices, ['1.56', '1.60', '1.67']);
+  assert.deepEqual(photoMeta.variants, ['photo_grey', 'photo_brown']);
+  assert.deepEqual(nightMeta.indices, ['1.56', '1.60', '1.67']);
+  assert.deepEqual(triMeta.indices, ['1.56', '1.60', '1.67']);
+  assert.deepEqual(triMeta.variants, ['photo_grey', 'photo_brown']);
+
+  // C. Admin variance clamping (±allowedVariancePct%)
+  const clampedLow = clampMerchantPriceToVariance(100, 1000, 20);
+  const clampedHigh = clampMerchantPriceToVariance(1500, 1000, 20);
+  const withinOk = clampMerchantPriceToVariance(1150, 1000, 20);
+  assert.equal(clampedLow.clamped, 800);
+  assert.equal(clampedLow.isOutOfBounds, true);
+  assert.equal(clampedHigh.clamped, 1200);
+  assert.equal(clampedHigh.isOutOfBounds, true);
+  assert.equal(withinOk.clamped, 1150);
+  assert.equal(withinOk.isOutOfBounds, false);
+
+  // D. Priority ordering: Official/sponsored brands strictly precede Custom merchant brands & honor ON/OFF + store_decide
+  const cellKey160 = makeMatrixCellKey('blue_cut', 'none', '1.60');
+  const testShopId = 'test-shop-matrix';
+  const merchantCfgs = [
+    {
+      shopId: testShopId,
+      brandId: 'custom-local-1',
+      track: 'single_vision' as const,
+      isCustomBrand: true,
+      nameAr: 'معمل النخبة الخاص',
+      nameEn: 'Elite Custom',
+      isEnabled: true,
+      prices: {
+        [makeMatrixCellKey('blue_cut', 'none', '1.56')]: { enabled: true, price: 320 },
+        [cellKey160]: { enabled: true, price: 480 },
+      },
+    },
+    {
+      shopId: testShopId,
+      brandId: 'sv-best',
+      track: 'single_vision' as const,
+      isCustomBrand: false,
+      isEnabled: false, // Toggled OFF by merchant
+      prices: {},
+    },
+  ];
+
+  const rowsCheck = resolveMerchantBrandRowsForTrack(
+    DEFAULT_OFFICIAL_LENS_BRANDS,
+    merchantCfgs,
+    testShopId,
+    'single_vision'
+  );
+  assert.equal(rowsCheck.officialRows[0].brandId, 'sv-pixel', 'Official priority #1 stays at top');
+  assert.equal(rowsCheck.customRows[0].brandId, 'custom-local-1');
+
+  const custExact = resolveCustomerLensBrands({
+    officialBrands: DEFAULT_OFFICIAL_LENS_BRANDS,
+    merchantConfigs: merchantCfgs,
+    shopId: testShopId,
+    track: 'single_vision',
+    categoryKey: 'blue_cut',
+    variant: 'none',
+    indexOrStoreDecide: '1.60',
+  });
+  assert.equal(custExact[0].brandId, 'sv-pixel', 'Official Sponsor renders first for customer');
+  assert.equal(custExact[0].sponsorBadge, 'official_sponsor');
+  assert.ok(!custExact.some((b) => b.brandId === 'sv-best'), 'Disabled merchant brand hidden from customers');
+  assert.equal(
+    custExact[custExact.length - 1].brandId,
+    'custom-local-1',
+    'Merchant custom brand strictly appears AFTER official/sponsored brands'
+  );
+
+  const custStoreDecide = resolveCustomerLensBrands({
+    officialBrands: DEFAULT_OFFICIAL_LENS_BRANDS,
+    merchantConfigs: merchantCfgs,
+    shopId: testShopId,
+    track: 'single_vision',
+    categoryKey: 'blue_cut',
+    variant: 'none',
+    indexOrStoreDecide: 'store_decide',
+  });
+  assert.equal(custStoreDecide[0].isStoreDecide, true);
+  assert.ok(custStoreDecide[0].maxPrice > custStoreDecide[0].minPrice, 'Store-decide exposes price range');
+
+  // E. UI & Migration Wiring Verification
+  const adminSrc = fs.readFileSync(path.join(root, 'src/pages/AdminPage.tsx'), 'utf8');
+  const adminLensSrc = fs.readFileSync(path.join(root, 'src/components/AdminLensMatrixManager.tsx'), 'utf8');
+  const merchantSrc = fs.readFileSync(path.join(root, 'src/pages/MerchantPage.tsx'), 'utf8');
+  const merchantLensSrc = fs.readFileSync(path.join(root, 'src/components/MerchantLensMatrixManager.tsx'), 'utf8');
+  const storefrontSrc = fs.readFileSync(path.join(root, 'src/pages/StorefrontPage.tsx'), 'utf8');
+  const pdpSrc = fs.readFileSync(path.join(root, 'src/components/ProductDetailsView.tsx'), 'utf8');
+  const mig008Src = fs.readFileSync(path.join(root, 'supabase/migrations/008_optical_lens_matrix.sql'), 'utf8');
+
+  assert.ok(
+    adminSrc.includes('تفعيل نظام العدسات الطبية والرعاة') &&
+      adminSrc.includes('AdminLensMatrixManager') &&
+      adminLensSrc.includes('SPONSOR_BADGE_LABELS.official_sponsor') &&
+      adminLensSrc.includes('السعر الشائع في السوق (ج.م)'),
+    'AdminPage & AdminLensMatrixManager wire global toggle, priority, sponsor badge, variance & market price'
+  );
+  assert.ok(
+    merchantSrc.includes('العدسات الطبية — قريباً ✨') &&
+      merchantSrc.includes('MerchantLensMatrixManager') &&
+      merchantLensSrc.includes('+ إضافة شركة عدسات خاصة بمحلي') &&
+      merchantLensSrc.includes('clampMerchantPriceToVariance'),
+    'MerchantPage & MerchantLensMatrixManager implement pre-launch teaser and variance-clamped lens pricing'
+  );
+  assert.ok(
+    storefrontSrc.includes('تحديد الضغط بواسطة المتجر بعد مراجعة الكشف') &&
+      storefrontSrc.includes('enableLensesSystem') &&
+      storefrontSrc.includes('resolveCustomerLensBrands') &&
+      pdpSrc.includes('enableLensesSystem') &&
+      mig008Src.includes('official_lens_brands') &&
+      mig008Src.includes('merchant_lens_configs'),
+    'Storefront 4-step matrix, store-decide option, PDP flag guard & SQL migration 008 verified'
+  );
+
+  console.log('✓ Test 16 passed: Complete Optical Lens Matrix, Sponsorship Priority, Variance Clamping & 4-Step Flow verified');
+}
+
 console.log('=== ALL TESTS PASSED ===');
+
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CATS, DEFAULT_SHOP_ID, EGYPT_GOVERNORATES, SALES0, SHAPES, TYPES } from '../data/seed';
+import { DEFAULT_SHOP_ID, EGYPT_GOVERNORATES, SALES0, STORE_THEMES } from '../data/seed';
 import { isSupabaseConfigured } from '../lib/supabase';
 import {
   getShopDaysLeft,
@@ -9,10 +9,12 @@ import {
   isShopExpiredOrPaused,
   useOptiVerse,
 } from '../services/optiverseStore';
-import { FaceShape, OrderStage } from '../types';
+import { OrderStage } from '../types';
 import { BulkFrameUploader } from '../components/BulkFrameUploader';
-import { ExamThumb, MiniGlasses, Spin } from '../components/GlassesGraphics';
+import { ExamThumb, MiniGlasses } from '../components/GlassesGraphics';
 import { I } from '../components/Icons';
+import { MerchantLensMatrixManager } from '../components/MerchantLensMatrixManager';
+import { resolveAngled45Url, resolveStoreFrontUrl } from '../utils/bulkFrameProcessor';
 import {
   Bars,
   D,
@@ -31,7 +33,6 @@ import {
   qBadge,
   waNum,
 } from '../components/UiShared';
-import { formatOpticalDimensions, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
 
 const MERCHANT_PAGE_SIZE = 24;
 
@@ -224,7 +225,6 @@ export function MerchantPage() {
     updateShop,
     addTopUpCredits,
     products,
-    toggleProductPublished,
     softDeleteProductByCode,
     inq,
     updateInquiry,
@@ -237,6 +237,8 @@ export function MerchantPage() {
     lensTypes,
     brands,
     extras,
+    getAccessToken,
+    uploadAssetToStorage,
   } = useOptiVerse();
 
   const [authMode, setAuthMode] = useState<'login' | 'signup' | 'phone'>(() =>
@@ -274,8 +276,7 @@ export function MerchantPage() {
 
   const [sec, setSec] = useState('home');
   const [code, setCode] = useState('');
-  const [ai, setAi] = useState(true);
-  const [fs, setFs] = useState<FaceShape>('oval');
+  const [aiLogoBusy, setAiLogoBusy] = useState(false);
   const [visibleProdsCount, setVisibleProdsCount] = useState(MERCHANT_PAGE_SIZE);
   const qrWrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -645,7 +646,7 @@ export function MerchantPage() {
                 <label className="text-xs font-bold text-slate-700">اسم المحل التجاري *</label>
                 <input
                   className="inp mt-1"
-                  placeholder="دهب للبصريات"
+                  placeholder="مثال: بصريات النور"
                   value={obShopName}
                   onChange={(e) => setObShopName(e.target.value)}
                   required
@@ -712,13 +713,15 @@ export function MerchantPage() {
   const expiredOrPaused = isShopExpiredOrPaused(activeShop);
   const isDefaultDemoShop = activeShop.id === DEFAULT_SHOP_ID;
 
-  const rxEnabled = Boolean(platformSettings.enablePrescriptionLenses);
+  const rxEnabled = Boolean(
+    platformSettings.enableLensesSystem ?? platformSettings.enablePrescriptionLenses
+  );
   const suppliersEnabled = Boolean(platformSettings.enableSponsoredSuppliers);
   const deliveryEnabled = Boolean(activeShop.enableDeliveryService);
 
   const planCaps = getShopPlanCapabilities(activeShop, platformSettings);
   const maxProducts = getShopMaxProducts(activeShop, platformSettings);
-  const creditsCap = (activeShop.aiCreditsLimit || planCaps.monthlyAiCredits || 100) + (activeShop.topupCredits || 0);
+  const creditsCap = (activeShop.aiCreditsLimit || planCaps.monthlyAiCredits || 110) + (activeShop.topupCredits || 0);
   const creditsUsed = activeShop.aiCreditsUsed || 0;
   const creditsRemaining = Math.max(0, creditsCap - creditsUsed);
 
@@ -759,13 +762,14 @@ export function MerchantPage() {
           ['inq', 'الكشوفات الطبية والاستفسارات', 'receipt', newCount],
           ['lens', 'إدارة أسعار العدسات والشركات', 'dollar'],
         ] as ShellNavItem[])
-      : []),
+      : ([['lens_teaser', 'العدسات الطبية — قريباً ✨', 'eye']] as ShellNavItem[])),
     ...(deliveryEnabled ? ([['delivery', 'إعدادات التوصيل', 'truck']] as ShellNavItem[]) : []),
     ...(suppliersEnabled ? ([['suppliers', 'الموردون المعتمدون ⭐', 'crown']] as ShellNavItem[]) : []),
     ['stats', 'الإحصائيات', 'chart'],
     ['rep', 'التقارير والمبيعات', 'trend'],
     ['about', 'حول OptiVerse', 'info'],
-    ['store', 'بيانات المحل والاشتراك', 'store'],
+    ['store', 'بيانات المحل والسمات واللوجو', 'store'],
+    ['sub', 'الاشتراك والباقات', 'crown'],
   ];
 
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://optiverse.app';
@@ -878,6 +882,70 @@ export function MerchantPage() {
     toast('تم تسجيل العميل في قاعدة البيانات ✓');
   };
 
+  const aiLogoUsed = activeShop.aiLogoGenerations || 0;
+  const aiLogoRemaining = Math.max(0, 2 - aiLogoUsed);
+
+  const handleUploadDirectLogo = async (file: File) => {
+    try {
+      const url = await uploadAssetToStorage(file, `logos/${activeShop.id}`, 'png');
+      await updateShop(activeShop.id, { logo: url });
+      toast('تم رفع شعار المحل وتطبيقه فوراً ✓');
+    } catch {
+      toast('تعذر رفع صورة اللوجو');
+    }
+  };
+
+  const handleGenerateAiLogo = async (file: File) => {
+    if (aiLogoUsed >= 2) {
+      toast('تم استهلاك الحد الأقصى لتصميم اللوجو بالذكاء الاصطناعي (محاولتان)');
+      return;
+    }
+    setAiLogoBusy(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('تعذر قراءة الصورة'));
+        reader.readAsDataURL(file);
+      });
+      const mimeMatch = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      const mimeType = mimeMatch ? mimeMatch[1] : file.type || 'image/jpeg';
+      const imageBase64 = mimeMatch ? mimeMatch[2] : dataUrl;
+
+      const token = await getAccessToken();
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-optiverse-demo-shop': activeShop.id,
+        'x-optiverse-demo-role': session?.role || 'merchant',
+      };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      const res = await fetch('/api/merchant/generate-logo', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          imageBase64,
+          mimeType,
+          shopId: activeShop.id,
+          shopName: activeShop.name,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok || !json?.logoDataUrl) {
+        throw new Error(json?.error || 'تعذر تصميم اللوجو بالذكاء الاصطناعي');
+      }
+      await updateShop(activeShop.id, {
+        logo: json.logoDataUrl,
+        aiLogoGenerations: Number(json.usedGenerations ?? aiLogoUsed + 1),
+      });
+      toast('تم تصميم شعار المتجر بالذكاء الاصطناعي وتطبيقه فوراً ✨');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'تعذر تصميم اللوجو');
+    } finally {
+      setAiLogoBusy(false);
+    }
+  };
+
   return (
     <Shell
       items={items}
@@ -886,12 +954,14 @@ export function MerchantPage() {
       title={activeShop.name}
       sub="لوحة تحكم التاجر"
       highlight="store"
+      mobileMode="dock"
+      primaryDockIds={['home', 'prods', 'crm']}
       onSignOut={signOut}
       headerAction={
         <button
           type="button"
           className="btn btn-tryon btn-sm whitespace-nowrap shrink-0"
-          onClick={() => navigate(`/shop/${activeShop.slug}`)}
+          onClick={() => navigate(`/shop/${activeShop.slug}?preview=1`)}
         >
           <I n="eye" s={14} /> معاينة المتجر
         </button>
@@ -991,7 +1061,7 @@ export function MerchantPage() {
               </span>
               <h3 className="font-bold text-[#0F172A]">رادار التحليلات الذكية</h3>
             </div>
-            <p className="text-xs text-slate-500 mb-4">أين يتجرّب الناس كثيراً ولا يشترون؟</p>
+            <p className="text-xs text-slate-500 mb-4">أكثر النظارات تجربةً وطلبًا من عملائك</p>
 
             {totalRadarTrials < 5 ? (
               <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-6 text-center text-sm text-slate-600 leading-7">
@@ -1133,11 +1203,7 @@ export function MerchantPage() {
                 نظارة متاحة في الكتالوج
               </>
             }
-          >
-            <button className="btn btn-p" onClick={() => setModal('addprod')}>
-              <I n="plus" s={16} /> إضافة نظارة جديدة
-            </button>
-          </Head>
+          />
           <BulkFrameUploader />
           <div className="glass rounded-2xl p-4 mb-4 flex flex-wrap items-center gap-3">
             <div className="flex-1 min-w-[200px]">
@@ -1159,84 +1225,66 @@ export function MerchantPage() {
             </button>
           </div>
 
-          <div className="glass rounded-2xl p-4 mb-5 flex flex-wrap items-center gap-3">
-            <span className="w-9 h-9 rounded-xl b-acc flex items-center justify-center">
-              <I n="spark" s={18} />
-            </span>
-            <div className="flex-1 min-w-[180px]">
-              <div className="font-bold text-sm">أشكال الوجه المناسبة (ذكاء اصطناعي)</div>
-              <div className="text-xs opacity-60">أظهر النظارات الأنسب لكل شكل وجه</div>
-            </div>
-            {ai && (
-              <div className="flex gap-1.5 flex-wrap">
-                {(Object.entries(SHAPES) as [FaceShape, string][]).map((s) => (
-                  <button key={s[0]} className={'chip ' + (fs === s[0] ? 'on' : '')} onClick={() => setFs(s[0])}>
-                    {s[1]} ({s[0] === 'oval' ? 'Oval' : s[0] === 'round' ? 'Round' : 'Square'})
-                  </button>
-                ))}
-              </div>
-            )}
-            <Switch on={ai} onChange={setAi} />
-          </div>
-
           <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
             {shopProducts.slice(0, visibleProdsCount).map((p) => {
-              const fit = p.shapes.includes(fs);
               const published = p.isPublished !== false;
-              const hasTwoAngles =
-                (p.images?.filter((im) => im.kind !== 'gallery' || Math.abs(im.angleYaw) > 15).length || 0) >= 2;
-              const hasUploadedFront = Boolean(p.processedImage || p.images?.some((im) => im.imageUrl));
               return (
                 <div
                   key={p.id}
                   className={
-                    'glass rounded-2xl p-4 transition flex flex-col ' +
-                    (!published ? 'opacity-65 ' : '') +
-                    (ai && !fit ? 'opacity-45 ' : '')
+                    'glass rounded-2xl p-4 transition flex flex-col gap-3 ' +
+                    (!published ? 'opacity-70' : '')
                   }
                 >
                   <div
-                    className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] cursor-pointer relative overflow-hidden"
+                    className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] cursor-pointer relative overflow-hidden p-2"
                     onClick={() => setModal({ t: 'editprod', p })}
                   >
-                    <Spin p={p} />
-                    <span className="absolute top-2 start-2 badge bg-[#0F172A] text-white">
-                      {p.tryonMode === '3d' || p.modelCalibration?.frameWidthMm
-                        ? `3D · ${resolveProductOpticalDimensions(p).totalFrameWidthMm}mm`
-                        : hasTwoAngles
-                        ? 'زاويتان · AI'
-                        : hasUploadedFront
-                        ? 'معزولة · AI'
-                        : 'إطار قياسي'}
-                    </span>
-                    {!published ? (
-                      <span className="absolute top-2 end-2 badge b-warn">مخفية</span>
-                    ) : ai && fit ? (
-                      <span className="absolute top-2 end-2 badge b-ok">مناسبة لوجه {SHAPES[fs]}</span>
-                    ) : null}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="relative aspect-[4/3] rounded-lg bg-white border border-slate-200/80 flex items-center justify-center p-1.5 overflow-hidden">
+                        <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-slate-900/80 text-white text-[0.55rem] font-bold">
+                          بالوش
+                        </span>
+                        <MiniGlasses
+                          type={p.type}
+                          frame={p.frame}
+                          lens={p.lens}
+                          w={105}
+                          imageUrl={resolveStoreFrontUrl(p)}
+                        />
+                      </div>
+                      <div className="relative aspect-[4/3] rounded-lg bg-white border border-slate-200/80 flex items-center justify-center p-1.5 overflow-hidden">
+                        <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-slate-700/80 text-white text-[0.55rem] font-bold">
+                          بالجنب
+                        </span>
+                        {resolveAngled45Url(p) ? (
+                          <img
+                            src={resolveAngled45Url(p)}
+                            alt={`زاوية جانبية ${p.name}`}
+                            loading="lazy"
+                            className="max-h-full max-w-full object-contain"
+                          />
+                        ) : (
+                          <MiniGlasses
+                            type={p.type}
+                            frame={p.frame}
+                            lens={p.lens}
+                            w={105}
+                            imageUrl={resolveStoreFrontUrl(p)}
+                          />
+                        )}
+                      </div>
+                    </div>
+                    {!published && (
+                      <span className="absolute top-2 end-2 z-20 badge b-warn">مخفية</span>
+                    )}
                   </div>
 
-                  <div className="flex justify-between items-start mt-3 gap-2">
+                  <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="font-bold text-[#0F172A] truncate">{p.name}</div>
-                      <div className="text-xs text-slate-600">
-                        {TYPES[p.type]} · {CATS[p.cat]} ·{' '}
-                        <span className="font-mono text-[#0284C7] font-bold" dir="ltr">
-                          {formatOpticalDimensions(resolveProductOpticalDimensions(p))} mm
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                        <span className="badge b-acc font-mono" dir="ltr">
-                          {p.code}
-                        </span>
-                        {p.modelCode && (
-                          <span className="text-[0.68rem] font-mono text-slate-500" dir="ltr">
-                            {p.modelCode}
-                          </span>
-                        )}
-                        {p.availableSizes && (
-                          <span className="text-[0.68rem] text-slate-500">{p.availableSizes.join(' · ')}</span>
-                        )}
+                      <div className="text-xs text-slate-500 font-mono mt-0.5 truncate" dir="ltr" style={{ textAlign: 'start' }}>
+                        {p.modelCode || p.code}
                       </div>
                     </div>
                     <div className="font-extrabold text-[#D97706] shrink-0">
@@ -1244,20 +1292,7 @@ export function MerchantPage() {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between gap-2 mt-3 pt-2.5 border-t border-[#E2E8F0]">
-                    <span className="text-xs font-semibold text-slate-600">
-                      {published ? 'منشورة في المتجر' : 'مسودة مخفية'}
-                    </span>
-                    <Switch
-                      on={published}
-                      onChange={async () => {
-                        await toggleProductPublished(p.id);
-                        toast(published ? `تم إخفاء "${p.name}" من متجر العملاء` : `تم نشر "${p.name}" للعملاء ✓`);
-                      }}
-                    />
-                  </div>
-
-                  <div className="flex gap-1.5 mt-3 flex-wrap">
+                  <div className="flex items-center gap-1.5 mt-auto">
                     <button
                       type="button"
                       className="btn btn-g btn-sm flex-1"
@@ -1270,20 +1305,13 @@ export function MerchantPage() {
                       className="btn btn-tryon btn-sm flex-1"
                       onClick={() => navigate(`/s/${activeShop.slug}/f/${p.id}?preview=1`)}
                     >
-                      <I n="eye" s={13} /> معاينة كعميل
+                      <I n="eye" s={13} /> معاينة
                     </button>
                     <button
                       type="button"
-                      className="btn btn-g btn-sm font-extrabold"
-                      title="خصم"
-                      onClick={() => setModal({ t: 'disc', kind: 'prod', item: p })}
-                    >
-                      %
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-d btn-sm"
+                      className="btn btn-d btn-sm !px-2.5 shrink-0"
                       title="حذف"
+                      aria-label="حذف"
                       onClick={() => setModal({ t: 'delprod', p })}
                     >
                       <I n="trash" s={13} />
@@ -1292,14 +1320,6 @@ export function MerchantPage() {
                 </div>
               );
             })}
-            <button
-              onClick={() => setModal('addprod')}
-              className="rounded-2xl border-2 border-dashed border-slate-300 bg-white min-h-[260px] flex flex-col items-center justify-center gap-2 text-slate-600 hover:text-[#0F172A] hover:border-[#0284C7] transition cursor-pointer"
-            >
-              <I n="upload" s={28} />
-              <b>إضافة نظارة جديدة</b>
-              <span className="text-xs">صورتان من زاويتين + عزل تلقائي بالذكاء الاصطناعي</span>
-            </button>
           </div>
           {shopProducts.length > MERCHANT_PAGE_SIZE && (
             <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-white border border-[#E2E8F0] px-4 py-3 text-xs">
@@ -1538,35 +1558,33 @@ export function MerchantPage() {
         </>
       )}
 
-      {sec === 'lens' && rxEnabled && (
+      {sec === 'lens' && rxEnabled && <MerchantLensMatrixManager />}
+
+      {sec === 'lens_teaser' && !rxEnabled && (
         <>
           <Head
-            t="إدارة أسعار العدسات والشركات"
-            sub="أي إضافة أو تعديل أو إخفاء بيظهر لعملائك فوراً في خطوات اختيار العدسات"
+            t="العدسات الطبية — قريباً ✨"
+            sub="مصفوفة متكاملة لتسعير العدسات الطبية وربط الشركات المصنعة بمتجرك"
           />
-          <div className="grid lg:grid-cols-2 gap-4">
-            <CatCard
-              kind="lens"
-              title="أنواع العدسات"
-              sub="السعر الأساسي لكل نوع"
-              addLabel="+ إضافة نوع عدسة"
-              list={shopLenses}
-            />
-            <div className="space-y-4">
-              <CatCard
-                kind="brand"
-                title="الشركات المصنعة"
-                sub="الزيادة على السعر الأساسي"
-                addLabel="+ إضافة شركة جديدة"
-                list={shopBrands}
-              />
-              <CatCard
-                kind="extra"
-                title="إضافات الحماية"
-                sub="سعر كل إضافة اختيارية"
-                addLabel="+ إضافة ميزة حماية جديدة"
-                list={shopExtras}
-              />
+          <div className="glass rounded-3xl p-6 sm:p-8 max-w-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <span className="w-12 h-12 rounded-2xl bg-sky-50 text-[#0284C7] border border-sky-200 flex items-center justify-center shrink-0">
+                <I n="eye" s={24} />
+              </span>
+              <div>
+                <div className="font-extrabold text-base sm:text-lg text-[#0F172A]">
+                  العدسات الطبية — قريباً ✨
+                </div>
+                <div className="text-xs text-slate-500">
+                  يتم تجهيز مصفوفة العدسات والرعاة المعتمدين على مستوى المنصة حالياً
+                </div>
+              </div>
+            </div>
+            <p className="text-sm text-slate-600 leading-7">
+              قريباً ستتمكن من تفعيل العدسات الجاهزة (Single Vision) وعدسات التصنيع (Progressive &amp; Bifocal) بدرجات ضغط 1.56 حتى 1.74 وبأسعار الشركات المعتمدة أو شركاتك الخاصة مع استلام الكشوفات الطبية مباشرة على واتساب.
+            </p>
+            <div className="rounded-2xl p-3.5 bg-[#F8F9FA] border border-[#E2E8F0] text-xs text-slate-600">
+              متجرك يعمل الآن بكامل طاقته لعرض الإطارات والتجربة الحية 1:1 على الوجه واستقبال طلبات الواتساب.
             </div>
           </div>
         </>
@@ -1716,73 +1734,9 @@ export function MerchantPage() {
       {sec === 'store' && (
         <>
           <Head
-            t="بيانات المحل والاشتراك"
-            sub="إعداد متجر العملاء وإدارة الباقة والرصيد ورابط المتجر ورمز QR"
-          >
-            <button className="btn btn-tryon" onClick={() => navigate(`/shop/${activeShop.slug}`)}>
-              <I n="eye" s={16} /> معاينة كعميل
-            </button>
-          </Head>
-
-          {/* Full Plan, Subscription & Credits Card (ONLY inside بيانات المحل والاشتراك) */}
-          <div className="glass rounded-2xl p-5 mb-4 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="w-9 h-9 rounded-xl bg-amber-50 text-[#D97706] border border-amber-200 flex items-center justify-center">
-                  <I n="crown" s={18} />
-                </span>
-                <div>
-                  <div className="font-extrabold text-[#0F172A] text-sm sm:text-base flex items-center gap-2 flex-wrap">
-                    <span>الباقة الحالية: {activeShop.plan}</span>
-                    {activeShop.isFeatured && <span className="badge b-acc">متجر مميز ⭐</span>}
-                  </div>
-                  <div className="text-xs text-slate-500 mt-0.5">
-                    {activeShop.status === 'trial' ? `فترة تجريبية مجانية — متبقي ${trialDaysLeft} أيام` : 'اشتراك مفعل'}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white btn-sm whitespace-nowrap shrink-0"
-                  onClick={() => addTopUpCredits(activeShop.id)}
-                >
-                  <I n="plus" s={14} /> +{platformSettings.topupPackFrames} نظارة إضافية بـ{' '}
-                  <span dir="ltr">{platformSettings.topupPackPrice}</span> ج.م
-                </button>
-                <a
-                  className="btn btn-g btn-sm whitespace-nowrap shrink-0"
-                  href={`https://wa.me/201000000000?text=${adminRenewMsg}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <I n="msg" s={14} /> ترقية / تجديد الاشتراك
-                </a>
-              </div>
-            </div>
-
-            <div className="grid sm:grid-cols-3 gap-3 text-xs sm:text-sm">
-              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center justify-between">
-                <span className="text-slate-600">سعة المتجر</span>
-                <b className="tabular-nums text-[#0F172A]" dir="ltr">
-                  {shopProducts.length} / {maxProducts}
-                </b>
-              </div>
-              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center justify-between">
-                <span className="text-slate-600">رصيد معالجة AI</span>
-                <b className="tabular-nums text-[#0284C7]" dir="ltr">
-                  {creditsRemaining} / {creditsCap}
-                </b>
-              </div>
-              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center justify-between">
-                <span className="text-slate-600">مسطرة PD بالكاميرا</span>
-                <span className={planCaps.cameraPdRulerEnabled ? 'badge b-ok' : 'badge b-warn'}>
-                  {planCaps.cameraPdRulerEnabled ? 'مفعّلة ✓' : 'في الاحترافية'}
-                </span>
-              </div>
-            </div>
-          </div>
+            t="بيانات المحل والسمات واللوجو"
+            sub="إعداد متجر العملاء وتخصيص اللوجو والسمة الفاخرة ورابط المتجر ورمز QR"
+          />
 
           <div className="grid lg:grid-cols-2 gap-4">
             <div className="glass rounded-2xl p-5 min-w-0">
@@ -1815,8 +1769,8 @@ export function MerchantPage() {
               </div>
             </div>
 
-            <div className="glass rounded-2xl p-5 space-y-3.5">
-              <h3 className="font-bold text-[#0F172A]">تخصيص الواجهة وبيانات الدليل</h3>
+            <div className="glass rounded-2xl p-5 space-y-4">
+              <h3 className="font-bold text-[#0F172A]">تخصيص الواجهة واللوجو والبيانات</h3>
               <div className="grid sm:grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-slate-600">اسم المحل</label>
@@ -1841,69 +1795,240 @@ export function MerchantPage() {
                   </select>
                 </div>
               </div>
+
               <div>
-                <label className="text-xs text-slate-600">العنوان في دليل المحلات</label>
+                <label className="text-xs text-slate-600">وصف / شعار المحل المختصر</label>
+                <input
+                  className="inp mt-1"
+                  placeholder="مثال: أحدث موديلات النظارات الطبية والشمسية بتجربة ثلاثية الأبعاد"
+                  value={activeShop.tagline || ''}
+                  onChange={(e) => updateShop(activeShop.id, { tagline: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-600">العنوان</label>
                 <input
                   className="inp mt-1"
                   value={activeShop.address || ''}
                   onChange={(e) => updateShop(activeShop.id, { address: e.target.value })}
                 />
               </div>
-              <div>
-                <label className="text-xs text-slate-600">رابط Google Maps</label>
-                <input
-                  className="inp mt-1"
-                  dir="ltr"
-                  value={activeShop.mapsUrl || ''}
-                  onChange={(e) => updateShop(activeShop.id, { mapsUrl: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-slate-600">اللوجو</label>
-                <div className="flex gap-2 mt-1 flex-wrap">
-                  {['👓', '🕶️', '✨', '👁️', '🌟'].map((l) => (
-                    <button
-                      key={l}
-                      onClick={() => updateShop(activeShop.id, { logo: l })}
-                      className={
-                        'w-11 h-11 rounded-xl text-xl border cursor-pointer ' +
-                        (activeShop.logo === l ? 'border-[#0284C7] bg-sky-50' : 'border-[#E2E8F0] bg-[#F8F9FA]')
-                      }
-                    >
-                      {l}
-                    </button>
-                  ))}
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-600">رابط Google Maps</label>
+                  <input
+                    className="inp mt-1"
+                    dir="ltr"
+                    value={activeShop.mapsUrl || ''}
+                    onChange={(e) => updateShop(activeShop.id, { mapsUrl: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-600">رقم واتساب الطلبات</label>
+                  <input
+                    className="inp mt-1"
+                    dir="ltr"
+                    value={activeShop.wa}
+                    onChange={(e) => updateShop(activeShop.id, { wa: e.target.value })}
+                  />
                 </div>
               </div>
-              <div>
-                <label className="text-xs text-slate-600">لون الواجهة</label>
-                <div className="flex gap-2 mt-1">
-                  {['#0284C7', '#0F172A', '#D97706', '#059669', '#e11d48'].map((c) => (
-                    <button
-                      key={c}
-                      onClick={() => updateShop(activeShop.id, { color: c })}
-                      className="w-9 h-9 rounded-full border-2 cursor-pointer"
-                      style={{ background: c, borderColor: activeShop.color === c ? '#0F172A' : 'transparent' }}
+
+              {/* Logo Upload & AI Shop-Sign Logo Generator */}
+              <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-3.5 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    {activeShop.logo &&
+                    (activeShop.logo.startsWith('http') ||
+                      activeShop.logo.startsWith('data:') ||
+                      activeShop.logo.startsWith('/')) ? (
+                      <img
+                        src={activeShop.logo}
+                        alt={activeShop.name}
+                        className="w-12 h-12 rounded-xl object-contain bg-white border border-[#E2E8F0] p-1 shrink-0"
+                      />
+                    ) : (
+                      <span className="w-12 h-12 rounded-xl bg-white border border-[#E2E8F0] flex items-center justify-center text-2xl shrink-0">
+                        {activeShop.logo || '👓'}
+                      </span>
+                    )}
+                    <div>
+                      <div className="text-xs font-extrabold text-[#0F172A]">لوجو المحل</div>
+                      <div className="text-[0.68rem] text-slate-500">ارفع شعاراً جاهزاً أو صوّر يافطة المحل</div>
+                    </div>
+                  </div>
+                  <span className="badge b-info text-[0.65rem]" dir="ltr">
+                    AI: {aiLogoRemaining} / 2
+                  </span>
+                </div>
+
+                <div className="grid sm:grid-cols-2 gap-2">
+                  <label className="btn btn-g btn-sm cursor-pointer text-xs justify-center">
+                    <I n="upload" s={14} /> رفع صورة اللوجو
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = '';
+                        if (f) void handleUploadDirectLogo(f);
+                      }}
                     />
-                  ))}
+                  </label>
+
+                  <label
+                    className={
+                      'btn btn-sm text-xs justify-center ' +
+                      (aiLogoUsed >= 2 || aiLogoBusy
+                        ? 'bg-slate-200 text-slate-500 cursor-not-allowed pointer-events-none'
+                        : 'bg-[#0284C7] hover:bg-[#0369A1] text-white cursor-pointer')
+                    }
+                  >
+                    <I n="spark" s={14} />
+                    <span>
+                      {aiLogoBusy
+                        ? 'جاري تصميم اللوجو...'
+                        : aiLogoUsed >= 2
+                        ? 'اكتمل حد AI (2/2)'
+                        : 'صوّر يافطة المحل لتصميم لوجو بالـ AI ✨'}
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      disabled={aiLogoUsed >= 2 || aiLogoBusy}
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = '';
+                        if (f) void handleGenerateAiLogo(f);
+                      }}
+                    />
+                  </label>
                 </div>
               </div>
+
+              {/* 4 Curated Luxury Storefront Themes */}
               <div>
-                <label className="text-xs text-slate-600">رقم واتساب الطلبات</label>
-                <input
-                  className="inp mt-1"
-                  dir="ltr"
-                  value={activeShop.wa}
-                  onChange={(e) => updateShop(activeShop.id, { wa: e.target.value })}
-                />
+                <label className="text-xs font-extrabold text-[#0F172A] block mb-2">
+                  سمات المتجر الفاخرة (تظهر فوراً للعملاء)
+                </label>
+                <div className="grid grid-cols-2 gap-2.5">
+                  {STORE_THEMES.map((th) => {
+                    const active = (activeShop.themeKey || 'royal_classic') === th.key;
+                    return (
+                      <button
+                        key={th.key}
+                        type="button"
+                        onClick={() => updateShop(activeShop.id, { themeKey: th.key, color: th.accent })}
+                        className={
+                          'rounded-2xl p-3 border text-start cursor-pointer transition flex flex-col gap-1.5 ' +
+                          (active
+                            ? 'border-[#0284C7] bg-sky-50/70 ring-1 ring-[#0284C7]'
+                            : 'border-[#E2E8F0] bg-[#F8F9FA] hover:bg-white')
+                        }
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-extrabold text-xs text-[#0F172A]">{th.nameAr}</span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {th.swatches.map((sw, sIdx) => (
+                              <span
+                                key={sIdx}
+                                className="w-3.5 h-3.5 rounded-full border border-slate-300"
+                                style={{ background: sw }}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                        <div className="text-[0.68rem] text-slate-600 leading-4">{th.descAr}</div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-              <div className="flex gap-2">
-                <button className="btn btn-p flex-1" onClick={() => toast('تم حفظ إعدادات المتجر ✓')}>
-                  حفظ
+
+              <button
+                type="button"
+                className="btn btn-p w-full"
+                onClick={() => toast('تم حفظ بيانات المتجر واللوجو والسمة ✓')}
+              >
+                <I n="check" s={16} /> حفظ التخصيصات
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {sec === 'sub' && (
+        <>
+          <Head
+            t="الاشتراك والباقات"
+            sub="متابعة الباقة الحالية والمدة المتبقية وسعة النظارات ورصيد معالجة AI"
+          />
+
+          <div className="glass rounded-2xl p-5 mb-4 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="w-11 h-11 rounded-2xl bg-amber-50 text-[#D97706] border border-amber-200 flex items-center justify-center shrink-0">
+                  <I n="crown" s={22} />
+                </span>
+                <div>
+                  <div className="font-extrabold text-[#0F172A] text-base sm:text-lg flex items-center gap-2 flex-wrap">
+                    <span>الباقة الحالية: {activeShop.plan}</span>
+                    {activeShop.isFeatured && <span className="badge b-acc">متجر مميز ⭐</span>}
+                  </div>
+                  <div className="mt-1 flex items-center gap-2 flex-wrap">
+                    <span className="badge b-info text-xs font-extrabold">
+                      متبقي في اشتراكك: <span dir="ltr">{trialDaysLeft}</span> يوماً
+                    </span>
+                    <span className="text-xs text-slate-500">
+                      {activeShop.status === 'trial' ? 'فترة تجريبية مجانية' : 'اشتراك مفعل'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white btn-sm whitespace-nowrap shrink-0"
+                  onClick={() => addTopUpCredits(activeShop.id)}
+                >
+                  <I n="plus" s={14} /> +{platformSettings.topupPackFrames} نظارة إضافية بـ{' '}
+                  <span dir="ltr">{platformSettings.topupPackPrice}</span> ج.م
                 </button>
-                <button className="btn btn-tryon flex-1" onClick={() => navigate(`/shop/${activeShop.slug}`)}>
-                  <I n="eye" s={15} /> معاينة كعميل
-                </button>
+                <a
+                  className="btn btn-p btn-sm whitespace-nowrap shrink-0"
+                  href={`https://wa.me/201000000000?text=${adminRenewMsg}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <I n="msg" s={14} /> ترقية / تجديد الاشتراك
+                </a>
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-3 gap-3 text-xs sm:text-sm">
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3.5 flex items-center justify-between">
+                <span className="text-slate-600 font-bold">سعة المتجر</span>
+                <b className="tabular-nums text-[#0F172A]" dir="ltr">
+                  {shopProducts.length} / {maxProducts}
+                </b>
+              </div>
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3.5 flex items-center justify-between">
+                <span className="text-slate-600 font-bold">رصيد معالجة AI</span>
+                <b className="tabular-nums text-[#0284C7]" dir="ltr">
+                  {creditsRemaining} / {creditsCap}
+                </b>
+              </div>
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3.5 flex items-center justify-between">
+                <span className="text-slate-600 font-bold">مسطرة PD بالكاميرا</span>
+                <span className={planCaps.cameraPdRulerEnabled ? 'badge b-ok' : 'badge b-warn'}>
+                  {planCaps.cameraPdRulerEnabled ? 'مفعّلة ✓' : 'في الاحترافية'}
+                </span>
               </div>
             </div>
           </div>

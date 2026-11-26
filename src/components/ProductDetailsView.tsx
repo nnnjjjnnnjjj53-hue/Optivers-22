@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CATS, SHAPES, TYPES } from '../data/seed';
 import { useOptiVerse } from '../services/optiverseStore';
 import { FrameSize, Product } from '../types';
@@ -28,6 +28,7 @@ interface ProductDetailsViewProps {
   onTryOn: (color: string, size: FrameSize) => void;
   onAddToCart: (color: string, size: FrameSize) => void;
   onGoCheckout: (color: string, size: FrameSize) => void;
+  autoFocusReview?: boolean;
 }
 
 const FRAME_MODE_LABELS: Record<string, string> = {
@@ -52,6 +53,7 @@ export function ProductDetailsView({
   onTryOn,
   onAddToCart,
   onGoCheckout,
+  autoFocusReview = false,
 }: ProductDetailsViewProps) {
   const { reviews, addProductReview, platformSettings, shops, setModal, toast } = useOptiVerse();
   const rxEnabled = Boolean(
@@ -94,6 +96,17 @@ export function ProductDetailsView({
   const [reviewComment, setReviewComment] = useState('');
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const reviewSectionRef = useRef<HTMLDivElement | null>(null);
+  const reviewAuthorInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!autoFocusReview) return;
+    const t = window.setTimeout(() => {
+      reviewSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      reviewAuthorInputRef.current?.focus();
+    }, 150);
+    return () => window.clearTimeout(t);
+  }, [autoFocusReview, product.id]);
 
   const productReviews = useMemo(
     () => reviews.filter((r) => r.productId === product.id),
@@ -423,7 +436,7 @@ export function ProductDetailsView({
             <h1 className="text-2xl sm:text-[1.7rem] font-extrabold text-slate-900 leading-snug">
               {product.name}
             </h1>
-            <div className="mt-2.5 flex items-baseline gap-2.5 tabular-nums">
+            <div className="mt-2.5 flex items-baseline gap-2.5 tabular-nums flex-wrap">
               <span className="text-2xl font-extrabold text-slate-900">
                 {fmt(effectivePrice)} <span className="text-sm font-bold text-slate-600">ج.م</span>
               </span>
@@ -434,6 +447,11 @@ export function ProductDetailsView({
                 </>
               )}
             </div>
+            {productShop?.showStockCountToCustomer && (product.stock ?? 1) === 1 && (
+              <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-300 text-amber-800 text-xs font-extrabold">
+                <span>متبقي قطعة واحدة فقط!</span>
+              </div>
+            )}
           </div>
 
           <p className="text-sm text-slate-700 leading-7 border-t border-slate-100 pt-4">
@@ -607,8 +625,17 @@ export function ProductDetailsView({
       )}
 
       {/* Customer Reviews Section (1-5 Stars + Arabic RTL Submission) */}
-      <div className="mt-8 pt-6 border-t border-slate-200 grid lg:grid-cols-12 gap-6 items-start">
-        <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 p-5 space-y-3">
+      <div
+        id="product-review-form"
+        ref={reviewSectionRef}
+        className="mt-8 pt-6 border-t border-slate-200 grid lg:grid-cols-12 gap-6 items-start"
+      >
+        <div
+          className={
+            'lg:col-span-5 bg-white rounded-2xl border p-5 space-y-3 ' +
+            (autoFocusReview ? 'border-amber-400 ring-2 ring-amber-200 shadow-md' : 'border-slate-200')
+          }
+        >
           <div className="flex items-center justify-between">
             <h2 className="text-base font-extrabold text-slate-900">أضف تقييمك للنظارة</h2>
             {productReviews.length > 0 && (
@@ -644,6 +671,7 @@ export function ProductDetailsView({
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">الاسم</label>
               <input
+                ref={reviewAuthorInputRef}
                 type="text"
                 value={reviewAuthor}
                 onChange={(e) => setReviewAuthor(e.target.value)}

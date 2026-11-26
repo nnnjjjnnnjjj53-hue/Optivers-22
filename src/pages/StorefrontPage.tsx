@@ -98,20 +98,47 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     : '';
   const queryParams = new URLSearchParams(queryString);
   const isMerchantPreview = queryParams.get('preview') === '1';
+  const autoFocusReview = queryParams.get('review') === '1';
   const showPreviewBar =
     isMerchantPreview || Boolean(session && (session.role === 'merchant' || isAdminRole(session.role)));
 
   const products = allProductsRaw
-    .filter((p) => p.shopId === shop?.id && !p.isDeleted && (showPreviewBar || p.isPublished !== false))
+    .filter(
+      (p) =>
+        p.shopId === shop?.id &&
+        !p.isDeleted &&
+        (showPreviewBar || p.isPublished !== false) &&
+        (!shop?.hideOutOfStockToCustomer || (p.stock ?? 1) > 0)
+    )
     .map(D);
 
-  const [tab, setTab] = useState<'shop' | 'lens' | 'fav' | 'ord' | 'cart'>('shop');
+  const storeUiStorageKey = `optiverse_store_state_${slug || 'default'}`;
+  const initialStoredUi = (() => {
+    if (typeof window === 'undefined') return {};
+    try {
+      const raw = window.sessionStorage.getItem(storeUiStorageKey);
+      return raw ? (JSON.parse(raw) as { tab?: string; cat?: string; searchQuery?: string }) : {};
+    } catch {
+      return {};
+    }
+  })();
+
+  const [tab, setTab] = useState<'shop' | 'lens' | 'fav' | 'ord' | 'cart'>(() => {
+    if (initialFrameId || autoFocusReview) return 'shop';
+    const saved = initialStoredUi.tab;
+    if (saved === 'lens' && !rxEnabled) return 'shop';
+    if (saved === 'shop' || saved === 'lens' || saved === 'fav' || saved === 'ord' || saved === 'cart') {
+      return saved;
+    }
+    return 'shop';
+  });
   const [curId, setCurId] = useState<string>(initialFrameId || products[0]?.id || '');
   const [detailId, setDetailId] = useState<string | null>(initialFrameId || null);
   const cur = products.find((p) => p.id === curId) || products[0];
   const detailProduct = detailId ? products.find((p) => p.id === detailId) || null : null;
 
-  const [cat, setCat] = useState<string>('all');
+  const [cat, setCat] = useState<string>(() => initialStoredUi.cat || 'all');
+  const [searchQuery, setSearchQuery] = useState<string>(() => initialStoredUi.searchQuery || '');
   const [shapeFilter, setShapeFilter] = useState<'all' | FrameShapeTag>('all');
   const [colorFilter, setColorFilter] = useState<'all' | FrameColorFamily>('all');
   const [face, setFace] = useState<FaceShape>('oval');
@@ -148,7 +175,16 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
 
   useEffect(() => {
     setStoreVisibleCount(STORE_PAGE_SIZE);
-  }, [cat, shapeFilter, colorFilter, shop?.id]);
+  }, [cat, shapeFilter, colorFilter, searchQuery, shop?.id]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !slug) return;
+    try {
+      window.sessionStorage.setItem(storeUiStorageKey, JSON.stringify({ tab, cat, searchQuery }));
+    } catch {
+      // ignore storage errors
+    }
+  }, [storeUiStorageKey, slug, tab, cat, searchQuery]);
 
   // Sync /s/[slug]/f/[frameId] route param with detail view
   useEffect(() => {
@@ -159,10 +195,14 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
         setDetailId(matched.id);
         setTab('shop');
       }
+    } else if (autoFocusReview && products[0]) {
+      setCurId(products[0].id);
+      setDetailId(products[0].id);
+      setTab('shop');
     } else if (shop?.slug && route.startsWith(`/s/${shop.slug}`) && !route.includes(`/s/${shop.slug}/f/`)) {
       setDetailId(null);
     }
-  }, [initialFrameId, route, shop?.slug, products.length]);
+  }, [initialFrameId, autoFocusReview, route, shop?.slug, products.length]);
 
   const openFrameDetail = (frameId: string) => {
     if (!shop) return;
@@ -353,9 +393,26 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   const variantSuffix =
     effectivePhotoVariant !== 'none' ? ` · ${PHOTO_VARIANT_LABELS[effectivePhotoVariant]}` : '';
 
+  const isActiveNewCollection = (p: Product) =>
+    Boolean(p.isNewCollection && (!p.newCollectionUntil || Date.parse(p.newCollectionUntil) > Date.now()));
+  const newestFrames = [
+    ...products.filter(isActiveNewCollection).reverse(),
+    ...products.filter((p) => !isActiveNewCollection(p)).slice(-6).reverse(),
+  ].slice(0, 6);
+  const newestFrameIds = new Set(newestFrames.map((np) => np.id));
+
   const matchesFilter = (p: Product, filterId: string): boolean => {
     if (filterId !== 'all') {
-      if (filterId === 'prescription' && !(p.frameType === 'prescription' || (!p.frameType && (p.cat === 'med' || p.cat === 'safe') && p.type !== 'rimless'))) {
+      if (filterId === 'new_arrivals' && !newestFrameIds.has(p.id) && !isActiveNewCollection(p)) {
+        return false;
+      }
+      if (filterId === 'best_fit' && faceMatch(p, face) < 82) {
+        return false;
+      }
+      if (
+        filterId === 'prescription' &&
+        !(p.frameType === 'prescription' || (!p.frameType && (p.cat === 'med' || p.cat === 'safe') && p.type !== 'rimless'))
+      ) {
         return false;
       }
       if (filterId === 'sunglasses' && !(p.frameType === 'sunglasses' || (!p.frameType && p.cat === 'sun'))) {
@@ -363,14 +420,50 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
       }
       if (filterId === 'clip_on' && p.frameType !== 'clip_on') return false;
       if (filterId === 'kids' && p.frameType !== 'kids') return false;
-      if (filterId === 'metal' && !(p.frameType === 'metal' || (!p.frameType && p.type === 'rimless'))) return false;
+      if (
+        filterId === 'metal' &&
+        !(p.frameType === 'metal' || p.modelCalibration?.material === 'metal' || (!p.frameType && p.type === 'rimless'))
+      ) {
+        return false;
+      }
     }
     if (shapeFilter !== 'all' && resolveProductShapeTag(p) !== shapeFilter) return false;
     if (colorFilter !== 'all' && resolveProductColorFamily(p) !== colorFilter) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      const hay = `${p.name} ${p.code} ${p.modelCode || ''} ${p.description || ''} ${TYPES[p.type] || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
     return true;
   };
-  const list = products.filter((p) => matchesFilter(p, cat));
-  const newestFrames = [...products].slice(-6).reverse();
+  const filteredProducts = products.filter((p) => matchesFilter(p, cat));
+  const sortedProducts =
+    cat === 'best_fit'
+      ? [...filteredProducts].sort((a, b) => faceMatch(b, face) - faceMatch(a, face))
+      : filteredProducts;
+
+  // Group duplicate modelCode variants on one card when shop.groupColorsInStore is enabled
+  const groupedVariantMap = new Map<string, Product[]>();
+  const list: Product[] = [];
+  if (shop.groupColorsInStore) {
+    const seenModels = new Map<string, Product>();
+    for (const p of sortedProducts) {
+      const mk = (p.modelCode || '').trim().toLowerCase();
+      if (!mk) {
+        list.push(p);
+        continue;
+      }
+      const existingList = groupedVariantMap.get(mk) || [];
+      existingList.push(p);
+      groupedVariantMap.set(mk, existingList);
+      if (!seenModels.has(mk)) {
+        seenModels.set(mk, p);
+        list.push(p);
+      }
+    }
+  } else {
+    list.push(...sortedProducts);
+  }
   const coatInfo = getCoatingStyle(activeCatMeta.coatingPreviewId, yaw);
 
   const toggleCompareId = (id: string) => {
@@ -579,6 +672,73 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
           </div>
         </div>
 
+        {/* Optional Business Hours & Quick Contact Bar */}
+        {shop.showBusinessHoursBar && (() => {
+          const startStr = shop.workingHoursStart || '10:00';
+          const endStr = shop.workingHoursEnd || '22:00';
+          const parseMin = (hhmm: string) => {
+            const [hh, mm] = hhmm.split(':').map((x) => parseInt(x, 10) || 0);
+            return hh * 60 + mm;
+          };
+          const startMin = parseMin(startStr);
+          const endMin = parseMin(endStr);
+          let nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+          try {
+            const parts = new Intl.DateTimeFormat('en-GB', {
+              timeZone: 'Africa/Cairo',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            }).formatToParts(new Date());
+            const hh = parseInt(parts.find((p) => p.type === 'hour')?.value || '12', 10);
+            const mm = parseInt(parts.find((p) => p.type === 'minute')?.value || '0', 10);
+            if (!isNaN(hh) && !isNaN(mm)) nowMin = (hh % 24) * 60 + mm;
+          } catch {
+            // fallback local clock
+          }
+          const isOpen =
+            endMin >= startMin
+              ? nowMin >= startMin && nowMin <= endMin
+              : nowMin >= startMin || nowMin <= endMin;
+
+          return (
+            <div className="mb-4 rounded-2xl bg-white border border-slate-200 px-4 py-2.5 shadow-sm flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <span
+                  className={
+                    'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border font-extrabold ' +
+                    (isOpen
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-rose-50 text-rose-700 border-rose-200')
+                  }
+                >
+                  <span className={'w-2 h-2 rounded-full ' + (isOpen ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500')} />
+                  {isOpen ? 'مفتوح الآن' : 'مغلق الآن'}
+                </span>
+                <span className="text-slate-600 font-bold" dir="ltr">
+                  {startStr} - {endStr}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={`tel:${shop.wa}`}
+                  className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-extrabold inline-flex items-center gap-1 transition"
+                >
+                  📞 اتصال
+                </a>
+                <a
+                  href={`https://wa.me/${waNum(shop.wa)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold inline-flex items-center gap-1 transition"
+                >
+                  <I n="msg" s={13} /> واتساب
+                </a>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Editorial Hero Banner (Shown ONLY on main Storefront shop grid) */}
         {tab === 'shop' && !detailProduct && (
           <div
@@ -689,6 +849,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
               initialColor={detailProduct.id === cur.id ? fc : detailProduct.frame}
               initialSize={selectedSize}
               isFavorite={fav.includes(detailProduct.id)}
+              autoFocusReview={autoFocusReview}
               initialRxUrl={img}
               onRxAttached={(rxUrl) => {
                 setImg(rxUrl);
@@ -793,17 +954,18 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
 
         {tab === 'shop' && !detailProduct && (
           <div className="space-y-8 fade">
-            {/* Section 1: مجموعة النظارات الكاملة (Exact title, NO count number) */}
+            {/* Section 1: مجموعة النظارات الكاملة (Search + Horizontal Filter Chips) */}
             <section id="catalog-all" className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-xl sm:text-2xl font-extrabold text-[#0F172A]">مجموعة النظارات الكاملة</h2>
-                {(cat !== 'all' || shapeFilter !== 'all' || colorFilter !== 'all') && (
+                {(cat !== 'all' || shapeFilter !== 'all' || colorFilter !== 'all' || searchQuery.trim() !== '') && (
                   <button
                     type="button"
                     onClick={() => {
                       setCat('all');
                       setShapeFilter('all');
                       setColorFilter('all');
+                      setSearchQuery('');
                     }}
                     className="px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-bold cursor-pointer"
                   >
@@ -812,27 +974,81 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                 )}
               </div>
 
+              {/* Search Input & Horizontal Category Chips */}
+              <div className="space-y-3">
+                <div className="relative">
+                  <input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="ابحث باسم الموديل أو الكود أو الشكل..."
+                    className="w-full rounded-2xl bg-white border border-slate-200 focus:border-[#0284C7] ps-10 pe-4 py-2.5 text-sm text-[#0F172A] outline-none shadow-sm transition"
+                  />
+                  <span className="absolute start-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                    🔍
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+                  {(
+                    [
+                      ['all', 'الكل'],
+                      ['new_arrivals', 'وصل حديثاً ✨'],
+                      ['prescription', 'طبي'],
+                      ['sunglasses', 'شمس'],
+                      ['metal', 'معادن'],
+                      ['best_fit', 'الأكثر ملاءمة لوجهك'],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setCat(id)}
+                      className={
+                        'px-3.5 py-2 rounded-full text-xs font-extrabold whitespace-nowrap border transition cursor-pointer shrink-0 ' +
+                        (cat === id
+                          ? 'bg-[#0F172A] text-white border-[#0F172A] shadow-sm'
+                          : 'bg-white text-slate-700 border-slate-200 hover:border-[#0284C7]')
+                      }
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 {list.slice(0, storeVisibleCount).map((p) => {
-                  const storeImg = resolveStoreFrontUrl(p);
-                  const angled45Img = resolveAngled45Url(p);
+                  const modelKey = (p.modelCode || '').trim().toLowerCase();
+                  const groupVariants = shop.groupColorsInStore && modelKey ? groupedVariantMap.get(modelKey) || [p] : [p];
+                  const mergedSwatches = Array.from(
+                    new Set(
+                      groupVariants.flatMap((gp) =>
+                        gp.frameColors && gp.frameColors.length > 0
+                          ? gp.frameColors
+                          : gp.availableColors && gp.availableColors.length > 0
+                          ? gp.availableColors
+                          : [gp.frameHexColor || gp.frame]
+                      )
+                    )
+                  );
+                  const swatches =
+                    mergedSwatches.length > 0
+                      ? mergedSwatches
+                      : [p.frame, '#0F172A', '#7A4A2B', '#CBD5E1'].filter((c, i, arr) => arr.indexOf(c) === i);
+                  const activeSwatch = cardSelectedColors[p.id] || swatches[0];
+                  const activeVariant =
+                    groupVariants.find((gp) => (gp.frameHexColor || gp.frame) === activeSwatch) || p;
+                  const storeImg = resolveStoreFrontUrl(activeVariant);
+                  const angled45Img = resolveAngled45Url(activeVariant);
                   const activeAngle = angled45Img && cardAngles[p.id] === 'angled45' ? 'angled45' : 'front';
                   const displayedCardUrl = activeAngle === 'angled45' && angled45Img ? angled45Img : storeImg;
-                  const swatches =
-                    p.frameColors && p.frameColors.length > 0
-                      ? p.frameColors
-                      : p.availableColors && p.availableColors.length > 0
-                      ? p.availableColors
-                      : [p.frame, '#0F172A', '#7A4A2B', '#CBD5E1'].filter(
-                          (c, i, arr) => arr.indexOf(c) === i
-                        );
-                  const activeSwatch = cardSelectedColors[p.id] || swatches[0];
-                  const isCompared = compareIds.includes(p.id);
+                  const isCompared = compareIds.includes(activeVariant.id);
 
                   return (
                     <div
                       key={p.id}
-                      onClick={() => openFrameDetail(p.id)}
+                      onClick={() => openFrameDetail(activeVariant.id)}
                       className={
                         'rounded-2xl bg-white border p-3 sm:p-4 cursor-pointer transition text-slate-900 flex flex-col ' +
                         (isCompared
@@ -842,16 +1058,16 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                     >
                       <div className="relative rounded-xl bg-[#F8F9FA] border border-slate-100 py-5 px-2 flex flex-col items-center justify-center min-h-[155px] sm:min-h-[175px]">
                         <MiniGlasses
-                          type={p.type}
+                          type={activeVariant.type}
                           frame={activeSwatch}
-                          lens={p.lens}
+                          lens={activeVariant.lens}
                           w={135}
                           imageUrl={displayedCardUrl}
                         />
 
                         {/* Top-Right: Wishlist Heart */}
                         <span className="absolute top-2 start-2 z-10">
-                          <Heart p={p} />
+                          <Heart p={activeVariant} />
                         </span>
 
                         {/* Top-Left: Compare 2 Frames Toggle */}
@@ -859,7 +1075,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            toggleCompareId(p.id);
+                            toggleCompareId(activeVariant.id);
                           }}
                           className={
                             'absolute top-2 end-2 z-10 px-2 py-1 rounded-lg text-[0.65rem] font-extrabold border transition cursor-pointer ' +
@@ -876,7 +1092,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            setCurId(p.id);
+                            setCurId(activeVariant.id);
                             setFc(activeSwatch);
                             setDetailId(null);
                             setCamOn(true);
@@ -915,45 +1131,62 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                         )}
                       </div>
 
-                      <div className="mt-3 font-extrabold text-sm text-[#0F172A] truncate">{p.name}</div>
+                      <div className="mt-3 font-extrabold text-sm text-[#0F172A] truncate">{activeVariant.name}</div>
                       <div className="text-[0.68rem] text-slate-500 font-mono mt-0.5" dir="ltr" style={{ textAlign: 'start' }}>
-                        {formatOpticalDimensions(resolveProductOpticalDimensions(p))} mm
+                        {formatOpticalDimensions(resolveProductOpticalDimensions(activeVariant))} mm
                       </div>
 
-                      {/* Interactive Color Swatches (Updates Card Selection Live Without Navigating) */}
-                      <div
-                        className="flex items-center gap-1.5 mt-2 flex-wrap"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {swatches.slice(0, 5).map((hex) => (
-                          <button
-                            key={hex}
-                            type="button"
-                            aria-label={`لون ${hex}`}
-                            onClick={() => {
-                              setCardSelectedColors((prev) => ({ ...prev, [p.id]: hex }));
-                              if (cur.id === p.id) setFc(hex);
-                            }}
-                            className={
-                              'w-4 h-4 rounded-full border cursor-pointer transition ' +
-                              (activeSwatch === hex ? 'ring-2 ring-[#0F172A] ring-offset-1 border-[#0F172A]' : 'border-slate-300')
-                            }
-                            style={{
-                              background:
-                                hex === 'transparent'
-                                  ? 'linear-gradient(135deg, #ffffff 45%, #e2e8f0 55%)'
-                                  : hex,
-                            }}
-                          />
-                        ))}
-                      </div>
+                      {((shop.showStockCountToCustomer && (activeVariant.stock ?? 1) === 1) || isActiveNewCollection(activeVariant)) && (
+                        <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                          {isActiveNewCollection(activeVariant) && (
+                            <span className="px-2 py-0.5 rounded-md bg-sky-50 text-[#0284C7] border border-sky-200 text-[0.62rem] font-extrabold">
+                              كوليكشن جديد ✨
+                            </span>
+                          )}
+                          {shop.showStockCountToCustomer && (activeVariant.stock ?? 1) === 1 && (
+                            <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-300 text-[0.62rem] font-extrabold">
+                              متبقي قطعة واحدة فقط!
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Interactive Color Swatches (Respects shop.showColorSwatchesToCustomer) */}
+                      {shop.showColorSwatchesToCustomer !== false && (
+                        <div
+                          className="flex items-center gap-1.5 mt-2 flex-wrap"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {swatches.slice(0, 5).map((hex) => (
+                            <button
+                              key={hex}
+                              type="button"
+                              aria-label={`لون ${hex}`}
+                              onClick={() => {
+                                setCardSelectedColors((prev) => ({ ...prev, [p.id]: hex }));
+                                if (cur.id === activeVariant.id) setFc(hex);
+                              }}
+                              className={
+                                'w-4 h-4 rounded-full border cursor-pointer transition ' +
+                                (activeSwatch === hex ? 'ring-2 ring-[#0F172A] ring-offset-1 border-[#0F172A]' : 'border-slate-300')
+                              }
+                              style={{
+                                background:
+                                  hex === 'transparent'
+                                    ? 'linear-gradient(135deg, #ffffff 45%, #e2e8f0 55%)'
+                                    : hex,
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
 
                       <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-100 gap-1">
                         <span className="text-[#0F172A] font-extrabold text-sm">
-                          <Pr x={p} />
+                          <Pr x={activeVariant} />
                         </span>
                         <span className="px-1.5 py-0.5 rounded-md bg-emerald-50 text-[#059669] border border-emerald-200 text-[0.65rem] font-bold tabular-nums">
-                          {faceMatch(p, face)}%
+                          {faceMatch(activeVariant, face)}%
                         </span>
                       </div>
                     </div>
@@ -2088,21 +2321,25 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
       )}
 
       <nav className="fixed bottom-0 inset-x-0 z-40 glass-s border-x-0 border-b-0">
-        <div className={`max-w-xl mx-auto grid ${rxEnabled ? 'grid-cols-5' : 'grid-cols-4'} px-2 py-1.5`}>
-          {nav.map((n) => (
+        {(() => {
+          const midIdx = Math.floor(nav.length / 2);
+          const firstHalf = nav.slice(0, midIdx);
+          const secondHalf = nav.slice(midIdx);
+          const renderNavBtn = (n: [typeof tab, string, string]) => (
             <button
               key={n[0]}
+              type="button"
               onClick={() => {
                 setTab(n[0]);
                 if (n[0] === 'shop') setDetailId(null);
               }}
               className={
-                'relative flex flex-col items-center gap-0.5 py-1.5 rounded-xl text-[.68rem] font-bold transition cursor-pointer ' +
+                'relative flex-1 flex flex-col items-center justify-center gap-0.5 py-1.5 rounded-xl text-[.66rem] font-bold transition cursor-pointer ' +
                 (tab === n[0] ? 'text-[#0284C7]' : 'text-slate-500 hover:text-[#0F172A]')
               }
             >
               <span className="relative">
-                <I n={n[2]} s={22} />
+                <I n={n[2]} s={20} />
                 {n[0] === 'fav' && fav.length > 0 && (
                   <span className="absolute -top-1.5 -end-2 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[.6rem] flex items-center justify-center tabular-nums">
                     {fav.length}
@@ -2114,11 +2351,35 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                   </span>
                 )}
               </span>
-              {n[1]}
+              <span className="truncate">{n[1]}</span>
               {tab === n[0] && <span className="absolute -bottom-0.5 w-6 h-0.5 rounded-full bg-[#0284C7]" />}
             </button>
-          ))}
-        </div>
+          );
+
+          return (
+            <div className="max-w-xl mx-auto flex items-end justify-between px-2 py-1.5 gap-1">
+              {firstHalf.map(renderNavBtn)}
+              <button
+                type="button"
+                onClick={() => {
+                  setTab('shop');
+                  setDetailId(null);
+                  setCamOn(true);
+                }}
+                className="relative -mt-6 mx-1 flex flex-col items-center shrink-0 cursor-pointer group"
+                aria-label="جرّب الآن بالكاميرا"
+              >
+                <span className="w-14 h-14 rounded-full bg-[#0284C7] group-hover:bg-[#0369A1] text-white shadow-xl ring-4 ring-white flex items-center justify-center transition-transform group-hover:scale-105">
+                  <I n="camera" s={24} />
+                </span>
+                <span className="mt-1 text-[0.64rem] font-extrabold text-[#0284C7] whitespace-nowrap">
+                  جرّب الآن
+                </span>
+              </button>
+              {secondHalf.map(renderNavBtn)}
+            </div>
+          );
+        })()}
       </nav>
     </div>
   );

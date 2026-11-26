@@ -64,6 +64,9 @@ export interface ModelCalibration {
   isPatterned?: boolean;
   colorFamily?: FrameColorFamily;
   modelCode?: string;
+  stock?: number;
+  isNewCollection?: boolean;
+  newCollectionUntil?: string;
 }
 
 export interface FrameReview {
@@ -130,6 +133,15 @@ export interface Shop {
   merchantLensConfigs?: MerchantLensBrandConfig[];
   groupColorsInStore?: boolean;
   showColorSwatchesToCustomer?: boolean;
+  showStockCountToCustomer?: boolean;
+  hideOutOfStockToCustomer?: boolean;
+  showBusinessHoursBar?: boolean;
+  workingHoursStart?: string;
+  workingHoursEnd?: string;
+  reminderReviewHours?: number;
+  reminderMaintenanceMonths?: number;
+  reminderExamMonths?: number;
+  reminderMode?: 'auto' | 'manual';
 }
 
 export type LensTrack = 'single_vision' | 'custom_lab';
@@ -237,6 +249,9 @@ export interface Product {
   isPatterned?: boolean;
   colorFamily?: FrameColorFamily;
   createdAt?: string;
+  stock?: number;
+  isNewCollection?: boolean;
+  newCollectionUntil?: string;
 }
 
 export interface LensType {
@@ -326,6 +341,10 @@ export interface CrmCustomer {
   lensSummary?: string;
   pd?: string;
   orderDate: string;
+  pricePaid?: number;
+  rating?: number;
+  reviewComment?: string;
+  recallReviewSentAt?: string;
   recall6mSentAt?: string;
   recall12mSentAt?: string;
   notes?: string;

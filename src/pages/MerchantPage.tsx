@@ -9,18 +9,21 @@ import {
   isShopExpiredOrPaused,
   useOptiVerse,
 } from '../services/optiverseStore';
-import { OrderStage } from '../types';
+import { OrderStage, Product } from '../types';
 import { BulkFrameUploader } from '../components/BulkFrameUploader';
 import { ExamThumb, MiniGlasses } from '../components/GlassesGraphics';
 import { I } from '../components/Icons';
 import { MerchantLensMatrixManager } from '../components/MerchantLensMatrixManager';
+import { PWAInstallButton } from '../components/PWAInstallPrompt';
 import { resolveAngled45Url, resolveStoreFrontUrl } from '../utils/bulkFrameProcessor';
+import { formatOpticalDimensions, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
 import {
   Bars,
   D,
   Egp,
   Head,
   LineChart,
+  Modal,
   Pr,
   QR,
   STAGES,
@@ -225,6 +228,7 @@ export function MerchantPage() {
     updateShop,
     addTopUpCredits,
     products,
+    updateProductStock,
     softDeleteProductByCode,
     inq,
     updateInquiry,
@@ -272,18 +276,45 @@ export function MerchantPage() {
   const [crmPhone, setCrmPhone] = useState('');
   const [crmProdName, setCrmProdName] = useState('');
   const [crmPd, setCrmPd] = useState('');
+  const [crmPrice, setCrmPrice] = useState('');
   const [crmNotes, setCrmNotes] = useState('');
 
-  const [sec, setSec] = useState('home');
+  const merchantStorageKey = `optiverse_merchant_state_${activeShop?.id || 'default'}`;
+  const initialMerchantState = (() => {
+    if (typeof window === 'undefined') return {};
+    try {
+      const raw = window.sessionStorage.getItem(merchantStorageKey);
+      return raw ? (JSON.parse(raw) as { sec?: string; invFilter?: string }) : {};
+    } catch {
+      return {};
+    }
+  })();
+
+  const [sec, setSec] = useState(() => initialMerchantState.sec || 'home');
   const [code, setCode] = useState('');
   const [aiLogoBusy, setAiLogoBusy] = useState(false);
   const [visibleProdsCount, setVisibleProdsCount] = useState(MERCHANT_PAGE_SIZE);
   const [photoGuideModalOpen, setPhotoGuideModalOpen] = useState(false);
+  const [invFilter, setInvFilter] = useState<'all' | 'in_stock' | 'low' | 'out'>(() => {
+    const f = initialMerchantState.invFilter;
+    return f === 'in_stock' || f === 'low' || f === 'out' ? f : 'all';
+  });
+  const [supplierReportOpen, setSupplierReportOpen] = useState(false);
+  const [newCollectionSignal, setNewCollectionSignal] = useState(0);
   const qrWrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setVisibleProdsCount(MERCHANT_PAGE_SIZE);
   }, [activeShop?.id]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !activeShop?.id) return;
+    try {
+      window.sessionStorage.setItem(merchantStorageKey, JSON.stringify({ sec, invFilter }));
+    } catch {
+      // ignore storage errors
+    }
+  }, [merchantStorageKey, activeShop?.id, sec, invFilter]);
 
   useEffect(() => {
     if (!activeShop) return;
@@ -726,17 +757,23 @@ export function MerchantPage() {
   const creditsUsed = activeShop.aiCreditsUsed || 0;
   const creditsRemaining = Math.max(0, creditsCap - creditsUsed);
 
-  // CRM Customers & Recalls (6-month & 12-month intervals)
+  // CRM Customers & Flexible 3-Tier Recalls (Review -> Maintenance -> Exam)
+  const reviewHours = Math.max(1, Number(activeShop.reminderReviewHours ?? 24));
+  const maintMonths = Math.max(1, Number(activeShop.reminderMaintenanceMonths ?? 4));
+  const examMonths = Math.max(1, Number(activeShop.reminderExamMonths ?? 12));
+  const reminderMode = activeShop.reminderMode === 'manual' ? 'manual' : 'auto';
   const shopCrm = crmCustomers.filter((c) => c.shopId === activeShop.id);
   const nowMs = Date.now();
-  const dueCrmList = shopCrm
-    .map((c) => {
-      const daysSince = Math.floor((nowMs - new Date(c.orderDate).getTime()) / 86400000);
-      const due12 = (activeShop.recall12mEnabled ?? true) && daysSince >= 360 && !c.recall12mSentAt;
-      const due6 = (activeShop.recall6mEnabled ?? true) && daysSince >= 180 && daysSince < 360 && !c.recall6mSentAt;
-      return { ...c, daysSince, due6, due12 };
-    });
-  const dueRecallCount = dueCrmList.filter((c) => c.due6 || c.due12).length;
+  const dueCrmList = shopCrm.map((c) => {
+    const elapsedMs = Math.max(0, nowMs - new Date(c.orderDate).getTime());
+    const hoursSince = Math.floor(elapsedMs / 3600000);
+    const daysSince = Math.floor(elapsedMs / 86400000);
+    const dueReview = hoursSince >= reviewHours && !c.recallReviewSentAt;
+    const due6 = (activeShop.recall6mEnabled ?? true) && daysSince >= maintMonths * 30 && !c.recall6mSentAt;
+    const due12 = (activeShop.recall12mEnabled ?? true) && daysSince >= examMonths * 30 && !c.recall12mSentAt;
+    return { ...c, hoursSince, daysSince, dueReview, due6, due12 };
+  });
+  const dueRecallCount = dueCrmList.filter((c) => c.dueReview || c.due6 || c.due12).length;
 
   const confirmedShopSales = shopInq
     .filter((q) => q.status === 'confirmed')
@@ -754,9 +791,21 @@ export function MerchantPage() {
     toast(`تم حذف "${res.product?.name}" (${res.product?.code}) من الموقع فوراً ✓`);
   };
 
+  // Smart Inventory Calculations
+  const getProdStock = (p: Product) => (typeof p.stock === 'number' ? Math.max(0, Math.floor(p.stock)) : 1);
+  const totalInventoryModels = shopProducts.length;
+  const totalInventoryPieces = shopProducts.reduce((sum, p) => sum + getProdStock(p), 0);
+  const lowStockProducts = shopProducts.filter((p) => getProdStock(p) === 1);
+  const outOfStockProducts = shopProducts.filter((p) => getProdStock(p) === 0);
+  const totalInventoryValue = shopProducts.reduce((sum, p) => {
+    const unitPrice = p.salePrice && p.salePrice > 0 && p.salePrice < p.price ? p.salePrice : p.price;
+    return sum + unitPrice * getProdStock(p);
+  }, 0);
+
   const items: ShellNavItem[] = [
     ['home', 'الرئيسية', 'home'],
     ['prods', 'منتجاتي', 'box'],
+    ['inventory', 'إدارة المخزن الذكي 📦', 'box', outOfStockProducts.length],
     ['crm', 'قاعدة العملاء', 'bell', dueRecallCount],
     ...(rxEnabled
       ? ([
@@ -866,12 +915,14 @@ export function MerchantPage() {
       toast('اكتب اسم العميل ورقم الموبايل أولاً');
       return;
     }
+    const parsedPrice = Number(crmPrice);
     await addCrmCustomer({
       shopId: activeShop.id,
       customerName: crmName.trim(),
       phone: crmPhone.trim(),
       productName: crmProdName.trim() || 'إطار نظارة',
       pd: crmPd.trim() || undefined,
+      pricePaid: !isNaN(parsedPrice) && parsedPrice > 0 ? parsedPrice : undefined,
       orderDate: new Date().toISOString(),
       notes: crmNotes.trim() || undefined,
     });
@@ -879,6 +930,7 @@ export function MerchantPage() {
     setCrmPhone('');
     setCrmProdName('');
     setCrmPd('');
+    setCrmPrice('');
     setCrmNotes('');
     toast('تم تسجيل العميل في قاعدة البيانات ✓');
   };
@@ -959,7 +1011,8 @@ export function MerchantPage() {
       primaryDockIds={['home', 'prods', 'crm']}
       onSignOut={signOut}
       headerAction={
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <PWAInstallButton />
           <button
             type="button"
             className="btn btn-g btn-sm whitespace-nowrap shrink-0 font-extrabold text-[#0284C7] bg-sky-50 border-sky-200 hover:bg-sky-100"
@@ -1200,17 +1253,24 @@ export function MerchantPage() {
           <div className="glass rounded-2xl p-5">
             <div className="flex items-center justify-between mb-3">
               <div>
-                <h3 className="font-bold text-[#0F172A]">متابعة العملاء (CRM 6 و12 شهر)</h3>
-                <p className="text-xs text-slate-500">تنبيهات الصيانة الدورية وتغيير الإطارات عبر واتساب</p>
+                <h3 className="font-bold text-[#0F172A]">
+                  متابعة العملاء (تقييم + صيانة {maintMonths} ش + فحص {examMonths} ش)
+                </h3>
+                <p className="text-xs text-slate-500">
+                  تنبيهات المتابعة من 3 مراحل عبر واتساب ({reminderMode === 'auto' ? 'تلقائي' : 'يدوي'})
+                </p>
               </div>
               <button type="button" className="btn btn-g btn-sm" onClick={() => setSec('crm')}>
                 إدارة قاعدة العملاء ({shopCrm.length})
               </button>
             </div>
             {dueCrmList.slice(0, 3).map((c) => {
-              const recallKind = c.due12 ? '12m' : '6m';
+              const recallKind: 'review' | '6m' | '12m' = c.due12 ? '12m' : c.due6 ? '6m' : 'review';
+              const reviewUrl = `${origin}/s/${activeShop.slug}${c.productId ? `/f/${c.productId}` : ''}?review=1`;
               const msg = encodeURIComponent(
-                `أهلاً ${c.customerName} 👋 ${activeShop.name} بيفكّرك بموعد صيانة ومراجعة نظارتك (${c.productName}). تحب تشرفنا في المحل؟`
+                recallKind === 'review'
+                  ? `أهلاً ${c.customerName} 👋 نورتنا في ${activeShop.name}! نتمنى نظارتك (${c.productName}) تكون عجبتك. شاركنا تقييمك السريع هنا:\n${reviewUrl}`
+                  : `أهلاً ${c.customerName} 👋 ${activeShop.name} بيفكّرك بموعد صيانة ومراجعة نظارتك (${c.productName}). تحب تشرفنا في المحل؟`
               );
               return (
                 <div key={c.id} className="flex flex-wrap items-center gap-3 p-3 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] mb-2">
@@ -1221,6 +1281,7 @@ export function MerchantPage() {
                     <div className="font-bold text-sm text-[#0F172A]">{c.customerName}</div>
                     <div className="text-xs text-slate-500">
                       {c.productName} · منذ {c.daysSince} يوم
+                      {typeof c.pricePaid === 'number' && c.pricePaid > 0 ? ` · ${fmt(c.pricePaid)} ج.م` : ''}
                     </div>
                   </div>
                   <a
@@ -1230,7 +1291,8 @@ export function MerchantPage() {
                     rel="noreferrer"
                     onClick={() => markCrmRecallSent(c.id, recallKind)}
                   >
-                    <I n="msg" s={14} /> تذكير واتساب 💬
+                    <I n="msg" s={14} />{' '}
+                    {recallKind === 'review' ? 'طلب تقييم ⭐' : recallKind === '12m' ? 'فحص نظر 💬' : 'تذكير صيانة 💬'}
                   </a>
                 </div>
               );
@@ -1251,8 +1313,26 @@ export function MerchantPage() {
                 نظارة متاحة في الكتالوج
               </>
             }
-          />
-          <BulkFrameUploader />
+          >
+            <button
+              type="button"
+              onClick={() => setSec('inventory')}
+              className="btn btn-g btn-sm whitespace-nowrap shrink-0 font-bold"
+            >
+              إدارة المخزن الذكي 📦
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setNewCollectionSignal((s) => s + 1);
+                toast('تم تفعيل وضع الكوليكشن الجديد — اختر فئة النظارات لرفع المجموعة ✨');
+              }}
+              className="btn btn-sm !bg-[#D97706] hover:!bg-[#B45309] !text-white font-extrabold whitespace-nowrap shrink-0 shadow-sm"
+            >
+              إضافة كوليكشن جديد ✨
+            </button>
+          </Head>
+          <BulkFrameUploader externalNewCollectionSignal={newCollectionSignal} />
           <div className="glass rounded-2xl p-4 mb-4 flex flex-wrap items-center gap-3">
             <div className="flex-1 min-w-[200px]">
               <div className="font-bold text-sm">حذف نظارة بالكود (بعد البيع)</div>
@@ -1399,33 +1479,506 @@ export function MerchantPage() {
         </>
       )}
 
-      {sec === 'crm' && (
+      {sec === 'inventory' && (
         <>
-          <Head t="قاعدة عملاء المحل وتذكيرات المتابعة (CRM)" sub="تسجيل عملاء المحل وتنبيهات الصيانة بعد 6 و12 شهراً عبر واتساب" />
+          <Head
+            t="إدارة المخزن الذكي 📦"
+            sub={`متابعة الرصيد الفوري، خصم المبيعات التلقائي، وكشف النواقص المصور لـ ${activeShop.name}`}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setSec('prods');
+                setNewCollectionSignal((s) => s + 1);
+              }}
+              className="btn btn-sm !bg-amber-50 hover:!bg-amber-100 !text-amber-950 border border-amber-300 font-extrabold whitespace-nowrap"
+            >
+              إضافة كوليكشن جديد ✨
+            </button>
+            <button
+              type="button"
+              onClick={() => setSupplierReportOpen(true)}
+              className="btn btn-p btn-sm whitespace-nowrap font-extrabold"
+            >
+              تصدير كشف النواقص المصور للموردين 📋 ({outOfStockProducts.length})
+            </button>
+          </Head>
 
-          <div className="glass rounded-2xl p-5 mb-5 flex flex-wrap items-center justify-between gap-4">
+          {/* Top 5 Smart Inventory Metric Cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+            <Stat
+              icon="box"
+              label="إجمالي الموديلات"
+              value={<span dir="ltr">{fmt(totalInventoryModels)}</span>}
+              onClick={() => setInvFilter('all')}
+            />
+            <Stat
+              icon="check"
+              tone="b-ok"
+              label="إجمالي القطع بالمخزن"
+              value={<span dir="ltr">{fmt(totalInventoryPieces)}</span>}
+              onClick={() => setInvFilter('in_stock')}
+            />
+            <Stat
+              icon="bell"
+              tone="b-warn"
+              label="أوشك على النفاد (1)"
+              value={<span dir="ltr">{fmt(lowStockProducts.length)}</span>}
+              onClick={() => setInvFilter('low')}
+            />
+            <Stat
+              icon="trash"
+              tone="b-bad"
+              label="نواقص / منتهي (0)"
+              value={<span dir="ltr">{fmt(outOfStockProducts.length)}</span>}
+              onClick={() => setInvFilter('out')}
+            />
+            <Stat
+              icon="dollar"
+              label="إجمالي قيمة المخزون"
+              value={<Egp v={totalInventoryValue} />}
+            />
+          </div>
+
+          {/* Storefront Stock Visibility Settings */}
+          <div className="glass rounded-2xl p-4 mb-4 flex flex-wrap items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-6">
               <div className="flex items-center gap-3">
-                <span className="text-sm font-bold text-[#0F172A]">تذكير الصيانة الدورية (6 شهور)</span>
                 <Switch
-                  on={activeShop.recall6mEnabled ?? true}
-                  onChange={(v) => updateShop(activeShop.id, { recall6mEnabled: v })}
+                  on={Boolean(activeShop.showStockCountToCustomer)}
+                  onChange={async (v) => {
+                    await updateShop(activeShop.id, { showStockCountToCustomer: v });
+                    toast(v ? 'تم تفعيل عداد القطعة الأخيرة للعملاء ✓' : 'تم إخفاء عداد المخزون عن العملاء ✓');
+                  }}
+                />
+                <div>
+                  <div className="text-xs sm:text-sm font-extrabold text-[#0F172A]">
+                    إظهار عداد القطع المتبقية للعميل
+                  </div>
+                  <div className="text-[0.7rem] text-slate-500">
+                    يعرض شارة «متبقي قطعة واحدة فقط!» لتحفيز الشراء السريع
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <Switch
+                  on={Boolean(activeShop.hideOutOfStockToCustomer)}
+                  onChange={async (v) => {
+                    await updateShop(activeShop.id, { hideOutOfStockToCustomer: v });
+                    toast(v ? 'سيتم إخفاء الإطارات المنتهية تلقائياً من المتجر ✓' : 'الإطارات المنتهية تظهر للعملاء ✓');
+                  }}
+                />
+                <div>
+                  <div className="text-xs sm:text-sm font-extrabold text-[#0F172A]">
+                    إخفاء النظارات المنتهية تلقائياً من المتجر
+                  </div>
+                  <div className="text-[0.7rem] text-slate-500">
+                    يخفي أي موديل رصيده 0 من واجهة العملاء مع بقائه في كشف النواقص
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Inventory Filter Tabs */}
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            {(
+              [
+                { id: 'all', label: `الكل (${shopProducts.length})` },
+                { id: 'in_stock', label: `متوفر (${shopProducts.filter((p) => getProdStock(p) > 0).length})` },
+                { id: 'low', label: `أوشك على النفاد (1) (${lowStockProducts.length})` },
+                { id: 'out', label: `نواقص / منتهي (0) (${outOfStockProducts.length})` },
+              ] as const
+            ).map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setInvFilter(f.id)}
+                className={
+                  'px-3.5 py-2 rounded-xl text-xs font-extrabold border transition cursor-pointer ' +
+                  (invFilter === f.id
+                    ? 'bg-[#0F172A] text-white border-[#0F172A] shadow-sm'
+                    : 'bg-white text-slate-700 border-[#E2E8F0] hover:border-[#0284C7]')
+                }
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Inventory Product List with Live + / - Counter Adjustments */}
+          {(() => {
+            const filteredInv = shopProducts.filter((p) => {
+              const st = getProdStock(p);
+              if (invFilter === 'in_stock') return st > 0;
+              if (invFilter === 'low') return st === 1;
+              if (invFilter === 'out') return st === 0;
+              return true;
+            });
+
+            if (!filteredInv.length) {
+              return (
+                <div className="glass rounded-2xl p-10 text-center text-sm text-slate-500">
+                  لا توجد نظارات مطابقة لهذا التصنيف في المخزن حالياً
+                </div>
+              );
+            }
+
+            return (
+              <div className="space-y-2.5">
+                {filteredInv.map((p) => {
+                  const st = getProdStock(p);
+                  const dimsText = formatOpticalDimensions(resolveProductOpticalDimensions(p));
+                  const unitPrice = p.salePrice && p.salePrice > 0 && p.salePrice < p.price ? p.salePrice : p.price;
+
+                  return (
+                    <div
+                      key={p.id}
+                      className="glass rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <div className="w-20 h-14 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] flex items-center justify-center p-1 shrink-0 overflow-hidden">
+                          <MiniGlasses
+                            type={p.type}
+                            frame={p.frame}
+                            lens={p.lens}
+                            w={72}
+                            imageUrl={resolveStoreFrontUrl(p)}
+                          />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-extrabold text-sm text-[#0F172A] truncate">{p.name}</span>
+                            {st === 0 ? (
+                              <span className="badge b-bad text-[0.65rem]">منتهي (0)</span>
+                            ) : st === 1 ? (
+                              <span className="badge b-warn text-[0.65rem]">قطعة أخيرة (1)</span>
+                            ) : (
+                              <span className="badge b-ok text-[0.65rem]">متوفر ({st})</span>
+                            )}
+                          </div>
+                          <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5 flex-wrap" dir="ltr">
+                            <span className="font-mono font-bold text-slate-700">{p.modelCode || p.code}</span>
+                            <span>·</span>
+                            <span className="font-mono">{dimsText} mm</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3 shrink-0">
+                        <div className="text-end">
+                          <div className="text-[0.68rem] text-slate-500">سعر القطعة</div>
+                          <div className="font-extrabold text-sm text-[#D97706]">
+                            <Egp v={unitPrice} />
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 bg-[#F8F9FA] border border-[#E2E8F0] rounded-xl p-1">
+                          <button
+                            type="button"
+                            disabled={st <= 0}
+                            onClick={() => void updateProductStock(p.id, -1)}
+                            aria-label="إنقاص المخزون"
+                            className="w-8 h-8 rounded-lg bg-white hover:bg-rose-50 text-slate-900 hover:text-rose-700 border border-slate-200 font-extrabold text-base flex items-center justify-center cursor-pointer disabled:opacity-40"
+                          >
+                            -
+                          </button>
+                          <span
+                            dir="ltr"
+                            className={
+                              'min-w-[32px] text-center font-mono font-extrabold text-sm tabular-nums ' +
+                              (st === 0 ? 'text-rose-600' : st === 1 ? 'text-amber-600' : 'text-[#0F172A]')
+                            }
+                          >
+                            {st}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void updateProductStock(p.id, 1)}
+                            aria-label="زيادة المخزون"
+                            className="w-8 h-8 rounded-lg bg-[#0F172A] hover:bg-slate-800 text-white font-extrabold text-base flex items-center justify-center cursor-pointer"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
+          {/* Visual Supplier Depleted Sheet Modal */}
+          {supplierReportOpen && (
+            <Modal
+              title={`كشف النواقص المصور للموردين 📋 (${outOfStockProducts.length})`}
+              onClose={() => setSupplierReportOpen(false)}
+              w="max-w-3xl"
+            >
+              <div className="space-y-4">
+                <div className="rounded-xl bg-sky-50 border border-sky-200 p-3 text-xs text-[#0284C7] font-bold flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    يضم هذا الكشف كل الإطارات التي وصل رصيدها إلى 0 لطلب إعادة التوريد بالصورة والكود والمقاس البصري.
+                  </span>
+                  <span className="font-mono">{new Date().toLocaleDateString('ar-EG')}</span>
+                </div>
+
+                {!outOfStockProducts.length ? (
+                  <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-8 text-center text-sm text-slate-600">
+                    ممتاز! لا توجد نواقص حالياً — جميع موديلات متجرك متوفرة بالمخزون ✓
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid sm:grid-cols-2 gap-3 max-h-[52vh] overflow-y-auto p-1">
+                      {outOfStockProducts.map((p, idx) => {
+                        const dimsText = formatOpticalDimensions(resolveProductOpticalDimensions(p));
+                        const thumbUrl = resolveStoreFrontUrl(p);
+                        return (
+                          <div
+                            key={p.id}
+                            className="rounded-2xl bg-white border border-slate-200 p-3 flex items-center gap-3"
+                          >
+                            <div className="w-20 h-16 rounded-xl bg-[#F8F9FA] border border-slate-200 flex items-center justify-center p-1 shrink-0 overflow-hidden">
+                              <MiniGlasses
+                                type={p.type}
+                                frame={p.frame}
+                                lens={p.lens}
+                                w={72}
+                                imageUrl={thumbUrl}
+                              />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-[0.65rem] text-rose-600 font-extrabold">
+                                #{idx + 1} · مطلوب إعادة توريد
+                              </div>
+                              <div className="font-extrabold text-sm text-[#0F172A] truncate">{p.name}</div>
+                              <div className="text-xs font-mono text-slate-600 mt-0.5" dir="ltr" style={{ textAlign: 'start' }}>
+                                {p.modelCode || p.code} · {dimsText} mm
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const rowsHtml = outOfStockProducts
+                            .map((p, idx) => {
+                              const dimsText = formatOpticalDimensions(resolveProductOpticalDimensions(p));
+                              const thumbUrl = resolveStoreFrontUrl(p);
+                              const esc = (s: string) =>
+                                String(s || '')
+                                  .replace(/&/g, '&amp;')
+                                  .replace(/</g, '&lt;')
+                                  .replace(/>/g, '&gt;')
+                                  .replace(/"/g, '&quot;');
+                              return `<tr>
+                                <td style="padding:10px;border:1px solid #cbd5e1;text-align:center;">${idx + 1}</td>
+                                <td style="padding:10px;border:1px solid #cbd5e1;text-align:center;">${
+                                  thumbUrl
+                                    ? `<img src="${esc(thumbUrl)}" alt="${esc(p.name)}" style="max-width:110px;max-height:60px;object-fit:contain;" />`
+                                    : '👓'
+                                }</td>
+                                <td style="padding:10px;border:1px solid #cbd5e1;font-weight:700;">${esc(p.name)}</td>
+                                <td style="padding:10px;border:1px solid #cbd5e1;font-family:monospace;direction:ltr;">${esc(p.modelCode || p.code)}</td>
+                                <td style="padding:10px;border:1px solid #cbd5e1;font-family:monospace;direction:ltr;">${esc(dimsText)} mm</td>
+                              </tr>`;
+                            })
+                            .join('');
+                          const docHtml = `<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<title>كشف النواقص المصور - ${activeShop.name}</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; padding: 28px; color: #0f172a; background: #fff; }
+  h1 { margin: 0 0 6px; font-size: 22px; }
+  .meta { color: #475569; font-size: 13px; margin-bottom: 18px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { background: #0f172a; color: #fff; padding: 10px; border: 1px solid #0f172a; }
+  @media print { .no-print { display: none; } }
+</style>
+</head>
+<body>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+    <div>
+      <h1>كشف نواقص المخزون المصور للموردين — ${activeShop.name}</h1>
+      <div class="meta">التاريخ: ${new Date().toLocaleDateString('ar-EG')} · إجمالي النواقص: ${outOfStockProducts.length} موديل · واتساب المحل: ${activeShop.wa}</div>
+    </div>
+    <button class="no-print" onclick="window.print()" style="padding:8px 16px;background:#0284c7;color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;">طباعة / حفظ PDF</button>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>الصورة</th>
+        <th>اسم الموديل</th>
+        <th>الكود</th>
+        <th>المقاسات البصرية</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>
+</body>
+</html>`;
+                          const blob = new Blob([docHtml], { type: 'text/html;charset=utf-8' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = `supplier-shortage-report-${activeShop.slug || 'optiverse'}.html`;
+                          document.body.appendChild(a);
+                          a.click();
+                          a.remove();
+                          setTimeout(() => URL.revokeObjectURL(url), 1500);
+                          toast('تم تحميل كشف النواقص المصور جاهزاً للطباعة والإرسال 📋');
+                        }}
+                        className="btn btn-p flex-1 text-xs font-extrabold"
+                      >
+                        <I n="dl" s={15} /> تحميل الكشف المصور للطباعة (HTML/PDF)
+                      </button>
+
+                      <a
+                        href={`https://wa.me/?text=${encodeURIComponent(
+                          [
+                            `📋 طلب إعادة توريد نواقص — ${activeShop.name}:`,
+                            ...outOfStockProducts.map(
+                              (p, idx) =>
+                                `${idx + 1}. ${p.name} | كود: ${p.modelCode || p.code} | مقاس: ${formatOpticalDimensions(resolveProductOpticalDimensions(p))} mm`
+                            ),
+                          ].join('\n')
+                        )}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold"
+                      >
+                        <I n="msg" s={15} /> إرسال للمورد واتساب
+                      </a>
+                    </div>
+                  </>
+                )}
+              </div>
+            </Modal>
+          )}
+        </>
+      )}
+
+      {sec === 'crm' && (
+        <>
+          <Head
+            t="قاعدة عملاء المحل وتذكيرات المتابعة (CRM)"
+            sub="سجل المشتريات والتقييمات وتذكيرات الواتساب المرنة من 3 مستويات"
+          />
+
+          {/* Flexible 3-Tier Reminders Configuration */}
+          <div className="glass rounded-2xl p-5 mb-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="font-extrabold text-sm text-[#0F172A]">إعدادات نظام المتابعة المرن (3 مستويات)</h3>
+                <p className="text-xs text-slate-500">
+                  تقييم بعد الشراء ({reviewHours}س) · صيانة وتنظيف ({maintMonths} شهور) · فحص النظر ({examMonths} شهر)
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="badge b-warn">{dueRecallCount} عملاء مستحقون للتذكير الآن</span>
+                <div className="inline-flex rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-1">
+                  <button
+                    type="button"
+                    onClick={() => updateShop(activeShop.id, { reminderMode: 'auto' })}
+                    className={
+                      'px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer transition ' +
+                      (reminderMode === 'auto' ? 'bg-[#0F172A] text-white' : 'text-slate-600')
+                    }
+                  >
+                    تلقائي
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateShop(activeShop.id, { reminderMode: 'manual' })}
+                    className={
+                      'px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer transition ' +
+                      (reminderMode === 'manual' ? 'bg-[#0F172A] text-white' : 'text-slate-600')
+                    }
+                  >
+                    يدوي
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3">
+                <label className="text-xs font-bold text-[#0F172A] block mb-1">
+                  1. تقييم النظارة بعد الشراء (ساعات)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={720}
+                  className="inp text-xs"
+                  dir="ltr"
+                  value={reviewHours}
+                  onChange={(e) =>
+                    updateShop(activeShop.id, { reminderReviewHours: Math.max(1, Number(e.target.value) || 24) })
+                  }
                 />
               </div>
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-bold text-[#0F172A]">تذكير المراجعة السنوية (12 شهر)</span>
-                <Switch
-                  on={activeShop.recall12mEnabled ?? true}
-                  onChange={(v) => updateShop(activeShop.id, { recall12mEnabled: v })}
+
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-xs font-bold text-[#0F172A]">2. صيانة الشنبر (شهور)</label>
+                  <Switch
+                    on={activeShop.recall6mEnabled ?? true}
+                    onChange={(v) => updateShop(activeShop.id, { recall6mEnabled: v })}
+                  />
+                </div>
+                <input
+                  type="number"
+                  min={1}
+                  max={24}
+                  className="inp text-xs"
+                  dir="ltr"
+                  value={maintMonths}
+                  onChange={(e) =>
+                    updateShop(activeShop.id, {
+                      reminderMaintenanceMonths: Math.max(1, Number(e.target.value) || 4),
+                    })
+                  }
+                />
+              </div>
+
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-xs font-bold text-[#0F172A]">3. فحص النظر (شهور)</label>
+                  <Switch
+                    on={activeShop.recall12mEnabled ?? true}
+                    onChange={(v) => updateShop(activeShop.id, { recall12mEnabled: v })}
+                  />
+                </div>
+                <input
+                  type="number"
+                  min={1}
+                  max={36}
+                  className="inp text-xs"
+                  dir="ltr"
+                  value={examMonths}
+                  onChange={(e) =>
+                    updateShop(activeShop.id, {
+                      reminderExamMonths: Math.max(1, Number(e.target.value) || 12),
+                    })
+                  }
                 />
               </div>
             </div>
-            <span className="badge b-warn">{dueRecallCount} عملاء مستحقون للتذكير الآن</span>
           </div>
 
           <form onSubmit={handleAddCrm} className="glass rounded-2xl p-5 mb-5 space-y-3">
             <h3 className="font-bold text-sm text-[#0F172A]">إضافة عميل جديد</h3>
-            <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+            <div className="grid sm:grid-cols-2 lg:grid-cols-6 gap-2.5">
               <input
                 className="inp text-xs"
                 placeholder="اسم العميل *"
@@ -1454,6 +2007,14 @@ export function MerchantPage() {
                 value={crmPd}
                 onChange={(e) => setCrmPd(e.target.value)}
               />
+              <input
+                className="inp text-xs"
+                type="number"
+                dir="ltr"
+                placeholder="المبلغ المدفوع (ج.م)"
+                value={crmPrice}
+                onChange={(e) => setCrmPrice(e.target.value)}
+              />
               <div className="flex gap-2">
                 <input
                   className="inp text-xs flex-1"
@@ -1470,40 +2031,95 @@ export function MerchantPage() {
 
           <div className="space-y-3">
             {dueCrmList.map((c) => {
-              const recallType: '6m' | '12m' = c.due12 ? '12m' : '6m';
-              const waText = encodeURIComponent(
-                `أهلاً ${c.customerName} 👋 معكم ${activeShop.name}. مرّ ${
-                  recallType === '12m' ? 'عام كامل' : '6 أشهر'
-                } على نظارتك (${c.productName}) — يشرفنا زيارتك لخدمة الصيانة والتنظيف المجاني أو استعراض الموديلات الجديدة.`
+              const reviewUrl = `${origin}/s/${activeShop.slug}${c.productId ? `/f/${c.productId}` : ''}?review=1`;
+              const reviewMsg = encodeURIComponent(
+                `أهلاً ${c.customerName} 👋 شكراً لزيارتك ${activeShop.name}. نتمنى نظارتك (${c.productName}) تكون عند حسن ظنك! يسعدنا تقييمك السريع هنا:\n${reviewUrl}`
               );
+              const maintMsg = encodeURIComponent(
+                `أهلاً ${c.customerName} 👋 معكم ${activeShop.name}. مرّ ${maintMonths} أشهر على نظارتك (${c.productName}) — يشرفنا زيارتك للصيانة والضبط والتنظيف المجاني.`
+              );
+              const examMsg = encodeURIComponent(
+                `أهلاً ${c.customerName} 👋 معكم ${activeShop.name}. حان موعد المراجعة الدورية لفحص النظر بعد ${examMonths} شهراً منذ استلام (${c.productName}) — يسعدنا استقبالك لاستعراض أحدث الموديلات.`
+              );
+              const formattedDate = new Date(c.orderDate).toLocaleDateString('ar-EG');
+
               return (
-                <div key={c.id} className="glass rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <b className="text-sm text-[#0F172A]">{c.customerName}</b>
-                      <span className="font-mono text-xs text-slate-500" dir="ltr">{c.phone}</span>
-                      {(c.due6 || c.due12) && (
-                        <span className="badge b-warn">
-                          {c.due12 ? 'مستحق تذكير 12 شهر' : 'مستحق تذكير 6 شهور'}
+                <div key={c.id} className="glass rounded-2xl p-4 space-y-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <b className="text-sm text-[#0F172A]">{c.customerName}</b>
+                        <span className="font-mono text-xs text-slate-500" dir="ltr">
+                          {c.phone}
                         </span>
+                        <span className="badge b-info text-[0.65rem]">{formattedDate}</span>
+                        {c.dueReview && <span className="badge b-warn text-[0.65rem]">مستحق طلب تقييم</span>}
+                        {c.due6 && <span className="badge b-warn text-[0.65rem]">مستحق صيانة ({maintMonths}ش)</span>}
+                        {c.due12 && <span className="badge b-warn text-[0.65rem]">مستحق فحص ({examMonths}ش)</span>}
+                      </div>
+
+                      <div className="text-xs text-slate-700 flex flex-wrap items-center gap-2">
+                        <span>
+                          <b>الموديل:</b> {c.productName}
+                        </span>
+                        {c.lensSummary && (
+                          <span>
+                            · <b>العدسة:</b> {c.lensSummary}
+                          </span>
+                        )}
+                        {c.pd && <span className="font-mono">· PD {c.pd}</span>}
+                        {typeof c.pricePaid === 'number' && c.pricePaid > 0 && (
+                          <span className="font-extrabold text-[#D97706]">· المدفوع: {fmt(c.pricePaid)} ج.م</span>
+                        )}
+                      </div>
+
+                      {c.notes && <div className="text-xs text-slate-500">ملاحظات: {c.notes}</div>}
+
+                      {typeof c.rating === 'number' && c.rating > 0 && (
+                        <div className="mt-1 inline-flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-200 px-2.5 py-1 text-xs">
+                          <span className="text-amber-500 font-bold">{'★'.repeat(c.rating)}</span>
+                          {c.reviewComment && <span className="text-slate-700">«{c.reviewComment}»</span>}
+                        </div>
                       )}
                     </div>
-                    <div className="text-xs text-slate-600">
-                      {c.productName} {c.pd ? `· PD ${c.pd}` : ''} · منذ {c.daysSince} يوم
-                      {c.notes ? ` · ${c.notes}` : ''}
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {c.recallReviewSentAt && <span className="badge b-ok text-[0.65rem]">أُرسل تقييم ✓</span>}
+                      {c.recall6mSentAt && <span className="badge b-ok text-[0.65rem]">أُرسل صيانة ✓</span>}
+                      {c.recall12mSentAt && <span className="badge b-ok text-[0.65rem]">أُرسل فحص ✓</span>}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {c.recall6mSentAt && <span className="badge b-ok text-[0.68rem]">أُرسل 6ش ✓</span>}
-                    {c.recall12mSentAt && <span className="badge b-ok text-[0.68rem]">أُرسل 12ش ✓</span>}
+
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
                     <a
-                      href={`https://wa.me/${waNum(c.phone)}?text=${waText}`}
+                      href={`https://wa.me/${waNum(c.phone)}?text=${reviewMsg}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="btn btn-p btn-sm"
-                      onClick={() => markCrmRecallSent(c.id, recallType)}
+                      className={
+                        'btn btn-sm text-xs ' +
+                        (c.dueReview ? 'bg-[#D97706] hover:bg-[#B45309] text-white' : 'btn-g')
+                      }
+                      onClick={() => markCrmRecallSent(c.id, 'review')}
                     >
-                      <I n="msg" s={14} /> إرسال تذكير واتساب 💬
+                      <I n="msg" s={13} /> طلب تقييم ⭐
+                    </a>
+                    <a
+                      href={`https://wa.me/${waNum(c.phone)}?text=${maintMsg}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={'btn btn-sm text-xs ' + (c.due6 ? 'btn-p' : 'btn-g')}
+                      onClick={() => markCrmRecallSent(c.id, '6m')}
+                    >
+                      <I n="msg" s={13} /> تذكير صيانة ({maintMonths}ش)
+                    </a>
+                    <a
+                      href={`https://wa.me/${waNum(c.phone)}?text=${examMsg}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={'btn btn-sm text-xs ' + (c.due12 ? 'btn-p' : 'btn-g')}
+                      onClick={() => markCrmRecallSent(c.id, '12m')}
+                    >
+                      <I n="msg" s={13} /> فحص نظر ({examMonths}ش)
                     </a>
                   </div>
                 </div>
@@ -2021,13 +2637,74 @@ export function MerchantPage() {
                 </div>
               </div>
 
-              <button
-                type="button"
-                className="btn btn-p w-full"
-                onClick={() => toast('تم حفظ بيانات المتجر واللوجو والسمة ✓')}
-              >
-                <I n="check" s={16} /> حفظ التخصيصات
-              </button>
+              {/* Business Hours & Store Card Display Controls */}
+              <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-3.5 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-extrabold text-[#0F172A]">شريط ساعات العمل والاتصال السريع</div>
+                    <div className="text-[0.68rem] text-slate-500">
+                      يظهر للعملاء حالة المحل (مفتوح الآن / مغلق الآن) مع أزرار واتساب واتصال
+                    </div>
+                  </div>
+                  <Switch
+                    on={Boolean(activeShop.showBusinessHoursBar)}
+                    onChange={(v) => updateShop(activeShop.id, { showBusinessHoursBar: v })}
+                  />
+                </div>
+
+                {activeShop.showBusinessHoursBar && (
+                  <div className="grid grid-cols-2 gap-2.5 pt-1">
+                    <div>
+                      <label className="text-[0.7rem] font-bold text-slate-600">بداية العمل</label>
+                      <input
+                        type="time"
+                        dir="ltr"
+                        className="inp mt-1 text-xs"
+                        value={activeShop.workingHoursStart || '10:00'}
+                        onChange={(e) => updateShop(activeShop.id, { workingHoursStart: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[0.7rem] font-bold text-slate-600">نهاية العمل</label>
+                      <input
+                        type="time"
+                        dir="ltr"
+                        className="inp mt-1 text-xs"
+                        value={activeShop.workingHoursEnd || '22:00'}
+                        onChange={(e) => updateShop(activeShop.id, { workingHoursEnd: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="pt-2 border-t border-slate-200/80 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-[#0F172A]">تجميع ألوان الموديل الواحد في كارت متجر العميل</span>
+                    <Switch
+                      on={Boolean(activeShop.groupColorsInStore)}
+                      onChange={(v) => updateShop(activeShop.id, { groupColorsInStore: v })}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-[#0F172A]">إظهار دوائر الألوان على الكارت للعميل</span>
+                    <Switch
+                      on={activeShop.showColorSwatchesToCustomer !== false}
+                      onChange={(v) => updateShop(activeShop.id, { showColorSwatchesToCustomer: v })}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="btn btn-p flex-1"
+                  onClick={() => toast('تم حفظ بيانات المتجر واللوجو والسمة ✓')}
+                >
+                  <I n="check" s={16} /> حفظ التخصيصات
+                </button>
+                <PWAInstallButton label="تثبيت لوحة التاجر كتطبيق 📲" />
+              </div>
             </div>
           </div>
         </>

@@ -28,6 +28,7 @@ import { deleteDraftFrame, loadDraftFrames, PersistedDraftFrame, saveDraftFrame 
 import { Eyewear3DViewer } from './Eyewear3DARStage';
 import { FrameFitPreview, PhotoUploadGuidelines } from './FrameFitPreviewCard';
 import { I } from './Icons';
+import { CollectionPosterFrame, NewCollectionPromoModal } from './NewCollectionPromoModal';
 import { Modal } from './UiShared';
 
 type CardProcessStatus = 'enhancing' | 'ready' | 'error';
@@ -59,6 +60,7 @@ interface BulkFrameItem {
   qualityNoteAr?: string;
   approved: boolean;
   isPublished: boolean;
+  mergedIntoExistingProduct?: boolean;
   showFacePreview?: boolean;
   previewClipOn?: boolean;
   cacheHit?: boolean;
@@ -105,6 +107,8 @@ interface BulkFrameItem {
   glbPreviewUrl?: string;
   glbStorageUrl?: string;
   reprocessing?: boolean;
+  isNewCollection?: boolean;
+  newCollectionUntil?: string;
 }
 
 const FRAME_MODES: {
@@ -248,6 +252,9 @@ function buildProductPayloadFromItem(
     colorFamily: it.colorFamily,
     // Approval gate: never publish until merchant explicitly clicks اعتماد
     isPublished: Boolean(it.isPublished),
+    stock: 1,
+    isNewCollection: Boolean(it.isNewCollection),
+    newCollectionUntil: it.newCollectionUntil,
     modelCalibration: {
       ...(it.calibration || {}),
       frameWidthMm: it.frameWidthMm,
@@ -268,6 +275,9 @@ function buildProductPayloadFromItem(
       isPatterned: it.isPatterned,
       colorFamily: it.colorFamily,
       modelCode: it.modelCode,
+      stock: 1,
+      isNewCollection: Boolean(it.isNewCollection),
+      newCollectionUntil: it.newCollectionUntil,
     },
   };
 
@@ -435,7 +445,13 @@ async function sampleRoughHexFromFile(file: Blob): Promise<string> {
   }
 }
 
-export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
+export function BulkFrameUploader({
+  onSaved,
+  externalNewCollectionSignal = 0,
+}: {
+  onSaved?: () => void;
+  externalNewCollectionSignal?: number;
+}) {
   const {
     session,
     activeShop,
@@ -463,13 +479,21 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
   const remainingCredits = activeShop.isDemoAdminStore ? 999999 : Math.max(0, creditsCap - creditsUsed);
   const [outOfCreditsModal, setOutOfCreditsModal] = useState<'credits' | 'capacity' | null>(null);
 
-  // Step 1: 4 Streamlined 1-Tap Category Cards
+  // Step 1: 5 Streamlined 1-Tap Category Cards + New Collection Mode
   const [selectedMode, setSelectedMode] = useState<EyewearFrameMode>('prescription');
   const [subCategory, setSubCategory] = useState<EyewearSubMode>('optical');
   const [expandedCategory, setExpandedCategory] = useState<'sunglasses' | 'kids' | null>(null);
   const autoGroupColors = true;
   const [keepLensBranding, setKeepLensBranding] = useState<boolean>(false);
   const [validationAlert, setValidationAlert] = useState<string | null>(null);
+  const [isNewCollectionMode, setIsNewCollectionMode] = useState(false);
+  const [promoModalFrames, setPromoModalFrames] = useState<CollectionPosterFrame[] | null>(null);
+
+  useEffect(() => {
+    if (externalNewCollectionSignal > 0) {
+      setIsNewCollectionMode(true);
+    }
+  }, [externalNewCollectionSignal]);
 
   const [items, setItems] = useState<BulkFrameItem[]>([]);
   const [processing, setProcessing] = useState(false);
@@ -656,11 +680,18 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
 
     const { prod, images } = buildProductPayloadFromItem(activeShop.id, updatedCard);
     let savedProductId = updatedCard.savedProductId;
-    if (savedProductId) {
+    if (savedProductId && !updatedCard.mergedIntoExistingProduct) {
       await updateProduct(savedProductId, prod, images);
-    } else {
+    } else if (!savedProductId) {
       const saved = await addProduct(prod, images);
       savedProductId = saved.id;
+      if (saved.mergedStockDuplicate) {
+        updatedCard.mergedIntoExistingProduct = true;
+        updatedCard.approved = true;
+        updatedCard.isPublished = true;
+        updatedCard.stageLabel = 'تم دمج المخزون مع الموديل المطابق 📦';
+        toast(`تم رصد موديل ولون مطابقين — تم دمج المخزون تلقائياً في "${saved.name}" (الرصيد: ${saved.stock ?? 1}) 📦`);
+      }
     }
     updatedCard.savedProductId = savedProductId;
 
@@ -1134,6 +1165,11 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       files.forEach((f, i) => pairs.push({ front: f, idx: i }));
     }
 
+    const batchIsNewCollection = isNewCollectionMode;
+    const batchNewCollectionUntil = batchIsNewCollection
+      ? new Date(Date.now() + 7 * 86400000).toISOString()
+      : undefined;
+
     const newCards: BulkFrameItem[] = pairs.map(({ front, clipOn, idx }) => ({
       localId: `bulk-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
       sourceFile: front,
@@ -1160,6 +1196,8 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       frameHexColor: '#1f2937',
       frameOpacity: 1.0,
       reprocessing: true,
+      isNewCollection: batchIsNewCollection,
+      newCollectionUntil: batchNewCollectionUntil,
     }));
 
     setItems((prev) => [...prev, ...newCards]);
@@ -1234,6 +1272,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
     let doneCount = 0;
     let successCount = 0;
     const processedLeadById = new Map<string, BulkFrameItem>();
+    const finishedBatch: BulkFrameItem[] = [];
 
     // Use Batch API path when Standard (non-Turbo) & >1 item in AI queue
     if (!useTurbo && aiQueue.length > 1) {
@@ -1279,12 +1318,14 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
             const finished = await processSingleCard(c, ctrl.signal, res);
             if (finished) {
               processedLeadById.set(c.localId, finished);
+              finishedBatch.push(finished);
               successCount++;
             }
           } else {
             const finished = await processSingleCard(c, ctrl.signal);
             if (finished) {
               processedLeadById.set(c.localId, finished);
+              finishedBatch.push(finished);
               successCount++;
             }
           }
@@ -1298,6 +1339,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
           const finished = await processSingleCard(c, ctrl.signal);
           if (finished) {
             processedLeadById.set(c.localId, finished);
+            finishedBatch.push(finished);
             successCount++;
           }
           doneCount++;
@@ -1310,6 +1352,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
         const finished = await processSingleCard(c, ctrl.signal);
         if (finished) {
           processedLeadById.set(c.localId, finished);
+          finishedBatch.push(finished);
           successCount++;
         }
         doneCount++;
@@ -1332,7 +1375,10 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
         okSib = await processSingleCard(sib, ctrl.signal);
       }
       doneCount++;
-      if (okSib) successCount++;
+      if (okSib) {
+        finishedBatch.push(okSib);
+        successCount++;
+      }
       setProgress({ done: doneCount, total: newCards.length });
     }
 
@@ -1342,6 +1388,21 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
       toast(`تم إيقاف المعالجة عند ${successCount} نظارة`);
     } else if (successCount > 0) {
       toast(`تم تجهيز ${successCount} نظارة — راجع النتيجة واضغط "اعتماد" لنشرها في المتجر ✓`);
+      if (batchIsNewCollection && finishedBatch.length > 0) {
+        setPromoModalFrames(
+          finishedBatch.map((it) => ({
+            id: it.savedProductId || it.localId,
+            name: it.name,
+            price:
+              it.salePrice && it.salePrice > 0 && it.salePrice < it.price
+                ? it.salePrice
+                : it.price,
+            imageUrl: it.frontCatalogPath || it.imagePath || it.originalThumbUrl,
+            code: it.modelCode || it.code,
+          }))
+        );
+        setIsNewCollectionMode(false);
+      }
     }
   };
 
@@ -1353,7 +1414,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
 
   const syncItemToProduct = (next: BulkFrameItem, rebuildImages = false) => {
     void saveDraftFrame(toPersistedDraft(activeShop.id, next));
-    if (!next.savedProductId || !next.frontCatalogPath || !next.imagePath) return;
+    if (next.mergedIntoExistingProduct || !next.savedProductId || !next.frontCatalogPath || !next.imagePath) return;
     const { prod, images } = buildProductPayloadFromItem(activeShop.id, next);
     void updateProduct(next.savedProductId, prod, rebuildImages ? images : undefined);
   };
@@ -1584,27 +1645,58 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
           <I n="upload" s={17} c="text-[#0284C7]" />
           <span>رفع النظارات (اضغط على الفئة لاختيار الصور فوراً)</span>
         </div>
-        {items.length > 0 && !processing && (
-          <div className="flex items-center gap-2">
-            {readyUnapprovedCount > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIsNewCollectionMode((v) => !v)}
+            className={
+              'px-3 py-1.5 rounded-xl text-xs font-extrabold border transition cursor-pointer flex items-center gap-1.5 ' +
+              (isNewCollectionMode
+                ? 'bg-[#D97706] text-white border-[#D97706] shadow-sm'
+                : 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300')
+            }
+          >
+            <span>إضافة كوليكشن جديد ✨</span>
+            {isNewCollectionMode && <span className="text-[0.65rem] bg-white/20 px-1.5 py-0.5 rounded">مفعّل</span>}
+          </button>
+
+          {items.length > 0 && !processing && (
+            <>
+              {readyUnapprovedCount > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-p btn-sm !bg-[#D97706] hover:!bg-[#B45309] !text-white"
+                  onClick={() => void handleApproveAllReady()}
+                >
+                  <I n="check" s={14} /> اعتماد الكل ({readyUnapprovedCount})
+                </button>
+              )}
               <button
                 type="button"
-                className="btn btn-p btn-sm !bg-[#D97706] hover:!bg-[#B45309] !text-white"
-                onClick={() => void handleApproveAllReady()}
+                className="px-3 py-1.5 rounded-xl bg-white border border-slate-300 text-slate-800 text-xs font-bold hover:bg-slate-100 cursor-pointer"
+                onClick={handleFinishReview}
               >
-                <I n="check" s={14} /> اعتماد الكل ({readyUnapprovedCount})
+                إنهاء المراجعة ({items.length})
               </button>
-            )}
-            <button
-              type="button"
-              className="px-3 py-1.5 rounded-xl bg-white border border-slate-300 text-slate-800 text-xs font-bold hover:bg-slate-100 cursor-pointer"
-              onClick={handleFinishReview}
-            >
-              إنهاء المراجعة ({items.length})
-            </button>
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
+
+      {isNewCollectionMode && (
+        <div className="rounded-2xl bg-amber-50 border border-amber-300 px-3.5 py-2.5 text-xs text-amber-950 font-bold flex flex-wrap items-center justify-between gap-2">
+          <span>
+            ✨ وضع الكوليكشن الجديد مفعّل: سيتم تمييز كل النظارات في الدفعة القادمة بوسم «كوليكشن جديد» لمدة 7 أيام وتجهيز بوستر ستوري 1080×1920 تلقائياً فور انتهاء الرفع!
+          </span>
+          <button
+            type="button"
+            onClick={() => setIsNewCollectionMode(false)}
+            className="text-amber-900 hover:underline font-extrabold cursor-pointer"
+          >
+            إلغاء الوضع
+          </button>
+        </div>
+      )}
 
       {/* 5 Clean 1-Tap Category Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
@@ -2441,6 +2533,14 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
           </div>
         </Modal>
       )}
+
+      <NewCollectionPromoModal
+        open={Boolean(promoModalFrames && promoModalFrames.length > 0)}
+        onClose={() => setPromoModalFrames(null)}
+        shop={activeShop}
+        frames={promoModalFrames || []}
+        onToast={toast}
+      />
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Modals } from './components/Modals';
+import { OfflineIndicator } from './components/PWAInstallPrompt';
 import { AdminPage } from './pages/AdminPage';
 import { DirectoryPage } from './pages/DirectoryPage';
 import { LandingPage } from './pages/LandingPage';
@@ -64,6 +65,7 @@ export default function App() {
     <OptiVerseProvider>
       <AdminFloatingReturnBar />
       <RouterView />
+      <OfflineIndicator />
       <Modals />
     </OptiVerseProvider>
   );

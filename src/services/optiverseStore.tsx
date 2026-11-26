@@ -280,13 +280,17 @@ export interface StoreCtxValue {
   setExtraShops: React.Dispatch<React.SetStateAction<number>>;
   products: Product[];
   setProducts: React.Dispatch<React.SetStateAction<Product[]>>;
-  addProduct: (prod: Omit<Product, 'id'>, images?: ProductImage[]) => Promise<Product>;
+  addProduct: (
+    prod: Omit<Product, 'id'>,
+    images?: ProductImage[]
+  ) => Promise<Product & { mergedStockDuplicate?: boolean }>;
   addProductsBulk: (items: { prod: Omit<Product, 'id'>; images?: ProductImage[] }[]) => Promise<Product[]>;
   updateProduct: (
     productId: string,
     patch: Partial<Omit<Product, 'id' | 'shopId'>>,
     replacedImages?: ProductImage[]
   ) => Promise<Product | null>;
+  updateProductStock: (productId: string, delta: number) => Promise<void>;
   updateProductsBatch: (
     updates: { productId: string; patch: Partial<Omit<Product, 'id' | 'shopId'>> }[]
   ) => Promise<void>;
@@ -308,7 +312,7 @@ export interface StoreCtxValue {
   updateInquiry: (id: string, patch: Partial<Inquiry>) => Promise<void>;
   crmCustomers: CrmCustomer[];
   addCrmCustomer: (c: Omit<CrmCustomer, 'id'>) => Promise<CrmCustomer>;
-  markCrmRecallSent: (id: string, type: '6m' | '12m') => Promise<void>;
+  markCrmRecallSent: (id: string, type: 'review' | '6m' | '12m') => Promise<void>;
   lensTypes: LensType[];
   setLensTypes: React.Dispatch<React.SetStateAction<LensType[]>>;
   brands: Brand[];
@@ -389,6 +393,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
   const bcRef = useRef<BroadcastChannel | null>(null);
   const idbHydratedRef = useRef(false);
   const hasMutatedBeforeIdbRef = useRef(false);
+  const productsRef = useRef<Product[]>(products);
+  productsRef.current = products;
 
   const toast = useCallback((m: string) => {
     setTst(m);
@@ -706,11 +712,24 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     exp: r.expires_label,
     logo: r.logo,
     tagline: r.tagline || undefined,
+    bannerImageUrl: r.banner_image_url || undefined,
+    videoUrl: r.video_url || undefined,
     color: r.color,
     themeKey: r.theme_key || undefined,
     aiLogoGenerations: typeof r.ai_logo_generations === 'number' ? r.ai_logo_generations : undefined,
     wa: r.wa_phone,
     merchantLensConfigs: Array.isArray(r.merchant_lens_configs) ? r.merchant_lens_configs : undefined,
+    groupColorsInStore: Boolean(r.group_colors_in_store),
+    showColorSwatchesToCustomer: r.show_color_swatches_to_customer !== false,
+    showStockCountToCustomer: Boolean(r.show_stock_count_to_customer),
+    hideOutOfStockToCustomer: Boolean(r.hide_out_of_stock_to_customer),
+    showBusinessHoursBar: Boolean(r.show_business_hours_bar),
+    workingHoursStart: r.working_hours_start || '10:00',
+    workingHoursEnd: r.working_hours_end || '22:00',
+    reminderReviewHours: typeof r.reminder_review_hours === 'number' ? r.reminder_review_hours : 24,
+    reminderMaintenanceMonths: typeof r.reminder_maintenance_months === 'number' ? r.reminder_maintenance_months : 4,
+    reminderExamMonths: typeof r.reminder_exam_months === 'number' ? r.reminder_exam_months : 12,
+    reminderMode: r.reminder_mode === 'manual' ? 'manual' : 'auto',
   });
 
   const mapDbProductRows = (prods: any[], imgs: any[]): Product[] => {
@@ -801,6 +820,9 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         images: pImgs,
         isPublished: r.is_published !== false,
         isDeleted: r.is_deleted,
+        stock: typeof r.stock === 'number' ? r.stock : (typeof r.model_calibration?.stock === 'number' ? r.model_calibration.stock : 1),
+        isNewCollection: typeof r.is_new_collection === 'boolean' ? r.is_new_collection : Boolean(r.model_calibration?.isNewCollection),
+        newCollectionUntil: r.new_collection_until || r.model_calibration?.newCollectionUntil || undefined,
       };
     });
   };
@@ -1018,6 +1040,10 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             lensSummary: c.lens_summary || '',
             pd: c.pd || '',
             orderDate: c.order_date,
+            pricePaid: typeof c.price_paid === 'number' ? c.price_paid : undefined,
+            rating: typeof c.rating === 'number' ? c.rating : undefined,
+            reviewComment: c.review_comment || undefined,
+            recallReviewSentAt: c.recall_review_sent_at || undefined,
             recall6mSentAt: c.recall_6m_sent_at || undefined,
             recall12mSentAt: c.recall_12m_sent_at || undefined,
             notes: c.notes || '',
@@ -1749,7 +1775,20 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           patch.themeKey !== undefined ||
           patch.aiLogoGenerations !== undefined ||
           patch.merchantLensConfigs !== undefined ||
-          patch.tagline !== undefined
+          patch.tagline !== undefined ||
+          patch.bannerImageUrl !== undefined ||
+          patch.videoUrl !== undefined ||
+          patch.groupColorsInStore !== undefined ||
+          patch.showColorSwatchesToCustomer !== undefined ||
+          patch.showStockCountToCustomer !== undefined ||
+          patch.hideOutOfStockToCustomer !== undefined ||
+          patch.showBusinessHoursBar !== undefined ||
+          patch.workingHoursStart !== undefined ||
+          patch.workingHoursEnd !== undefined ||
+          patch.reminderReviewHours !== undefined ||
+          patch.reminderMaintenanceMonths !== undefined ||
+          patch.reminderExamMonths !== undefined ||
+          patch.reminderMode !== undefined
         ) {
           try {
             await supabase
@@ -1757,12 +1796,41 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
               .update({
                 ...(patch.themeKey !== undefined ? { theme_key: patch.themeKey } : {}),
                 ...(patch.tagline !== undefined ? { tagline: patch.tagline } : {}),
+                ...(patch.bannerImageUrl !== undefined ? { banner_image_url: patch.bannerImageUrl } : {}),
+                ...(patch.videoUrl !== undefined ? { video_url: patch.videoUrl } : {}),
                 ...(patch.aiLogoGenerations !== undefined
                   ? { ai_logo_generations: patch.aiLogoGenerations }
                   : {}),
                 ...(patch.merchantLensConfigs !== undefined
                   ? { merchant_lens_configs: patch.merchantLensConfigs }
                   : {}),
+                ...(patch.groupColorsInStore !== undefined
+                  ? { group_colors_in_store: patch.groupColorsInStore }
+                  : {}),
+                ...(patch.showColorSwatchesToCustomer !== undefined
+                  ? { show_color_swatches_to_customer: patch.showColorSwatchesToCustomer }
+                  : {}),
+                ...(patch.showStockCountToCustomer !== undefined
+                  ? { show_stock_count_to_customer: patch.showStockCountToCustomer }
+                  : {}),
+                ...(patch.hideOutOfStockToCustomer !== undefined
+                  ? { hide_out_of_stock_to_customer: patch.hideOutOfStockToCustomer }
+                  : {}),
+                ...(patch.showBusinessHoursBar !== undefined
+                  ? { show_business_hours_bar: patch.showBusinessHoursBar }
+                  : {}),
+                ...(patch.workingHoursStart !== undefined ? { working_hours_start: patch.workingHoursStart } : {}),
+                ...(patch.workingHoursEnd !== undefined ? { working_hours_end: patch.workingHoursEnd } : {}),
+                ...(patch.reminderReviewHours !== undefined
+                  ? { reminder_review_hours: patch.reminderReviewHours }
+                  : {}),
+                ...(patch.reminderMaintenanceMonths !== undefined
+                  ? { reminder_maintenance_months: patch.reminderMaintenanceMonths }
+                  : {}),
+                ...(patch.reminderExamMonths !== undefined
+                  ? { reminder_exam_months: patch.reminderExamMonths }
+                  : {}),
+                ...(patch.reminderMode !== undefined ? { reminder_mode: patch.reminderMode } : {}),
               })
               .eq('id', shopId);
           } catch {
@@ -2027,7 +2095,59 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
   );
 
   const addProduct = useCallback(
-    async (prod: Omit<Product, 'id'>, images: ProductImage[] = []) => {
+    async (
+      prod: Omit<Product, 'id'>,
+      images: ProductImage[] = []
+    ): Promise<Product & { mergedStockDuplicate?: boolean }> => {
+      // Duplicate Model + Color Auto-Stock Merge
+      const normModel = (prod.modelCode || prod.name || '').trim().toLowerCase();
+      const normColor = (prod.frameHexColor || prod.frame || '').trim().toLowerCase();
+      const duplicateMatch =
+        normModel && normColor
+          ? productsRef.current.find((existing) => {
+              if (existing.shopId !== prod.shopId || existing.isDeleted) return false;
+              const existingModel = (existing.modelCode || existing.name || '').trim().toLowerCase();
+              const existingCode = (existing.code || '').trim().toLowerCase();
+              const existingColor = (existing.frameHexColor || existing.frame || '').trim().toLowerCase();
+              const modelMatches =
+                existingModel === normModel ||
+                (Boolean(prod.modelCode) && existingCode === prod.modelCode!.trim().toLowerCase());
+              return modelMatches && existingColor === normColor;
+            })
+          : undefined;
+
+      if (duplicateMatch) {
+        const addQty = Math.max(1, typeof prod.stock === 'number' ? Math.floor(prod.stock) : 1);
+        const curQty = typeof duplicateMatch.stock === 'number' ? Math.max(0, Math.floor(duplicateMatch.stock)) : 1;
+        const nextStock = curQty + addQty;
+        const nextCalib = { ...(duplicateMatch.modelCalibration || {}), stock: nextStock };
+        const mergedProduct: Product & { mergedStockDuplicate?: boolean } = {
+          ...duplicateMatch,
+          stock: nextStock,
+          modelCalibration: nextCalib,
+          mergedStockDuplicate: true,
+        };
+        const nextList = productsRef.current.map((p) => (p.id === duplicateMatch.id ? mergedProduct : p));
+        productsRef.current = nextList;
+        setProducts(nextList);
+        await logAudit(
+          'دمج مخزون مكرر',
+          `تم دمج +${addQty} قطعة لـ ${duplicateMatch.name} (${duplicateMatch.modelCode || duplicateMatch.code}) -> الرصيد ${nextStock}`,
+          prod.shopId
+        );
+        if (supabase) {
+          try {
+            const { error } = await supabase.from('products').update({ stock: nextStock }).eq('id', duplicateMatch.id);
+            if (error) {
+              await supabase.from('products').update({ model_calibration: nextCalib }).eq('id', duplicateMatch.id);
+            }
+          } catch {
+            // Optional column fallback
+          }
+        }
+        return mergedProduct;
+      }
+
       const tempId = generateId('p');
       const colorsArr = prod.frameColors?.length
         ? prod.frameColors
@@ -2051,13 +2171,23 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         availableColors: colorsArr,
         availableSizes: prod.availableSizes?.length ? prod.availableSizes : ['Small', 'Medium', 'Large'],
         isPublished: prod.isPublished !== false,
+        stock: prod.stock !== undefined ? prod.stock : 1,
+        isNewCollection: prod.isNewCollection,
+        newCollectionUntil: prod.newCollectionUntil,
+      };
+      normalizedProd.modelCalibration = {
+        ...(normalizedProd.modelCalibration || {}),
+        stock: normalizedProd.stock,
+        ...(normalizedProd.isNewCollection ? { isNewCollection: true, newCollectionUntil: normalizedProd.newCollectionUntil } : {}),
       };
       const fullProd: Product = {
         ...normalizedProd,
         id: tempId,
         images: images.map((im) => ({ ...im, productId: tempId })),
       };
-      setProducts((a) => [...a, fullProd]);
+      const nextProductsList = [...productsRef.current, fullProd];
+      productsRef.current = nextProductsList;
+      setProducts(nextProductsList);
       await logAudit('إضافة نظارة', `تمت إضافة ${prod.name} (${prod.code})`, prod.shopId);
 
       if (supabase) {
@@ -2196,6 +2326,14 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           availableColors: colorsArr,
           availableSizes: prod.availableSizes?.length ? prod.availableSizes : ['Small', 'Medium', 'Large'],
           isPublished: prod.isPublished !== false,
+          stock: prod.stock !== undefined ? prod.stock : 1,
+          isNewCollection: prod.isNewCollection,
+          newCollectionUntil: prod.newCollectionUntil,
+        };
+        normalizedProd.modelCalibration = {
+          ...(normalizedProd.modelCalibration || {}),
+          stock: normalizedProd.stock,
+          ...(normalizedProd.isNewCollection ? { isNewCollection: true, newCollectionUntil: normalizedProd.newCollectionUntil } : {}),
         };
         const fullProd: Product = {
           ...normalizedProd,
@@ -2432,6 +2570,30 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     [logAudit, products]
   );
 
+  const updateProductStock = useCallback(
+    async (productId: string, delta: number) => {
+      const target = products.find((p) => p.id === productId);
+      if (!target) return;
+      const currentStock = target.stock !== undefined ? target.stock : 1;
+      const nextStock = Math.max(0, currentStock + delta);
+      const nextCalib = { ...(target.modelCalibration || {}), stock: nextStock };
+      setProducts((a) =>
+        a.map((p) => (p.id === productId ? { ...p, stock: nextStock, modelCalibration: nextCalib } : p))
+      );
+      if (supabase) {
+        try {
+          const { error } = await supabase.from('products').update({ stock: nextStock }).eq('id', productId);
+          if (error) {
+            await supabase.from('products').update({ model_calibration: nextCalib }).eq('id', productId);
+          }
+        } catch {
+          // Optional column fallback
+        }
+      }
+    },
+    [products]
+  );
+
   const updateProductsBatch = useCallback(
     async (updates: { productId: string; patch: Partial<Omit<Product, 'id' | 'shopId'>> }[]) => {
       if (!updates.length) return;
@@ -2547,6 +2709,25 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         createdAt: new Date().toISOString(),
       };
       setReviews((prev) => [review, ...prev]);
+
+      // Attach review rating & comment onto matching CRM customer history if found
+      const normAuthor = review.authorName.toLowerCase();
+      let matchedCrmId: string | null = null;
+      setCrmCustomers((prev) => {
+        let updated = false;
+        return prev.map((c) => {
+          if (updated || c.shopId !== review.shopId) return c;
+          const byProd = Boolean(c.productId && c.productId === review.productId && !c.rating);
+          const byName = c.customerName.trim().toLowerCase() === normAuthor;
+          if (byProd || byName) {
+            updated = true;
+            matchedCrmId = c.id;
+            return { ...c, rating: review.rating, reviewComment: review.comment };
+          }
+          return c;
+        });
+      });
+
       if (supabase) {
         await supabase.from('frame_reviews').insert({
           id: review.id.length === 36 ? review.id : undefined,
@@ -2556,6 +2737,16 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           rating: review.rating,
           comment: review.comment,
         });
+        if (matchedCrmId) {
+          try {
+            await supabase
+              .from('crm_customers')
+              .update({ rating: review.rating, review_comment: review.comment })
+              .eq('id', matchedCrmId);
+          } catch {
+            // Optional columns fallback
+          }
+        }
       }
       return review;
     },
@@ -2596,7 +2787,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     };
     setCrmCustomers((prev) => [rec, ...prev]);
     if (supabase) {
-      await supabase.from('crm_customers').insert({
+      const baseRow = {
         shop_id: rec.shopId,
         customer_name: rec.customerName,
         phone: rec.phone,
@@ -2606,27 +2797,42 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         pd: rec.pd || '',
         order_date: rec.orderDate,
         notes: rec.notes || '',
+      };
+      const res = await supabase.from('crm_customers').insert({
+        ...baseRow,
+        ...(rec.pricePaid !== undefined ? { price_paid: rec.pricePaid } : {}),
+        ...(rec.rating !== undefined ? { rating: rec.rating } : {}),
+        ...(rec.reviewComment !== undefined ? { review_comment: rec.reviewComment } : {}),
       });
+      if (res.error) {
+        await supabase.from('crm_customers').insert(baseRow);
+      }
     }
     return rec;
   }, []);
 
-  const markCrmRecallSent = useCallback(async (id: string, type: '6m' | '12m') => {
+  const markCrmRecallSent = useCallback(async (id: string, type: 'review' | '6m' | '12m') => {
     const now = new Date().toISOString();
     setCrmCustomers((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? type === '6m'
-            ? { ...c, recall6mSentAt: now }
-            : { ...c, recall12mSentAt: now }
-          : c
-      )
+      prev.map((c) => {
+        if (c.id !== id) return c;
+        if (type === 'review') return { ...c, recallReviewSentAt: now };
+        if (type === '6m') return { ...c, recall6mSentAt: now };
+        return { ...c, recall12mSentAt: now };
+      })
     );
     if (supabase) {
-      await supabase
-        .from('crm_customers')
-        .update(type === '6m' ? { recall_6m_sent_at: now } : { recall_12m_sent_at: now })
-        .eq('id', id);
+      try {
+        const colPatch =
+          type === 'review'
+            ? { recall_review_sent_at: now }
+            : type === '6m'
+            ? { recall_6m_sent_at: now }
+            : { recall_12m_sent_at: now };
+        await supabase.from('crm_customers').update(colPatch).eq('id', id);
+      } catch {
+        // Optional column fallback
+      }
     }
   }, []);
 
@@ -2634,15 +2840,58 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     async (q: Inquiry) => {
       addMyInquiryId(q.id);
       setInq((a) => [q, ...a]);
+
+      // Auto-decrement matching product stock by 1 (minimum 0)
+      const frameTokens = (q.frameName || '')
+        .split(' + ')
+        .map((s) => s.replace(/\s*\((Small|Medium|Large)\)\s*$/i, '').trim())
+        .filter(Boolean);
+      const matchedProds = products.filter(
+        (p) =>
+          p.shopId === q.shopId &&
+          !p.isDeleted &&
+          frameTokens.some((tok) => tok === p.name || tok === p.code)
+      );
+      if (matchedProds.length > 0) {
+        setProducts((prev) =>
+          prev.map((p) => {
+            if (!matchedProds.some((mp) => mp.id === p.id)) return p;
+            const curStock = p.stock !== undefined ? p.stock : 1;
+            const nextStock = Math.max(0, curStock - 1);
+            return {
+              ...p,
+              stock: nextStock,
+              modelCalibration: { ...(p.modelCalibration || {}), stock: nextStock },
+            };
+          })
+        );
+        if (supabase) {
+          for (const mp of matchedProds) {
+            const nextStock = Math.max(0, (mp.stock !== undefined ? mp.stock : 1) - 1);
+            const nextCalib = { ...(mp.modelCalibration || {}), stock: nextStock };
+            try {
+              const { error } = await supabase.from('products').update({ stock: nextStock }).eq('id', mp.id);
+              if (error) {
+                await supabase.from('products').update({ model_calibration: nextCalib }).eq('id', mp.id);
+              }
+            } catch {
+              // ignore optional column failure
+            }
+          }
+        }
+      }
+
       // Automatically record customer in Merchant Optical CRM on every order/inquiry
       if (q.cust && q.phone) {
         await addCrmCustomer({
           shopId: q.shopId,
           customerName: q.cust,
           phone: q.phone,
+          productId: matchedProds[0]?.id,
           productName: q.frameName,
           lensSummary: `${q.lensName}${q.extrasTxt && q.extrasTxt !== 'بدون إضافات' ? ' · ' + q.extrasTxt : ''}`,
           pd: q.pd || '',
+          pricePaid: q.final || q.price,
           orderDate: new Date().toISOString(),
           notes: q.notes || '',
         });
@@ -2674,27 +2923,44 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         });
       }
     },
-    [addCrmCustomer]
+    [addCrmCustomer, products]
   );
 
-  const updateInquiry = useCallback(async (id: string, patch: Partial<Inquiry>) => {
-    setInq((a) => a.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-    if (supabase) {
-      await supabase
-        .from('inquiries')
-        .update({
-          ...(patch.status !== undefined ? { status: patch.status } : {}),
-          ...(patch.final !== undefined ? { final_price: patch.final } : {}),
-          ...(patch.stage !== undefined ? { stage: patch.stage } : {}),
-          ...(patch.alt !== undefined ? { alt_to: patch.alt } : {}),
-          ...(patch.altFrom !== undefined ? { alt_from: patch.altFrom } : {}),
-          ...(patch.lensName !== undefined ? { lens_name: patch.lensName } : {}),
-          ...(patch.lensPrice !== undefined ? { lens_price: patch.lensPrice } : {}),
-          ...(patch.price !== undefined ? { initial_price: patch.price } : {}),
-        })
-        .eq('ref_code', id);
-    }
-  }, []);
+  const updateInquiry = useCallback(
+    async (id: string, patch: Partial<Inquiry>) => {
+      const prevInq = inq.find((x) => x.id === id);
+      setInq((a) => a.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+      if (patch.final !== undefined && prevInq) {
+        setCrmCustomers((prev) => {
+          let synced = false;
+          return prev.map((c) => {
+            if (synced || c.shopId !== prevInq.shopId) return c;
+            if (c.phone === prevInq.phone && c.customerName === prevInq.cust) {
+              synced = true;
+              return { ...c, pricePaid: patch.final };
+            }
+            return c;
+          });
+        });
+      }
+      if (supabase) {
+        await supabase
+          .from('inquiries')
+          .update({
+            ...(patch.status !== undefined ? { status: patch.status } : {}),
+            ...(patch.final !== undefined ? { final_price: patch.final } : {}),
+            ...(patch.stage !== undefined ? { stage: patch.stage } : {}),
+            ...(patch.alt !== undefined ? { alt_to: patch.alt } : {}),
+            ...(patch.altFrom !== undefined ? { alt_from: patch.altFrom } : {}),
+            ...(patch.lensName !== undefined ? { lens_name: patch.lensName } : {}),
+            ...(patch.lensPrice !== undefined ? { lens_price: patch.lensPrice } : {}),
+            ...(patch.price !== undefined ? { initial_price: patch.price } : {}),
+          })
+          .eq('ref_code', id);
+      }
+    },
+    [inq]
+  );
 
   const enterShopAsMerchant = useCallback(
     (s: Shop) => {
@@ -2850,6 +3116,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         addProduct,
         addProductsBulk,
         updateProduct,
+        updateProductStock,
         updateProductsBatch,
         toggleProductPublished,
         softDeleteProductByCode,

@@ -17,7 +17,7 @@ function AdminFloatingReturnBar() {
   return (
     <button
       onClick={() => navigate('/admin')}
-      className="fixed top-4 start-4 z-[99] px-3.5 py-2 rounded-full bg-slate-900/90 hover:bg-slate-900 text-amber-300 border border-amber-400/40 text-xs font-extrabold shadow-2xl flex items-center gap-1.5 backdrop-blur-md cursor-pointer transition hover:scale-[1.03]"
+      className="fixed bottom-20 start-4 z-[99] px-3.5 py-2 rounded-full bg-slate-900/90 hover:bg-slate-900 text-amber-300 border border-amber-400/40 text-xs font-extrabold shadow-2xl flex items-center gap-1.5 backdrop-blur-md cursor-pointer transition hover:scale-[1.03]"
     >
       <span>العودة للإدارة العليا ↩</span>
     </button>

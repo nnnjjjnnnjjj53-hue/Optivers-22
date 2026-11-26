@@ -1,11 +1,232 @@
 import React, { useEffect, useRef, useState } from 'react';
-import landingEditorialPortrait from '../assets/images/landing_editorial_portrait_1795613820913.jpg';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { DEFAULT_LANDING_PREVIEW_FRAMES } from '../data/seed';
 import { isAdminRole, useOptiVerse } from '../services/optiverseStore';
 import { BillingCycle, LandingPreviewFrame } from '../types';
-import { Corners, Glasses, MiniGlasses } from '../components/GlassesGraphics';
+import { MiniGlasses } from '../components/GlassesGraphics';
 import { I } from '../components/Icons';
 import { fmt } from '../components/UiShared';
+import {
+  buildEyewear3DGroup,
+  disposeThreeObject,
+  parseOpticalDimensions,
+} from '../utils/eyewear3DBuilder';
+
+function Hero3DEyewearCanvas({ frame }: { frame: LandingPreviewFrame }) {
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const groupRef = useRef<THREE.Group | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
+  const [webglError, setWebglError] = useState(false);
+  const [imgTilt, setImgTilt] = useState({ rx: 0, ry: 0 });
+
+  const normalizedDims = (frame.dimensions || '52-18-140').replace(/□/g, '-');
+
+  useEffect(() => {
+    if (frame.imageUrl) return;
+    const container = stageRef.current;
+    if (!container) return;
+
+    let renderer: THREE.WebGLRenderer | null = null;
+    let pmrem: THREE.PMREMGenerator | null = null;
+    let envRT: THREE.WebGLRenderTarget | null = null;
+    let controls: OrbitControls | null = null;
+    let rafId = 0;
+    let ro: ResizeObserver | null = null;
+
+    try {
+      const width = Math.max(260, container.clientWidth || 440);
+      const height = Math.max(220, container.clientHeight || 340);
+
+      renderer = new THREE.WebGLRenderer({
+        alpha: true,
+        antialias: true,
+        powerPreference: 'high-performance',
+      });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(width, height, false);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.12;
+      renderer.domElement.style.width = '100%';
+      renderer.domElement.style.height = '100%';
+      renderer.domElement.style.display = 'block';
+      renderer.domElement.style.touchAction = 'none';
+
+      container.innerHTML = '';
+      container.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      sceneRef.current = scene;
+
+      pmrem = new THREE.PMREMGenerator(renderer);
+      envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
+      scene.environment = envRT.texture;
+
+      const hemi = new THREE.HemisphereLight(0xf8fafc, 0x334155, 0.85);
+      scene.add(hemi);
+
+      const key = new THREE.DirectionalLight(0xfff7ed, 1.45);
+      key.position.set(1.8, 2.5, 2.8);
+      scene.add(key);
+
+      const rim = new THREE.DirectionalLight(0xbae6fd, 0.55);
+      rim.position.set(-2.2, 1.1, -1.8);
+      scene.add(rim);
+
+      const camera = new THREE.PerspectiveCamera(30, width / height, 0.1, 25);
+      camera.position.set(0.95, 0.24, 2.08);
+
+      controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableZoom = false;
+      controls.enablePan = false;
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.07;
+      controls.autoRotate = true;
+      controls.autoRotateSpeed = 1.65;
+      controls.minPolarAngle = Math.PI * 0.26;
+      controls.maxPolarAngle = Math.PI * 0.68;
+      controls.target.set(0, -0.02, -0.5);
+      controls.update();
+      controlsRef.current = controls;
+
+      ro = new ResizeObserver((entries) => {
+        const rect = entries[0]?.contentRect;
+        if (!rect || !renderer) return;
+        const w = Math.max(220, Math.round(rect.width));
+        const h = Math.max(200, Math.round(rect.height));
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h, false);
+      });
+      ro.observe(container);
+
+      const animate = () => {
+        rafId = window.requestAnimationFrame(animate);
+        controls?.update();
+        renderer?.render(scene, camera);
+      };
+      animate();
+    } catch {
+      setWebglError(true);
+    }
+
+    return () => {
+      if (rafId) window.cancelAnimationFrame(rafId);
+      ro?.disconnect();
+      controls?.dispose();
+      controlsRef.current = null;
+      if (groupRef.current) {
+        sceneRef.current?.remove(groupRef.current);
+        disposeThreeObject(groupRef.current);
+        groupRef.current = null;
+      }
+      envRT?.dispose();
+      pmrem?.dispose();
+      renderer?.dispose();
+      if (container) container.innerHTML = '';
+      sceneRef.current = null;
+    };
+  }, [Boolean(frame.imageUrl)]);
+
+  useEffect(() => {
+    if (frame.imageUrl || webglError) return;
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    let cancelled = false;
+    const { lensMm, bridgeMm } = parseOpticalDimensions(normalizedDims);
+    const frameWidthMm = Math.max(128, Math.min(152, Math.round(lensMm * 2 + bridgeMm + 12)));
+    const isMetal = frame.type === 'aviator' || frame.type === 'rimless';
+    const isSun = Boolean(frame.lensColor && frame.lensColor.toLowerCase() !== '#cfe8ff');
+
+    buildEyewear3DGroup({
+      type: frame.type,
+      material: isMetal ? 'metal' : 'acetate',
+      cat: isSun ? 'sun' : 'med',
+      frameColor: frame.frameColor,
+      lensColor: frame.lensColor,
+      opticalDimensions: normalizedDims,
+      frameWidthMm,
+      aspectRatio: frame.type === 'aviator' ? 0.43 : frame.type === 'rimless' ? 0.37 : 0.4,
+      coatingId: isSun ? undefined : 'ar',
+    })
+      .then((group) => {
+        if (cancelled) {
+          disposeThreeObject(group);
+          return;
+        }
+        if (groupRef.current) {
+          scene.remove(groupRef.current);
+          disposeThreeObject(groupRef.current);
+        }
+        groupRef.current = group;
+        scene.add(group);
+      })
+      .catch(() => {
+        if (!cancelled) setWebglError(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    frame.id,
+    frame.type,
+    frame.frameColor,
+    frame.lensColor,
+    frame.imageUrl,
+    normalizedDims,
+    webglError,
+  ]);
+
+  if (frame.imageUrl) {
+    return (
+      <div
+        className="w-full h-full flex items-center justify-center p-8 sm:p-10 select-none"
+        onPointerMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const nx = (e.clientX - rect.left) / Math.max(1, rect.width) - 0.5;
+          const ny = (e.clientY - rect.top) / Math.max(1, rect.height) - 0.5;
+          setImgTilt({ rx: -ny * 14, ry: nx * 18 });
+        }}
+        onPointerLeave={() => setImgTilt({ rx: 0, ry: 0 })}
+      >
+        <img
+          src={frame.imageUrl}
+          alt={frame.name}
+          style={{
+            transform: `perspective(900px) rotateX(${imgTilt.rx}deg) rotateY(${imgTilt.ry}deg) scale(1.02)`,
+          }}
+          className="max-h-[220px] w-auto object-contain transition-transform duration-150 ease-out drop-shadow-[0_14px_20px_rgba(15,23,42,0.18)]"
+        />
+      </div>
+    );
+  }
+
+  if (webglError) {
+    return (
+      <div className="w-full h-full flex items-center justify-center p-8">
+        <MiniGlasses
+          type={frame.type}
+          frame={frame.frameColor}
+          lens={frame.lensColor}
+          w={220}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={stageRef}
+      aria-label={`معاينة ثلاثية الأبعاد تفاعلية لإطار ${frame.name}`}
+      className="w-full h-full cursor-grab active:cursor-grabbing select-none"
+    />
+  );
+}
 
 export function LandingPage() {
   const { navigate, platformSettings, plans, shops, session } = useOptiVerse();
@@ -276,9 +497,9 @@ export function LandingPage() {
               <button
                 type="button"
                 className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white !py-3.5 !px-6 !text-sm sm:!text-base shadow-md"
-                onClick={() => navigate('/merchant')}
+                onClick={() => navigate(`/shop/${demoSlug}`)}
               >
-                <I n="store" s={18} /> لوحة تحكم متجري
+                <I n="camera" s={18} /> معاينة متجر تجريبي
               </button>
             ) : (
               <button
@@ -298,13 +519,15 @@ export function LandingPage() {
                 <I n="map" s={18} /> دليل المحلات المعتمدة ⭐
               </button>
             )}
-            <button
-              type="button"
-              className="btn btn-g !py-3.5 !px-4 !text-sm"
-              onClick={() => navigate(`/shop/${demoSlug}`)}
-            >
-              <I n="camera" s={16} /> معاينة متجر تجريبي
-            </button>
+            {!isMerchantLoggedIn && (
+              <button
+                type="button"
+                className="btn btn-g !py-3.5 !px-4 !text-sm"
+                onClick={() => navigate(`/shop/${demoSlug}`)}
+              >
+                <I n="camera" s={16} /> معاينة متجر تجريبي
+              </button>
+            )}
           </div>
 
           <div className="flex flex-wrap gap-8 mt-9 text-sm text-slate-600 tabular-nums">
@@ -329,7 +552,7 @@ export function LandingPage() {
           </div>
         </div>
 
-        {/* Interactive Studio Portrait Preview Card */}
+        {/* Interactive 3D Eyewear Studio Preview Card */}
         <div className="relative floaty">
           <div className="relative bg-white rounded-3xl border border-[#E2E8F0] shadow-lg overflow-hidden">
             <div className="flex items-center gap-2 px-4 py-3 border-b border-[#E2E8F0] bg-[#F8F9FA]">
@@ -338,128 +561,70 @@ export function LandingPage() {
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
               <span className="text-xs font-bold text-slate-600 mx-auto truncate">
                 <span dir="ltr" className="inline-block">
-                  OptiVerse AI + 3D Try-On
+                  OptiVerse 3D Eyewear Studio
                 </span>{' '}
                 — معاينة تفاعلية
               </span>
             </div>
 
-            <div className="relative bg-[#F1F5F9] aspect-[4/4.4] max-h-[440px] w-full overflow-hidden">
-              <img
-                src={landingEditorialPortrait}
-                alt="معاينة تفاعلية حية لتركيب النظارة على الوجه بتقنية OptiVerse"
-                className="w-full h-full object-cover object-top select-none"
-              />
-              <div
-                className="pointer-events-none absolute inset-0"
-                style={{
-                  background:
-                    'linear-gradient(180deg, rgba(15,23,42,0.16) 0%, rgba(15,23,42,0) 24%, rgba(15,23,42,0) 64%, rgba(15,23,42,0.58) 100%)',
-                }}
-              />
+            <div className="relative bg-gradient-to-b from-slate-50 to-slate-200/70 h-[310px] sm:h-[340px] w-full overflow-hidden">
+              {/* Top Badges Row (Non-overlapping flex header) */}
+              <div className="pointer-events-none absolute top-3 inset-x-3 z-[6] flex flex-wrap items-center justify-between gap-2">
+                <span className="badge !bg-[#059669] !text-white !border-0 shadow-sm text-[0.7rem] sm:text-xs">
+                  <span>مقاس مثالي</span>{' '}
+                  <span dir="ltr" className="inline-block font-mono">
+                    {cur.dimensions?.replace(/□/g, '-')} · 98%
+                  </span>
+                </span>
 
-              {/* Live Eyewear Frame Overlaid Directly Onto Her Eye Pupils & Nose Bridge */}
-              <div
-                className="pointer-events-none absolute z-[6] flex items-center justify-center transition-all duration-200"
-                style={{
-                  top: '43.5%',
-                  left: '50%',
-                  transform: 'translate(-50%, -50%) rotate(-1.2deg)',
-                  width: '38%',
-                }}
-              >
-                {cur.imageUrl ? (
-                  <img
-                    src={cur.imageUrl}
-                    alt={cur.name}
-                    className="w-full h-auto object-contain drop-shadow-[0_6px_12px_rgba(15,23,42,0.35)]"
-                  />
-                ) : (
-                  <svg viewBox="-88 -30 176 62" className="w-full h-auto overflow-visible drop-shadow-[0_6px_10px_rgba(15,23,42,0.28)]">
-                    <Glasses
-                      type={cur.type}
-                      frame={cur.frameColor}
-                      lens={cur.lensColor}
-                      isSun={false}
-                      hideTemples={true}
-                    />
-                  </svg>
-                )}
+                <div className="inline-flex items-center gap-1.5 rounded-full bg-white/95 backdrop-blur-md border border-[#E2E8F0] px-3 py-1 shadow-sm">
+                  <span dir="ltr" className="text-[0.72rem] font-extrabold text-[#0F172A]">
+                    {cur.name} · {cur.dimensions?.replace(/□/g, '-')} mm
+                  </span>
+                </div>
               </div>
 
-              <Corners />
+              {/* Interactive 3D Canvas Stage */}
+              <div className="relative z-[3] w-full h-full">
+                <Hero3DEyewearCanvas frame={cur} />
+              </div>
 
-              {/* Subtle Horizontal Optical Scan Sweep */}
-              <svg
-                viewBox="0 0 300 330"
-                className="pointer-events-none absolute inset-0 w-full h-full z-[5]"
+              {/* Soft Studio Contact Shadow Underneath */}
+              <div
                 aria-hidden="true"
-              >
-                <defs>
-                  <linearGradient id="heroBioLine" x1="0" y1="0" x2="1" y2="0">
-                    <stop offset="0" stopColor="#F59E0B" stopOpacity="0" />
-                    <stop offset="0.5" stopColor="#FBBF24" stopOpacity="0.92" />
-                    <stop offset="1" stopColor="#F59E0B" stopOpacity="0" />
-                  </linearGradient>
-                </defs>
-                <rect x="34" y="0" width="232" height="2" fill="url(#heroBioLine)" className="scanline" />
-              </svg>
+                className="pointer-events-none absolute bottom-7 left-1/2 -translate-x-1/2 w-[54%] h-4 rounded-full bg-slate-900/15 blur-md z-[2]"
+              />
 
-              {/* Top Status & Biometric PD Badges */}
-              <span
-                dir="ltr"
-                className="absolute top-3 start-3 z-[6] badge !bg-[#0284C7] !text-white !border-0 shadow-sm"
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-white dotp" /> AI LIVE
-              </span>
+              {/* Subtle 360° Interaction Hint */}
+              {!cur.imageUrl && (
+                <div className="pointer-events-none absolute bottom-2.5 left-1/2 -translate-x-1/2 z-[5] px-2.5 py-0.5 rounded-full bg-white/80 backdrop-blur-sm border border-slate-200/80 text-[0.65rem] font-bold text-slate-600 shadow-xs whitespace-nowrap">
+                  اسحب للتدوير 360° ↻
+                </div>
+              )}
+            </div>
 
-              <span className="absolute top-3 end-3 z-[6] badge !bg-[#059669] !text-white !border-0 shadow-sm">
-                <span>مقاس مثالي</span>{' '}
-                <span dir="ltr" className="inline-block font-mono">
-                  98% · {cur.dimensions?.replace(/□/g, '-')}
-                </span>
-              </span>
-
-              {/* Camera CTA Button */}
+            {/* Dedicated Full-Width Camera Try-On CTA Bar Below Stage */}
+            <div className="px-3 pt-3 bg-white border-t border-[#E2E8F0]">
               <button
                 type="button"
                 onClick={() => navigate(`/shop/${demoSlug}?tryon=1`)}
-                className="absolute bottom-3 start-3 z-[10] px-3.5 py-2 rounded-xl bg-[#0284C7] hover:bg-[#0369A1] text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xl cursor-pointer"
+                className="w-full py-3 px-4 rounded-2xl bg-[#0284C7] hover:bg-[#0369A1] text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 shadow-md transition cursor-pointer"
               >
-                <span>افتح الكاميرا وجرّبها على وجهك الآن 📸</span>
+                <span>افتح الكاميرا وجرّبها على وجهك الحقيقي الآن 📸</span>
               </button>
-
-              {/* Active Frame Preview Pill overlaid cleanly bottom-end */}
-              <div className="absolute bottom-3 end-3 z-[6] inline-flex items-center gap-2 rounded-xl bg-white/95 backdrop-blur-md border border-[#E2E8F0] px-2.5 py-1.5 shadow-md">
-                <MiniGlasses
-                  type={cur.type}
-                  frame={cur.frameColor}
-                  lens={cur.lensColor}
-                  w={52}
-                  imageUrl={cur.imageUrl}
-                />
-                <div className="text-start leading-tight">
-                  <div dir="ltr" className="text-[0.7rem] font-extrabold text-[#0F172A]">
-                    {cur.name}
-                  </div>
-                  <div dir="ltr" className="text-[0.62rem] font-mono text-[#0284C7]">
-                    {cur.dimensions?.replace(/□/g, '-')} mm
-                  </div>
-                </div>
-              </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 p-3 border-t border-[#E2E8F0] bg-white">
+            <div className="grid grid-cols-3 gap-2 p-3 bg-white">
               {previewFrames.slice(0, 6).map((f) => (
                 <button
                   key={f.id}
                   type="button"
                   onClick={() => setActiveFrameId(f.id)}
                   className={
-                    'rounded-2xl p-2 flex flex-col items-center gap-1 border transition cursor-pointer ' +
+                    'rounded-2xl p-2 flex flex-col items-center gap-1 transition cursor-pointer ' +
                     (cur.id === f.id
-                      ? 'border-[#0284C7] bg-sky-50 text-[#0F172A]'
-                      : 'border-[#E2E8F0] bg-[#F8F9FA] text-slate-700 hover:bg-slate-100')
+                      ? 'border-2 border-[#0284C7] bg-sky-50/90 text-[#0F172A] shadow-sm'
+                      : 'border border-[#E2E8F0] bg-[#F8F9FA] text-slate-700 hover:bg-slate-100')
                   }
                 >
                   <MiniGlasses

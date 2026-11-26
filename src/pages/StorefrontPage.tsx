@@ -99,6 +99,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   const queryParams = new URLSearchParams(queryString);
   const isMerchantPreview = queryParams.get('preview') === '1';
   const autoFocusReview = queryParams.get('review') === '1';
+  const autoTryOn = queryParams.get('tryon') === '1';
   const showPreviewBar =
     isMerchantPreview || Boolean(session && (session.role === 'merchant' || isAdminRole(session.role)));
 
@@ -124,7 +125,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   })();
 
   const [tab, setTab] = useState<'shop' | 'lens' | 'fav' | 'ord' | 'cart'>(() => {
-    if (initialFrameId || autoFocusReview) return 'shop';
+    if (initialFrameId || autoFocusReview || autoTryOn) return 'shop';
     const saved = initialStoredUi.tab;
     if (saved === 'lens' && !rxEnabled) return 'shop';
     if (saved === 'shop' || saved === 'lens' || saved === 'fav' || saved === 'ord' || saved === 'cart') {
@@ -143,7 +144,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   const [colorFilter, setColorFilter] = useState<'all' | FrameColorFamily>('all');
   const [face, setFace] = useState<FaceShape>('oval');
   const [selectedSize, setSelectedSize] = useState<FrameSize>('Medium');
-  const [camOn, setCamOn] = useState(false);
+  const [camOn, setCamOn] = useState<boolean>(autoTryOn);
   const [yaw, setYaw] = useState(0);
 
   // Smart 2-Frame Comparison State
@@ -172,6 +173,16 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   const [cardAngles, setCardAngles] = useState<Record<string, 'front' | 'angled45'>>({});
   const [storeVisibleCount, setStoreVisibleCount] = useState(STORE_PAGE_SIZE);
   const pollHandledRef = useRef<string>('');
+  const tryOnHandledRef = useRef<string>('');
+
+  useEffect(() => {
+    if (autoTryOn && tryOnHandledRef.current !== route) {
+      tryOnHandledRef.current = route;
+      setTab('shop');
+      setDetailId(null);
+      setCamOn(true);
+    }
+  }, [autoTryOn, route]);
 
   useEffect(() => {
     setStoreVisibleCount(STORE_PAGE_SIZE);

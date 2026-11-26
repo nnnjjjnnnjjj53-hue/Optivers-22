@@ -1222,11 +1222,14 @@ console.log('=== OptiVerse Automated Technical Verification ===');
     'MerchantPage exposes ?preview=1 return flow, radar copy, and 2-photo product cards'
   );
   assert.ok(
-    landingSrc.includes('landing_editorial_portrait') &&
+    landingSrc.includes('Hero3DEyewearCanvas') &&
+      landingSrc.includes('OrbitControls') &&
+      landingSrc.includes('افتح الكاميرا وجرّبها على وجهك الحقيقي الآن') &&
+      storefrontSrc.includes("queryParams.get('tryon') === '1'") &&
       landingSrc.includes('تفاصيل الباقات') &&
       cssSrc.includes('chevron-pulse-') &&
       cssSrc.includes('pricing-arrive-glow'),
-    'LandingPage & index.css include studio portrait alignment, triple-chevron scroll, and arrival glow'
+    'LandingPage & index.css include Hero 3D Eyewear Studio Showcase, ?tryon=1 camera deep-link, triple-chevron scroll, and arrival glow'
   );
 
   console.log('✓ Test 15 passed: Pattern/solid variance, cache isolation, Warby Parker storefront, 2-frame comparison, A/B polls & 1-screen merchant edit verified');

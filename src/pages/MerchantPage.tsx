@@ -15,6 +15,7 @@ import { ExamThumb, MiniGlasses } from '../components/GlassesGraphics';
 import { I } from '../components/Icons';
 import { MerchantLensMatrixManager } from '../components/MerchantLensMatrixManager';
 import { PWAInstallButton } from '../components/PWAInstallPrompt';
+import { VisualPhotographyGuideModal } from '../components/VisualPhotographyGuideModal';
 import { resolveAngled45Url, resolveStoreFrontUrl } from '../utils/bulkFrameProcessor';
 import { formatOpticalDimensions, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
 import {
@@ -1030,44 +1031,10 @@ export function MerchantPage() {
         </div>
       }
     >
-      {photoGuideModalOpen && (
-        <div className="fixed inset-0 z-[99] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm fade">
-          <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-lg w-full space-y-4 shadow-2xl border border-slate-200">
-            <div className="flex items-center justify-between">
-              <div className="font-extrabold text-base text-slate-900 flex items-center gap-2">
-                <span>📸 دليل التصوير المصور للإطارات</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPhotoGuideModalOpen(false)}
-                className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center font-extrabold cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-            <div className="space-y-3 text-xs sm:text-sm text-slate-700 leading-7">
-              <div className="rounded-xl bg-sky-50 border border-sky-200 p-3.5 space-y-2 text-[#0284C7]">
-                <div className="font-extrabold flex items-center gap-1.5">
-                  <I n="spark" s={16} /> قواعد التصوير الأساسية لذكاء الكتالوج والـ 3D:
-                </div>
-                <ul className="list-disc list-inside space-y-1.5 text-slate-800 text-xs">
-                  <li><b>زاوية التصوير:</b> لقطة أمامية مستقيمة تماماً على مستوى العين (Eye-level) بدون ميلان رأسي أو أفقي.</li>
-                  <li><b>الأذرع:</b> طي أذرع الإطار للخلف تماماً بحيث تكون مخفية خلف الشنبر ولا تظهر بارزة للخارج.</li>
-                  <li><b>نظارات بغيار شمس (Clip-On):</b> ارفع صورتين (الصورة الأولى بالإطار الطبي بدون الغيار، والصورة الثانية بالغيار الشمسي المغناطيسي).</li>
-                  <li><b>الإضاءة والخلفية:</b> إضاءة بيضاء ناعمة ومتساوية (بدون ظلال قاسية أو انعكاسات حادة) على خلفية بيضاء أو فاتحة سادة.</li>
-                </ul>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setPhotoGuideModalOpen(false)}
-              className="w-full py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs cursor-pointer transition"
-            >
-              فهمت، شكراً ✓
-            </button>
-          </div>
-        </div>
-      )}
+      <VisualPhotographyGuideModal
+        isOpen={photoGuideModalOpen}
+        onClose={() => setPhotoGuideModalOpen(false)}
+      />
       {sec === 'home' && (
         <>
           {/* 14-Day Free Trial Countdown / Expired Renewal Banner (ONLY on Home tab) */}
@@ -2401,6 +2368,32 @@ export function MerchantPage() {
             t="بيانات المحل والسمات واللوجو"
             sub="إعداد متجر العملاء وتخصيص اللوجو والسمة الفاخرة ورابط المتجر ورمز QR"
           />
+
+          <div className="rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 mb-4 bg-gradient-to-r from-sky-50/80 via-white to-amber-50/60 border border-sky-200/90 shadow-xs">
+            <div className="flex items-center gap-3">
+              <span className="w-10 h-10 rounded-2xl bg-white text-[#0284C7] border border-sky-200 flex items-center justify-center text-xl shadow-xs shrink-0">
+                📷
+              </span>
+              <div>
+                <h4 className="font-extrabold text-sm sm:text-base text-slate-900 flex items-center gap-2">
+                  <span>دليل التصوير المصور للإطارات</span>
+                  <span className="badge !bg-sky-100 !text-[#0284C7] !border-sky-300 text-[0.65rem] font-bold">
+                    3 كروت مصورة
+                  </span>
+                </h4>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  إرشادات اللقطة الأمامية 0° بدون أذرع ظاهرة، والزاوية الجانبية 35°، ونظارات الغيار الشمسي (Clip-On).
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-p btn-sm text-xs font-extrabold shrink-0 cursor-pointer"
+              onClick={() => setPhotoGuideModalOpen(true)}
+            >
+              فتح دليل التصوير المصور 📸
+            </button>
+          </div>
 
           <div className="grid lg:grid-cols-2 gap-4">
             <div className="glass rounded-2xl p-5 min-w-0">

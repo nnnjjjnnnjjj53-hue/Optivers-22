@@ -365,7 +365,7 @@ export function LandingPage() {
                   top: '43.5%',
                   left: '50%',
                   transform: 'translate(-50%, -50%) rotate(-1.2deg)',
-                  width: '34.5%',
+                  width: '38%',
                 }}
               >
                 {cur.imageUrl ? (
@@ -420,14 +420,14 @@ export function LandingPage() {
                 </span>
               </span>
 
-              {/* PD: 63mm Golden Biometric Badge */}
-              <div
-                dir="ltr"
-                className="absolute bottom-3 start-3 z-[6] inline-flex items-center gap-1.5 rounded-xl bg-[#0F172A]/85 backdrop-blur-md border border-[#FBBF24]/50 px-3 py-1.5 text-xs font-extrabold text-[#FDE68A] shadow-md tabular-nums"
+              {/* Camera CTA Button */}
+              <button
+                type="button"
+                onClick={() => navigate(`/shop/${demoSlug}?tryon=1`)}
+                className="absolute bottom-3 start-3 z-[10] px-3.5 py-2 rounded-xl bg-[#0284C7] hover:bg-[#0369A1] text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xl cursor-pointer"
               >
-                <span className="w-2 h-2 rounded-full bg-[#FBBF24] shrink-0" />
-                <span>PD: 63mm</span>
-              </div>
+                <span>افتح الكاميرا وجرّبها على وجهك الآن 📸</span>
+              </button>
 
               {/* Active Frame Preview Pill overlaid cleanly bottom-end */}
               <div className="absolute bottom-3 end-3 z-[6] inline-flex items-center gap-2 rounded-xl bg-white/95 backdrop-blur-md border border-[#E2E8F0] px-2.5 py-1.5 shadow-md">

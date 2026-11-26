@@ -499,36 +499,12 @@ export function ProductDetailsView({
             </div>
           </div>
 
-          {/* Frame Size Selector (Small / Medium / Large) */}
-          <div className="space-y-2 border-t border-slate-100 pt-3">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-bold text-slate-900">المقاس</span>
-              <span className="text-slate-500 font-semibold">{selectedSize}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              {(['Small', 'Medium', 'Large'] as FrameSize[]).map((sz) => {
-                const isSelected = selectedSize === sz;
-                const isAvailable = sizes.includes(sz);
-                return (
-                  <button
-                    key={sz}
-                    type="button"
-                    disabled={!isAvailable}
-                    onClick={() => setSelectedSize(sz)}
-                    className={
-                      'px-3 py-1.5 rounded-lg text-xs font-bold border transition cursor-pointer ' +
-                      (isSelected
-                        ? 'bg-[#0F172A] text-white border-[#0F172A]'
-                        : isAvailable
-                        ? 'bg-[#F8F9FA] text-slate-700 border-[#E2E8F0] hover:bg-slate-100'
-                        : 'bg-slate-50 text-slate-300 border-slate-100 cursor-not-allowed')
-                    }
-                  >
-                    {sz === 'Small' ? 'صغير (Small)' : sz === 'Medium' ? 'متوسط (Medium)' : 'كبير (Large)'}
-                  </button>
-                );
-              })}
-            </div>
+          {/* Physical Optical Spec Badge */}
+          <div className="rounded-xl bg-[#F8F9FA] border border-slate-200 p-3 flex items-center justify-between border-t border-slate-100 pt-3">
+            <span className="text-xs font-bold text-slate-700">مقاس هذا الإطار:</span>
+            <span className="font-mono font-extrabold text-[#0284C7] text-xs" dir="ltr">
+              {formatOpticalDimensions(opticalDims)} mm
+            </span>
           </div>
 
           {/* Suitable Face Shapes */}

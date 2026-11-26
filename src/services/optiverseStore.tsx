@@ -1189,7 +1189,10 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           mfaVerified: !verifiedTotp,
         };
         setSession(nextSess);
-        if (shouldRedirect && !window.location.pathname.startsWith('/admin')) {
+        const curPath = typeof window !== 'undefined' ? window.location.pathname : '';
+        const isIntentionalPreviewOrNav =
+          curPath.startsWith('/s/') || curPath.startsWith('/shop/') || curPath.startsWith('/merchant');
+        if (shouldRedirect && !isIntentionalPreviewOrNav && !curPath.startsWith('/admin')) {
           navigate('/admin');
         }
         return { role: 'super_admin' as const, needsMfa: Boolean(verifiedTotp) };

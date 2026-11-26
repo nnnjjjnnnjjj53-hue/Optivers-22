@@ -7,6 +7,22 @@ import { MerchantPage } from './pages/MerchantPage';
 import { StorefrontPage } from './pages/StorefrontPage';
 import { OptiVerseProvider, useOptiVerse } from './services/optiverseStore';
 
+function AdminFloatingReturnBar() {
+  const { session, route, navigate } = useOptiVerse();
+  const path = (route || '/').split('?')[0];
+  if (!session || (session.role !== 'super_admin' && session.role !== 'admin')) return null;
+  if (path.startsWith('/admin')) return null;
+
+  return (
+    <button
+      onClick={() => navigate('/admin')}
+      className="fixed top-4 start-4 z-[99] px-3.5 py-2 rounded-full bg-slate-900/90 hover:bg-slate-900 text-amber-300 border border-amber-400/40 text-xs font-extrabold shadow-2xl flex items-center gap-1.5 backdrop-blur-md cursor-pointer transition hover:scale-[1.03]"
+    >
+      <span>العودة للإدارة العليا ↩</span>
+    </button>
+  );
+}
+
 function RouterView() {
   const { route } = useOptiVerse();
   const path = (route || '/').split('?')[0];
@@ -46,6 +62,7 @@ function RouterView() {
 export default function App() {
   return (
     <OptiVerseProvider>
+      <AdminFloatingReturnBar />
       <RouterView />
       <Modals />
     </OptiVerseProvider>

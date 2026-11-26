@@ -475,7 +475,7 @@ export function AdminPage() {
                   </div>
                   <div className="text-xs text-slate-600 mt-0.5">{gov}</div>
                   {s.address && <div className="text-[0.68rem] text-slate-500 max-w-[180px] truncate">{s.address}</div>}
-                  {s.mapsUrl && (
+                  {Boolean(s.mapsUrl && /^https?:\/\//i.test(s.mapsUrl)) && (
                     <a
                       href={s.mapsUrl}
                       target="_blank"

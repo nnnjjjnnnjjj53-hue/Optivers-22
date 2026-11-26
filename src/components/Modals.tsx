@@ -351,9 +351,7 @@ function QuickEditProductModal({ p, onClose }: { p: Product; onClose: () => void
         ? p.subCategory || (p.cat === 'sun' ? 'sun' : 'optical')
         : ('optical' as const);
     const mappedMaterial =
-      categoryChoice === 'metal'
-        ? ('metal' as const)
-        : p.modelCalibration?.material === 'metal' && categoryChoice !== 'prescription'
+      categoryChoice === 'metal' || p.modelCalibration?.material === 'metal'
         ? ('metal' as const)
         : ('tr_plastic' as const);
 

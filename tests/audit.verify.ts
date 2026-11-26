@@ -357,7 +357,7 @@ console.log('=== OptiVerse Automated Technical Verification ===');
   const landingSrc = fs.readFileSync(path.join(root, 'src/pages/LandingPage.tsx'), 'utf8');
   assert.ok(landingSrc.includes('AI + 3D'), 'LandingPage showcases 1:1 mm AI + 3D eyewear scale');
   assert.ok(landingSrc.includes('/stores'), 'LandingPage links directly to certified optician directory');
-  assert.ok(!landingSrc.includes('14 يوماً'), 'LandingPage keeps 14-day trial notice off public landing');
+  assert.ok(landingSrc.includes('14 يوماً'), 'LandingPage highlights 14-day free trial');
   assert.ok(landingSrc.includes('id="how-it-works"'), 'LandingPage includes 5-step customer journey section');
 
   assert.ok(!storefrontSrc.includes('#FFFCF7') && !modalsSrc.includes('#FFFCF7'), 'All studio surfaces upgraded to #F8F9FA');

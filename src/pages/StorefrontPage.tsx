@@ -88,9 +88,9 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   );
   const directoryEnabled = Boolean(platformSettings.enableStoresDirectory);
 
-  const shop = shops.find((s) => s.slug === slug) || shops[0];
-  const theme = resolveStoreTheme(shop.themeKey, shop.color);
-  const isImageLogo = Boolean(shop.logo && (/^(https?:|data:image\/|blob:|\/)/i.test(shop.logo)));
+  const shop = shops.find((s) => s.slug === slug);
+  const theme = resolveStoreTheme(shop?.themeKey, shop?.color);
+  const isImageLogo = Boolean(shop?.logo && (/^(https?:|data:image\/|blob:|\/)/i.test(shop.logo)));
   const queryString = route.includes('?')
     ? route.split('?')[1]
     : typeof window !== 'undefined'
@@ -102,7 +102,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     isMerchantPreview || Boolean(session && (session.role === 'merchant' || isAdminRole(session.role)));
 
   const products = allProductsRaw
-    .filter((p) => p.shopId === shop.id && !p.isDeleted && (showPreviewBar || p.isPublished !== false))
+    .filter((p) => p.shopId === shop?.id && !p.isDeleted && (showPreviewBar || p.isPublished !== false))
     .map(D);
 
   const [tab, setTab] = useState<'shop' | 'lens' | 'fav' | 'ord' | 'cart'>('shop');
@@ -159,12 +159,13 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
         setDetailId(matched.id);
         setTab('shop');
       }
-    } else if (route.startsWith(`/s/${shop.slug}`) && !route.includes(`/s/${shop.slug}/f/`)) {
+    } else if (shop?.slug && route.startsWith(`/s/${shop.slug}`) && !route.includes(`/s/${shop.slug}/f/`)) {
       setDetailId(null);
     }
-  }, [initialFrameId, route, shop.slug, products.length]);
+  }, [initialFrameId, route, shop?.slug, products.length]);
 
   const openFrameDetail = (frameId: string) => {
+    if (!shop) return;
     setCurId(frameId);
     setDetailId(frameId);
     setTab('shop');
@@ -173,7 +174,9 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
 
   const closeFrameDetail = () => {
     setDetailId(null);
-    navigate(`/s/${shop.slug}${isMerchantPreview ? '?preview=1' : ''}`);
+    if (shop) {
+      navigate(`/s/${shop.slug}${isMerchantPreview ? '?preview=1' : ''}`);
+    }
   };
 
   // Support deep linking via ?f=FRAME_CODE, ?product=PRODUCT_ID, and ?poll=ID1,ID2 | ?poll=1
@@ -193,7 +196,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
         const target = products.find((p) => p.id === initialFrameId);
         if (target) {
           const link =
-            typeof window !== 'undefined' ? window.location.href : `https://optiverse.app/s/${shop.slug}/f/${target.id}?poll=1`;
+            typeof window !== 'undefined' ? window.location.href : `https://optiverse.app/s/${shop?.slug || ''}/f/${target.id}?poll=1`;
           setModal({ t: 'vote', p: target, link });
           return;
         }
@@ -206,7 +209,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
           const link =
             typeof window !== 'undefined'
               ? window.location.href
-              : `https://optiverse.app/s/${shop.slug}?poll=${pA.id},${pB.id}`;
+              : `https://optiverse.app/s/${shop?.slug || ''}?poll=${pA.id},${pB.id}`;
           setModal({ t: 'vote', p: pA, p2: pB, link });
           return;
         }
@@ -230,7 +233,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
         setCurId(target.id);
       }
     }
-  }, [route, shop.id, shop.slug, initialFrameId, products.length]);
+  }, [route, shop?.id, shop?.slug, initialFrameId, products.length]);
 
   useEffect(() => {
     if (cur) {
@@ -240,6 +243,27 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
       setSelectedSize(sizes.includes('Medium') ? 'Medium' : sizes[0]);
     }
   }, [cur?.id]);
+
+  if (!shop) {
+    return (
+      <div dir="rtl" className="min-h-screen bg-[#F8F9FA] flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 shadow-sm flex items-center justify-center text-3xl mb-4">
+          👓
+        </div>
+        <h1 className="text-xl sm:text-2xl font-extrabold text-[#0F172A] mb-2">المتجر غير موجود</h1>
+        <p className="text-sm text-slate-500 max-w-md mb-6 leading-relaxed">
+          عذراً، لم نتمكن من العثور على المتجر المطلوب. قد يكون الرابط غير صحيح أو تم تغيير عنوان المتجر.
+        </p>
+        <button
+          type="button"
+          onClick={() => navigate('/')}
+          className="btn btn-p px-6 py-2.5 text-sm font-bold shadow-sm cursor-pointer"
+        >
+          العودة للرئيسية
+        </button>
+      </div>
+    );
+  }
 
   if (isShopExpiredOrPaused(shop)) {
     const isExpired = shop.status === 'expired' || shop.status === 'trial';
@@ -525,7 +549,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
               </div>
               <div className="text-xs opacity-75 flex items-center gap-1.5 flex-wrap">
                 <span>متجر نظارات تفاعلي · {shop.governorate || shop.city}</span>
-                {shop.mapsUrl && (
+                {Boolean(shop.mapsUrl && /^https?:\/\//i.test(shop.mapsUrl)) && (
                   <a
                     href={shop.mapsUrl}
                     target="_blank"
@@ -1736,7 +1760,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                           frame={p.frame}
                           lens={p.lens}
                           w={120}
-                          imageUrl={p.processedImage || p.images?.[0]?.imageUrl}
+                          imageUrl={resolveStoreFrontUrl(p)}
                         />
                         <span className="absolute top-1.5 end-1.5">
                           <Heart p={p} />
@@ -1813,7 +1837,9 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                           : 'bg-sky-50 text-[#0284C7] border-sky-200')
                       }
                     >
-                      {q.status === 'new'
+                      {q.kind === 'order'
+                        ? 'طلب شراء مباشر — جاري المتابعة والتجهيز مع المحل عبر واتساب.'
+                        : q.status === 'new'
                         ? 'بانتظار مراجعة المحل للكشف وتأكيد الملاءمة.'
                         : q.status === 'confirmed'
                         ? 'المحل أكد الملاءمة ✅ — أكمل الاتفاق على واتساب.'

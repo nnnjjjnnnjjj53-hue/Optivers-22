@@ -84,6 +84,10 @@ export function isAdminRole(role?: string | null): boolean {
 
 export function getShopMaxProducts(shop: Shop, settings: PlatformSettings): number {
   if (shop.isDemoAdminStore) return 1000;
+  if (shop.status === 'trial') {
+    const trialCap = settings.trialMaxProducts ?? 20;
+    return trialCap + (shop.topupCredits || 0);
+  }
   const matchedPlan =
     settings.plans.find((p) => p.tierKey === shop.planTier || p.name === shop.plan) ||
     settings.plans[0];
@@ -105,6 +109,17 @@ export function getShopPlanCapabilities(shop: Shop, settings: PlatformSettings):
       turboUploadEnabled: true,
       cameraPdRulerEnabled: true,
       featuredBoostEnabled: true,
+    };
+  }
+  if (shop.status === 'trial') {
+    return {
+      ...matchedPlan,
+      name: 'الأساسية',
+      tierKey: 'basic',
+      price: 599,
+      maxProducts: settings.trialMaxProducts ?? 20,
+      monthlyAiCredits: settings.trialAiCredits ?? 25,
+      turboUploadEnabled: false,
     };
   }
   return matchedPlan;
@@ -343,7 +358,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
   const [authLoading, setAuthLoading] = useState<boolean>(isSupabaseConfigured);
 
   const [shops, setShops] = useState<Shop[]>(initial.shops);
-  const [activeShopSlug, setActiveShopSlug] = useState<string>('dahab-optics');
+  const [activeShopSlug, setActiveShopSlug] = useState<string>('optivibe');
   const [extraShops, setExtraShops] = useState<number>(initial.extraShops);
   const [products, setProducts] = useState<Product[]>(initial.products);
   const [reviews, setReviews] = useState<ProductReview[]>(initial.reviews || []);
@@ -364,7 +379,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
   const [payments, setPayments] = useState<PaymentRecord[]>(initial.payments);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(initial.auditLogs);
   const [favByShop, setFavByShop] = useState<Record<string, string[]>>(() =>
-    loadJsonMap<string[]>(FAV_STORAGE_KEY, { 'dahab-optics': ['p-1001'] })
+    loadJsonMap<string[]>(FAV_STORAGE_KEY, { optivibe: ['p-1001'] })
   );
   const [cartByShop, setCartByShop] = useState<Record<string, CartItem[]>>(() =>
     loadJsonMap<CartItem[]>(CART_STORAGE_KEY, {})
@@ -554,7 +569,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     (session?.shopId ? shops.find((s) => s.id === session.shopId) : undefined) ||
     shops[0];
 
-  const currentShopKey = activeShop?.slug || 'dahab-optics';
+  const currentShopKey = activeShop?.slug || 'optivibe';
   const fav = favByShop[currentShopKey] ?? (activeShop?.id === DEFAULT_SHOP_ID ? ['p-1001'] : []);
   const cart = cartByShop[currentShopKey] ?? [];
 
@@ -653,10 +668,269 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const mapDbShopRow = (r: any): Shop => ({
+    id: r.id,
+    ownerId: r.owner_id,
+    ownerName: r.owner_name || undefined,
+    ownerEmail: r.owner_email || undefined,
+    name: r.name,
+    city: r.city,
+    governorate: r.governorate || r.city || 'القاهرة',
+    address: r.address || '',
+    mapsUrl: r.maps_url || '',
+    onboardingCompleted: r.onboarding_completed !== false,
+    enableDeliveryService: Boolean(r.enable_delivery_service),
+    deliveryFee: typeof r.delivery_fee === 'number' ? r.delivery_fee : 60,
+    deliveryAreas: r.delivery_areas || '',
+    isFeatured: Boolean(r.is_featured),
+    recall6mEnabled: r.recall_6m_enabled !== false,
+    recall12mEnabled: r.recall_12m_enabled !== false,
+    aiCreditsLimit: typeof r.ai_credits_limit === 'number' ? r.ai_credits_limit : 110,
+    aiCreditsUsed: typeof r.ai_credits_used === 'number' ? r.ai_credits_used : 0,
+    topupCredits: typeof r.topup_credits === 'number' ? r.topup_credits : 0,
+    isDemoAdminStore: Boolean(r.is_demo_admin_store),
+    planTier: r.plan_tier || 'basic',
+    billingCycle: r.billing_cycle || 'monthly',
+    slug: r.slug,
+    plan: r.plan_name,
+    price: r.price,
+    status: r.status,
+    days: r.days_left,
+    trialEndsAt: r.trial_ends_at || undefined,
+    exp: r.expires_label,
+    logo: r.logo,
+    tagline: r.tagline || undefined,
+    color: r.color,
+    themeKey: r.theme_key || undefined,
+    aiLogoGenerations: typeof r.ai_logo_generations === 'number' ? r.ai_logo_generations : undefined,
+    wa: r.wa_phone,
+    merchantLensConfigs: Array.isArray(r.merchant_lens_configs) ? r.merchant_lens_configs : undefined,
+  });
+
+  const mapDbProductRows = (prods: any[], imgs: any[]): Product[] => {
+    const imgMap = new Map<string, ProductImage[]>();
+    imgs.forEach((im: any) => {
+      const list = imgMap.get(im.product_id) || [];
+      list.push({
+        id: im.id,
+        productId: im.product_id,
+        angleYaw: im.angle_yaw,
+        label: im.label,
+        imageUrl: im.image_url,
+        originalImageUrl: im.original_image_url || undefined,
+        lensMaskUrl: im.lens_mask_url || undefined,
+        kind: im.kind === 'gallery' ? 'gallery' : 'front_tryon',
+        sortOrder: im.sort_order,
+      });
+      imgMap.set(im.product_id, list);
+    });
+
+    return prods.map((r: any) => {
+      const pImgs = imgMap.get(r.id) || [];
+      const colorsList =
+        Array.isArray(r.frame_colors) && r.frame_colors.length
+          ? r.frame_colors
+          : Array.isArray(r.available_colors) && r.available_colors.length
+          ? r.available_colors
+          : [r.frame_color];
+      const resolvedModel3d = r.model_3d_url || r.glb_url || undefined;
+      const resolvedTryonMode =
+        r.tryon_mode === '3d' || r.tryon_mode === '2d'
+          ? r.tryon_mode
+          : resolvedModel3d
+          ? '3d'
+          : '2d';
+      const resolvedProcessed = r.processed_image || pImgs[0]?.imageUrl || undefined;
+      const resolvedAdditional: string[] = Array.isArray(r.additional_images)
+        ? r.additional_images
+        : pImgs.filter((im) => im.kind === 'gallery').map((im) => im.imageUrl);
+
+      return {
+        id: r.id,
+        shopId: r.shop_id,
+        code: r.code,
+        name: r.name,
+        description: r.description || '',
+        type: r.type,
+        cat: r.cat,
+        frameType: r.frame_type || undefined,
+        subCategory: r.sub_category || undefined,
+        price: r.price,
+        salePrice: typeof r.sale_price === 'number' ? r.sale_price : undefined,
+        disc: r.discount_pct || 0,
+        frame: r.frame_color,
+        lens: r.lens_color,
+        tryonMode: resolvedTryonMode,
+        processedImage: resolvedProcessed,
+        imagePath: r.image_path || undefined,
+        frontCatalogPath: r.front_catalog_path || undefined,
+        sideImagePath: r.side_image_path || undefined,
+        clipOnImagePath: r.clip_on_image_path || undefined,
+        clipOnFrontCatalogPath: r.clip_on_front_catalog_path || undefined,
+        clipOnSideImagePath: r.clip_on_side_image_path || undefined,
+        aspectRatio: typeof r.aspect_ratio === 'number' ? r.aspect_ratio : undefined,
+        lensWidthMm: typeof r.lens_width_mm === 'number' ? r.lens_width_mm : undefined,
+        bridgeWidthMm: typeof r.bridge_width_mm === 'number' ? r.bridge_width_mm : undefined,
+        templeLengthMm: typeof r.temple_length_mm === 'number' ? r.temple_length_mm : undefined,
+        totalFrameWidthMm: typeof r.total_frame_width_mm === 'number' ? r.total_frame_width_mm : undefined,
+        frameHexColor: r.frame_hex_color || undefined,
+        frameOpacity: typeof r.frame_opacity === 'number' ? r.frame_opacity : undefined,
+        additionalImages: resolvedAdditional,
+        model3dUrl: resolvedModel3d,
+        modelCalibration:
+          r.model_calibration && typeof r.model_calibration === 'object' ? r.model_calibration : {},
+        frameShapeTag: r.model_calibration?.frameShapeTag || undefined,
+        isPatterned: typeof r.model_calibration?.isPatterned === 'boolean' ? r.model_calibration.isPatterned : undefined,
+        colorFamily: r.model_calibration?.colorFamily || undefined,
+        modelCode: r.model_calibration?.modelCode || undefined,
+        createdAt: r.created_at || undefined,
+        frameColors: colorsList,
+        availableColors: colorsList,
+        availableSizes:
+          Array.isArray(r.available_sizes) && r.available_sizes.length
+            ? r.available_sizes
+            : ['Small', 'Medium', 'Large'],
+        shapes: r.shapes || ['oval', 'round'],
+        glbUrl: resolvedModel3d,
+        images: pImgs,
+        isPublished: r.is_published !== false,
+        isDeleted: r.is_deleted,
+      };
+    });
+  };
+
   // Hydrate & Subscribe from Supabase when configured
   const hydrateFromSupabase = useCallback(async () => {
     if (!supabase) return;
     try {
+      const curPath = typeof window !== 'undefined' ? window.location.pathname : '';
+      const slugMatch = curPath.match(/^\/s\/([^/?#]+)/);
+      const {
+        data: { session: sbSess },
+      } = await supabase.auth.getSession();
+      const hasPrivilegedSession = Boolean(
+        (session && (session.role === 'merchant' || session.role === 'admin' || session.role === 'super_admin')) ||
+        sbSess?.user
+      );
+
+      // Store Isolation: On a public storefront with no logged-in merchant/admin session,
+      // fetch ONLY the matching shop, its published non-deleted products, and its reviews.
+      // Do NOT fetch inquiries, payments, or crm_customers.
+      if (slugMatch && !hasPrivilegedSession) {
+        const storefrontSlug = decodeURIComponent(slugMatch[1]);
+        const { data: matchedShopRow } = await supabase
+          .from('shops')
+          .select('*')
+          .eq('slug', storefrontSlug)
+          .maybeSingle();
+
+        if (matchedShopRow) {
+          const targetShopId = matchedShopRow.id;
+          const [prodsRes, imgsRes, revRes, ltRes, brRes, exRes, settingsRes] = await Promise.all([
+            supabase
+              .from('products')
+              .select('*')
+              .eq('shop_id', targetShopId)
+              .eq('is_deleted', false)
+              .eq('is_published', true)
+              .order('created_at', { ascending: true }),
+            supabase
+              .from('product_images')
+              .select('*')
+              .eq('shop_id', targetShopId)
+              .order('sort_order', { ascending: true }),
+            supabase
+              .from('frame_reviews')
+              .select('*')
+              .eq('shop_id', targetShopId)
+              .order('created_at', { ascending: false }),
+            supabase.from('lens_types').select('*').order('sort_order', { ascending: true }),
+            supabase.from('brands').select('*').order('sort_order', { ascending: true }),
+            supabase.from('extras').select('*').order('sort_order', { ascending: true }),
+            supabase.from('platform_settings').select('*').eq('id', 'default').maybeSingle(),
+          ]);
+
+          setShops([mapDbShopRow(matchedShopRow)]);
+          if (prodsRes.data) {
+            setProducts(mapDbProductRows(prodsRes.data, imgsRes.data || []));
+          }
+          if (revRes.data?.length) {
+            setReviews(
+              revRes.data.map((rv: any) => ({
+                id: rv.id,
+                productId: rv.product_id,
+                shopId: rv.shop_id,
+                authorName: rv.author_name,
+                rating: Number(rv.rating || 5),
+                comment: rv.comment,
+                createdAt: rv.created_at,
+              }))
+            );
+          }
+          if (ltRes.data?.length) {
+            setLensTypes(
+              ltRes.data.map((r: any) => ({
+                id: r.id,
+                shopId: r.shop_id,
+                name: r.name_ar,
+                en: r.name_en,
+                desc: r.description,
+                icon: r.icon,
+                price: r.price,
+                disc: r.discount_pct || 0,
+                on: r.is_active ?? true,
+              }))
+            );
+          }
+          if (brRes.data?.length) {
+            setBrands(
+              brRes.data.map((r: any) => ({
+                id: r.id,
+                shopId: r.shop_id,
+                name: r.name_ar,
+                en: r.name_en,
+                origin: r.origin,
+                logo: r.logo,
+                warrantyYears: r.warranty_years,
+                price: r.price,
+                disc: r.discount_pct || 0,
+                on: r.is_active ?? true,
+              }))
+            );
+          }
+          if (exRes.data?.length) {
+            setExtras(
+              exRes.data.map((r: any) => ({
+                id: r.id,
+                shopId: r.shop_id,
+                name: r.name_ar,
+                desc: r.description,
+                price: r.price,
+                disc: r.discount_pct || 0,
+                icon: r.icon,
+                on: r.is_active ?? true,
+              }))
+            );
+          }
+          if (settingsRes.data) {
+            const sRow = settingsRes.data as any;
+            const lensesFlag = Boolean(sRow.enable_lenses_system ?? sRow.enable_prescription_lenses);
+            setPlatformSettings((prev) => ({
+              ...prev,
+              enablePrescriptionLenses: lensesFlag,
+              enableLensesSystem: lensesFlag,
+              allowMerchantLensBrandingToggle: Boolean(sRow.allow_merchant_lens_branding_toggle),
+              enableStoresDirectory: Boolean(sRow.enable_stores_directory),
+              officialLensBrands:
+                Array.isArray(sRow.official_lens_brands) && sRow.official_lens_brands.length
+                  ? sRow.official_lens_brands
+                  : prev.officialLensBrands,
+            }));
+          }
+          return;
+        }
+      }
+
       const [shopsRes, plansRes, prodsRes, imgsRes, ltRes, brRes, exRes, inqRes, payRes] = await Promise.all([
         supabase.from('shops').select('*').order('created_at', { ascending: false }),
         supabase.from('plans').select('*').order('sort_order', { ascending: true }),
@@ -670,46 +944,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       ]);
 
       if (shopsRes.data?.length) {
-        setShops(
-          shopsRes.data.map((r: any) => ({
-            id: r.id,
-            ownerId: r.owner_id,
-            ownerName: r.owner_name || undefined,
-            ownerEmail: r.owner_email || undefined,
-            name: r.name,
-            city: r.city,
-            governorate: r.governorate || r.city || 'القاهرة',
-            address: r.address || '',
-            mapsUrl: r.maps_url || '',
-            onboardingCompleted: r.onboarding_completed !== false,
-            enableDeliveryService: Boolean(r.enable_delivery_service),
-            deliveryFee: typeof r.delivery_fee === 'number' ? r.delivery_fee : 60,
-            deliveryAreas: r.delivery_areas || '',
-            isFeatured: Boolean(r.is_featured),
-            recall6mEnabled: r.recall_6m_enabled !== false,
-            recall12mEnabled: r.recall_12m_enabled !== false,
-            aiCreditsLimit: typeof r.ai_credits_limit === 'number' ? r.ai_credits_limit : 110,
-            aiCreditsUsed: typeof r.ai_credits_used === 'number' ? r.ai_credits_used : 0,
-            topupCredits: typeof r.topup_credits === 'number' ? r.topup_credits : 0,
-            isDemoAdminStore: Boolean(r.is_demo_admin_store),
-            planTier: r.plan_tier || 'basic',
-            billingCycle: r.billing_cycle || 'monthly',
-            slug: r.slug,
-            plan: r.plan_name,
-            price: r.price,
-            status: r.status,
-            days: r.days_left,
-            trialEndsAt: r.trial_ends_at || undefined,
-            exp: r.expires_label,
-            logo: r.logo,
-            tagline: r.tagline || undefined,
-            color: r.color,
-            themeKey: r.theme_key || undefined,
-            aiLogoGenerations: typeof r.ai_logo_generations === 'number' ? r.ai_logo_generations : undefined,
-            wa: r.wa_phone,
-            merchantLensConfigs: Array.isArray(r.merchant_lens_configs) ? r.merchant_lens_configs : undefined,
-          }))
-        );
+        setShops(shopsRes.data.map(mapDbShopRow));
       }
 
       const [settingsRes, crmRes] = await Promise.all([
@@ -780,97 +1015,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         );
       }
       if (prodsRes.data) {
-        const imgMap = new Map<string, ProductImage[]>();
-        (imgsRes.data || []).forEach((im: any) => {
-          const list = imgMap.get(im.product_id) || [];
-          list.push({
-            id: im.id,
-            productId: im.product_id,
-            angleYaw: im.angle_yaw,
-            label: im.label,
-            imageUrl: im.image_url,
-            originalImageUrl: im.original_image_url || undefined,
-            lensMaskUrl: im.lens_mask_url || undefined,
-            kind: im.kind === 'gallery' ? 'gallery' : 'front_tryon',
-            sortOrder: im.sort_order,
-          });
-          imgMap.set(im.product_id, list);
-        });
-        if (prodsRes.data.length) {
-          setProducts(
-            prodsRes.data.map((r: any) => {
-              const pImgs = imgMap.get(r.id) || [];
-              const colorsList =
-                Array.isArray(r.frame_colors) && r.frame_colors.length
-                  ? r.frame_colors
-                  : Array.isArray(r.available_colors) && r.available_colors.length
-                  ? r.available_colors
-                  : [r.frame_color];
-              const resolvedModel3d = r.model_3d_url || r.glb_url || undefined;
-              const resolvedTryonMode =
-                r.tryon_mode === '3d' || r.tryon_mode === '2d'
-                  ? r.tryon_mode
-                  : resolvedModel3d
-                  ? '3d'
-                  : '2d';
-              const resolvedProcessed = r.processed_image || pImgs[0]?.imageUrl || undefined;
-              const resolvedAdditional: string[] = Array.isArray(r.additional_images)
-                ? r.additional_images
-                : pImgs.filter((im) => im.kind === 'gallery').map((im) => im.imageUrl);
-
-              return {
-                id: r.id,
-                shopId: r.shop_id,
-                code: r.code,
-                name: r.name,
-                description: r.description || '',
-                type: r.type,
-                cat: r.cat,
-                frameType: r.frame_type || undefined,
-                subCategory: r.sub_category || undefined,
-                price: r.price,
-                disc: r.discount_pct || 0,
-                frame: r.frame_color,
-                lens: r.lens_color,
-                tryonMode: resolvedTryonMode,
-                processedImage: resolvedProcessed,
-                imagePath: r.image_path || undefined,
-                frontCatalogPath: r.front_catalog_path || undefined,
-                sideImagePath: r.side_image_path || undefined,
-                clipOnImagePath: r.clip_on_image_path || undefined,
-                clipOnFrontCatalogPath: r.clip_on_front_catalog_path || undefined,
-                clipOnSideImagePath: r.clip_on_side_image_path || undefined,
-                aspectRatio: typeof r.aspect_ratio === 'number' ? r.aspect_ratio : undefined,
-                lensWidthMm: typeof r.lens_width_mm === 'number' ? r.lens_width_mm : undefined,
-                bridgeWidthMm: typeof r.bridge_width_mm === 'number' ? r.bridge_width_mm : undefined,
-                templeLengthMm: typeof r.temple_length_mm === 'number' ? r.temple_length_mm : undefined,
-                totalFrameWidthMm: typeof r.total_frame_width_mm === 'number' ? r.total_frame_width_mm : undefined,
-                frameHexColor: r.frame_hex_color || undefined,
-                frameOpacity: typeof r.frame_opacity === 'number' ? r.frame_opacity : undefined,
-                additionalImages: resolvedAdditional,
-                model3dUrl: resolvedModel3d,
-                modelCalibration:
-                  r.model_calibration && typeof r.model_calibration === 'object' ? r.model_calibration : {},
-                frameShapeTag: r.model_calibration?.frameShapeTag || undefined,
-                isPatterned: typeof r.model_calibration?.isPatterned === 'boolean' ? r.model_calibration.isPatterned : undefined,
-                colorFamily: r.model_calibration?.colorFamily || undefined,
-                modelCode: r.model_calibration?.modelCode || undefined,
-                createdAt: r.created_at || undefined,
-                frameColors: colorsList,
-                availableColors: colorsList,
-                availableSizes:
-                  Array.isArray(r.available_sizes) && r.available_sizes.length
-                    ? r.available_sizes
-                    : ['Small', 'Medium', 'Large'],
-                shapes: r.shapes || ['oval', 'round'],
-                glbUrl: resolvedModel3d,
-                images: pImgs,
-                isPublished: r.is_published !== false,
-                isDeleted: r.is_deleted,
-              };
-            })
-          );
-        }
+        setProducts(mapDbProductRows(prodsRes.data, imgsRes.data || []));
       }
       const revRes = await supabase
         .from('frame_reviews')
@@ -1064,8 +1209,10 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
               city: 'القاهرة',
               slug: makeSlug(displayName),
               wa_phone: '01001234567',
-              plan_name: 'أساسية',
-              price: 600,
+              plan_name: 'الأساسية',
+              plan_tier: 'basic',
+              price: 599,
+              ai_credits_limit: 25,
               status: 'trial',
               days_left: 14,
               trial_ends_at: trialEnd,
@@ -1139,22 +1286,32 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    const channel = supabase
-      .channel('optiverse-realtime-all')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => hydrateFromSupabase())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'product_images' }, () => hydrateFromSupabase())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lens_types' }, () => hydrateFromSupabase())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => hydrateFromSupabase())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'extras' }, () => hydrateFromSupabase())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'inquiries' }, () => hydrateFromSupabase())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'shops' }, () => hydrateFromSupabase())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, () => hydrateFromSupabase())
-      .subscribe();
+    const curPath = typeof window !== 'undefined' ? window.location.pathname : '';
+    const isPublicStorefront = curPath.startsWith('/s/');
+
+    let channel: any = null;
+    supabase.auth.getSession().then(({ data: { session: sbSess } }) => {
+      if (!mounted) return;
+      const isAnonOnStorefront = isPublicStorefront && !sbSess?.user;
+      if (!isAnonOnStorefront) {
+        channel = supabase!
+          .channel('optiverse-realtime-all')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => hydrateFromSupabase())
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'product_images' }, () => hydrateFromSupabase())
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'lens_types' }, () => hydrateFromSupabase())
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => hydrateFromSupabase())
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'extras' }, () => hydrateFromSupabase())
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'inquiries' }, () => hydrateFromSupabase())
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'shops' }, () => hydrateFromSupabase())
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, () => hydrateFromSupabase())
+          .subscribe();
+      }
+    });
 
     return () => {
       mounted = false;
       authSub.subscription.unsubscribe();
-      supabase?.removeChannel(channel);
+      if (channel) supabase?.removeChannel(channel);
     };
   }, [hydrateFromSupabase, resolveSupabaseUser]);
 
@@ -1203,7 +1360,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         setActiveShopSlug(matchedShop.slug);
         setSession({
           userId: 'local-merchant',
-          email: cleanEmail || matchedShop.ownerEmail || 'dahab@optiverse.app',
+          email: cleanEmail || matchedShop.ownerEmail || 'optivibe@optiverse.app',
           role: 'merchant',
           shopId: matchedShop.id,
         });
@@ -1427,12 +1584,14 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           ownerEmail: email,
           city: city || 'القاهرة',
           slug: finalSlug,
-          plan: 'أساسية',
+          plan: 'الأساسية',
+          planTier: 'basic',
           days: 14,
           trialEndsAt,
           status: 'trial',
           exp: 'تجربة 14 يوماً',
-          price: 600,
+          price: 599,
+          aiCreditsLimit: 25,
           color: '#0284C7',
           wa: wa || '01001234567',
           logo: '👓',
@@ -1466,8 +1625,10 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           city: city || 'القاهرة',
           slug: finalSlug,
           wa_phone: wa || '01001234567',
-          plan_name: 'أساسية',
-          price: 600,
+          plan_name: 'الأساسية',
+          plan_tier: 'basic',
+          price: 599,
+          ai_credits_limit: 25,
           status: 'trial',
           days_left: 14,
           trial_ends_at: trialEndsAt,
@@ -1610,14 +1771,16 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
 
   const addTopUpCredits = useCallback(
     async (shopId: string, packFrames = platformSettings.topupPackFrames, packPrice = platformSettings.topupPackPrice) => {
-      const target = shops.find((s) => s.id === shopId);
-      if (!target) return;
-      const nextTopup = (target.topupCredits || 0) + packFrames;
-      await updateShop(shopId, { topupCredits: nextTopup });
-      await logAudit('شحن باقة إضافية', `إضافة ${packFrames} نظارة (${packPrice} ج.م) لمتجر ${target.name}`, shopId);
-      toast(`تمت إضافة ${packFrames} نظارة إضافية لرصيد متجرك بنجاح ✓`);
+      const target = shops.find((s) => s.id === shopId) || activeShop;
+      const text = encodeURIComponent(
+        `مرحباً إدارة OptiVerse، أرغب في شحن باقة إضافية (+${packFrames} نظارة بـ ${packPrice} ج.م) لمتجر "${target?.name || ''}" (${target?.slug || ''}).`
+      );
+      const waUrl = `https://wa.me/201000000000?text=${text}`;
+      if (typeof window !== 'undefined') {
+        window.location.href = waUrl;
+      }
     },
-    [logAudit, platformSettings.topupPackFrames, platformSettings.topupPackPrice, shops, toast, updateShop]
+    [activeShop, platformSettings.topupPackFrames, platformSettings.topupPackPrice, shops]
   );
 
   const savePlatformSettings = useCallback(
@@ -1885,6 +2048,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       await logAudit('إضافة نظارة', `تمت إضافة ${prod.name} (${prod.code})`, prod.shopId);
 
       if (supabase) {
+        const salePriceVal = typeof normalizedProd.salePrice === 'number' && !isNaN(normalizedProd.salePrice) && normalizedProd.salePrice > 0 ? normalizedProd.salePrice : null;
         const basePayload = {
           ...(tempId.includes('-') && tempId.length === 36 ? { id: tempId } : {}),
           shop_id: prod.shopId,
@@ -1893,6 +2057,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           type: prod.type,
           cat: prod.cat,
           price: prod.price,
+          sale_price: salePriceVal,
           discount_pct: prod.disc || 0,
           frame_color: prod.frame,
           lens_color: prod.lens,
@@ -1911,6 +2076,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           available_colors: normalizedProd.availableColors || [],
           available_sizes: normalizedProd.availableSizes || ['Small', 'Medium', 'Large'],
           is_published: normalizedProd.isPublished,
+          sale_price: salePriceVal,
         };
         const extV5Payload = {
           ...extPayload,
@@ -1930,6 +2096,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             normalizedProd.totalFrameWidthMm ?? normalizedProd.modelCalibration?.totalFrameWidthMm ?? null,
           frame_hex_color: normalizedProd.frameHexColor || null,
           frame_opacity: normalizedProd.frameOpacity ?? null,
+          sale_price: salePriceVal,
         };
 
         let insRes = await supabase.from('products').insert(extV5Payload).select('id').single();
@@ -2042,6 +2209,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             type: normalizedProd.type,
             cat: normalizedProd.cat,
             price: normalizedProd.price,
+            sale_price: normalizedProd.salePrice && normalizedProd.salePrice > 0 ? normalizedProd.salePrice : null,
             discount_pct: normalizedProd.disc || 0,
             frame_color: normalizedProd.frame,
             lens_color: normalizedProd.lens,
@@ -2154,6 +2322,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         if (patch.type !== undefined) baseUpdate.type = patch.type;
         if (patch.cat !== undefined) baseUpdate.cat = patch.cat;
         if (patch.price !== undefined) baseUpdate.price = patch.price;
+        if (patch.salePrice !== undefined) baseUpdate.sale_price = patch.salePrice && patch.salePrice > 0 ? patch.salePrice : null;
         if (patch.disc !== undefined) baseUpdate.discount_pct = patch.disc;
         if (patch.frame !== undefined) baseUpdate.frame_color = patch.frame;
         if (patch.lens !== undefined) baseUpdate.lens_color = patch.lens;
@@ -2171,6 +2340,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           ...(mergedColors !== undefined ? { frame_colors: mergedColors, available_colors: mergedColors } : {}),
           ...(patch.availableSizes !== undefined ? { available_sizes: patch.availableSizes } : {}),
           ...(patch.isPublished !== undefined ? { is_published: patch.isPublished } : {}),
+          ...(patch.salePrice !== undefined ? { sale_price: patch.salePrice && patch.salePrice > 0 ? patch.salePrice : null } : {}),
         };
 
         const extV5Update: Record<string, any> = {
@@ -2194,6 +2364,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           ...(patch.totalFrameWidthMm !== undefined ? { total_frame_width_mm: patch.totalFrameWidthMm } : {}),
           ...(patch.frameHexColor !== undefined ? { frame_hex_color: patch.frameHexColor } : {}),
           ...(patch.frameOpacity !== undefined ? { frame_opacity: patch.frameOpacity } : {}),
+          ...(patch.salePrice !== undefined ? { sale_price: patch.salePrice && patch.salePrice > 0 ? patch.salePrice : null } : {}),
         };
 
         if (Object.keys(extV5Update).length > 0) {

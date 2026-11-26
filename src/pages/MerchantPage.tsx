@@ -990,7 +990,7 @@ export function MerchantPage() {
               </div>
               <a
                 className="btn btn-p btn-sm shrink-0"
-                href={`https://wa.me/201000000000?text=${adminRenewMsg}`}
+                href={`https://wa.me/${import.meta.env.VITE_ADMIN_WA || '201000000000'}?text=${adminRenewMsg}`}
                 target="_blank"
                 rel="noreferrer"
               >
@@ -1016,7 +1016,7 @@ export function MerchantPage() {
               </div>
               <a
                 className="btn bg-[#D97706] hover:bg-[#B45309] text-white btn-sm shrink-0"
-                href={`https://wa.me/201000000000?text=${adminRenewMsg}`}
+                href={`https://wa.me/${import.meta.env.VITE_ADMIN_WA || '201000000000'}?text=${adminRenewMsg}`}
                 target="_blank"
                 rel="noreferrer"
               >
@@ -1836,6 +1836,29 @@ export function MerchantPage() {
                 </div>
               </div>
 
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-600">رابط صورة البانر (Hero Banner Image)</label>
+                  <input
+                    className="inp mt-1"
+                    dir="ltr"
+                    placeholder="https://images.unsplash.com/..."
+                    value={activeShop.bannerImageUrl || ''}
+                    onChange={(e) => updateShop(activeShop.id, { bannerImageUrl: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-600">رابط فيديو ترويجي (Hero Video MP4 / WebM)</label>
+                  <input
+                    className="inp mt-1"
+                    dir="ltr"
+                    placeholder="https://.../video.mp4"
+                    value={activeShop.videoUrl || ''}
+                    onChange={(e) => updateShop(activeShop.id, { videoUrl: e.target.value })}
+                  />
+                </div>
+              </div>
+
               {/* Logo Upload & AI Shop-Sign Logo Generator */}
               <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-3.5 space-y-3">
                 <div className="flex items-center justify-between gap-2">
@@ -2002,7 +2025,7 @@ export function MerchantPage() {
                 </button>
                 <a
                   className="btn btn-p btn-sm whitespace-nowrap shrink-0"
-                  href={`https://wa.me/201000000000?text=${adminRenewMsg}`}
+                  href={`https://wa.me/${import.meta.env.VITE_ADMIN_WA || '201000000000'}?text=${adminRenewMsg}`}
                   target="_blank"
                   rel="noreferrer"
                 >

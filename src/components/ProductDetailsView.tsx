@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CATS, TYPES } from '../data/seed';
+import { CATS, SHAPES, TYPES } from '../data/seed';
 import { useOptiVerse } from '../services/optiverseStore';
 import { FrameSize, Product } from '../types';
 import {
@@ -73,12 +73,14 @@ export function ProductDetailsView({
   const sizes: FrameSize[] =
     product.availableSizes && product.availableSizes.length > 0
       ? product.availableSizes
-      : ['Medium'];
+      : ['Small', 'Medium', 'Large'];
 
   const [selectedColor, setSelectedColor] = useState<string>(
     colors.includes(initialColor) ? initialColor : colors[0]
   );
-  const selectedSize: FrameSize = sizes.includes(initialSize) ? initialSize : sizes[0];
+  const [selectedSize, setSelectedSize] = useState<FrameSize>(
+    sizes.includes(initialSize) ? initialSize : sizes[0]
+  );
 
   const hasClipOnAssets =
     product.frameType === 'clip_on' &&
@@ -494,6 +496,56 @@ export function ProductDetailsView({
                   />
                 );
               })}
+            </div>
+          </div>
+
+          {/* Frame Size Selector (Small / Medium / Large) */}
+          <div className="space-y-2 border-t border-slate-100 pt-3">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-slate-900">المقاس</span>
+              <span className="text-slate-500 font-semibold">{selectedSize}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {(['Small', 'Medium', 'Large'] as FrameSize[]).map((sz) => {
+                const isSelected = selectedSize === sz;
+                const isAvailable = sizes.includes(sz);
+                return (
+                  <button
+                    key={sz}
+                    type="button"
+                    disabled={!isAvailable}
+                    onClick={() => setSelectedSize(sz)}
+                    className={
+                      'px-3 py-1.5 rounded-lg text-xs font-bold border transition cursor-pointer ' +
+                      (isSelected
+                        ? 'bg-[#0F172A] text-white border-[#0F172A]'
+                        : isAvailable
+                        ? 'bg-[#F8F9FA] text-slate-700 border-[#E2E8F0] hover:bg-slate-100'
+                        : 'bg-slate-50 text-slate-300 border-slate-100 cursor-not-allowed')
+                    }
+                  >
+                    {sz === 'Small' ? 'صغير (Small)' : sz === 'Medium' ? 'متوسط (Medium)' : 'كبير (Large)'}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Suitable Face Shapes */}
+          <div className="space-y-1.5 border-t border-slate-100 pt-3">
+            <div className="text-xs font-bold text-slate-900">أشكال الوجه المناسبة</div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {(product.shapes && product.shapes.length > 0
+                ? product.shapes
+                : (['oval', 'round', 'square'] as const)
+              ).map((shp) => (
+                <span
+                  key={shp}
+                  className="px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-[#0284C7] text-xs font-bold"
+                >
+                  {SHAPES[shp] || shp}
+                </span>
+              ))}
             </div>
           </div>
 

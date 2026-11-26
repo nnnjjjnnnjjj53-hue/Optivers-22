@@ -51,6 +51,8 @@ export const ICON_PATHS: Record<string, string> = {
   map: 'M12 21s-6-5.3-6-10a6 6 0 1 1 12 0c0 4.7-6 10-6 10z M12 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4',
   truck: 'M1 3h15v13H1z M16 8h4l3 3v5h-7z M5.5 21a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5 M18.5 21a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5',
   arrow: 'M19 12H5 M12 19l-7-7 7-7',
+  chevU: 'M18 15l-6-6-6 6',
+  chevD: 'M6 9l6 6 6-6',
 };
 
 export function I({ n, s = 18, c = '' }: { n: string; s?: number; c?: string }) {

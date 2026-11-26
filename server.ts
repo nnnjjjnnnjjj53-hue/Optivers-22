@@ -143,7 +143,7 @@ const ALLOWED_MIME_TYPES = new Set<string>([
 const MAX_BATCH_SIZE = 50;
 const MAX_AI_LOGO_GENERATIONS = 2;
 const RATE_WINDOW_MS = 60_000;
-const RATE_MAX_REQUESTS = 45;
+const RATE_MAX_REQUESTS = 120;
 
 const rateLimitStore = new Map<string, number[]>();
 const memorySharedCache = new Map<string, SharedCacheEntry>();
@@ -276,7 +276,12 @@ async function authenticateRequest(
       ? 'super_admin'
       : 'merchant';
 
-    let shopId = String(roleRow?.shop_id || demoShopHeader || '');
+    let shopId = '';
+    if (isSuperAdmin && demoShopHeader) {
+      shopId = demoShopHeader;
+    } else if (roleRow?.shop_id) {
+      shopId = String(roleRow.shop_id);
+    }
     if (!shopId) {
       const { data: shopByOwner } = await supabaseAdmin
         .from('shops')
@@ -360,6 +365,14 @@ async function authenticateRequest(
       remainingCredits,
       supabaseMode: true,
     };
+  }
+
+  // Production guard: when process.env.NODE_ENV === 'production' and SUPABASE_SERVICE_ROLE_KEY is missing,
+  // reject with HTTP 503 and never trust client headers (x-optiverse-admin-demo, x-optiverse-demo-role).
+  if (process.env.NODE_ENV === 'production') {
+    const err = new Error('الخدمة غير مهيأة للإنتاج — مفتاح SUPABASE_SERVICE_ROLE_KEY مفقود.');
+    (err as Error & { statusCode?: number }).statusCode = 503;
+    throw err;
   }
 
   // Local / Preview fallback when SUPABASE_SERVICE_ROLE_KEY is not provisioned yet:
@@ -830,7 +843,7 @@ export function createEyewearServerApp() {
             ok: true,
             role: 'super_admin',
             shopId: createdDemo?.id || ctx.shopId,
-            slug: createdDemo?.slug || 'dahab-optics',
+            slug: createdDemo?.slug || 'optivibe',
             isDemoAdminStore: true,
           });
           return;
@@ -1181,62 +1194,7 @@ export function createEyewearServerApp() {
 
       const ai = getGeminiClient();
 
-      // Standard non-turbo batches register metadata with Gemini Batch API when available,
-      // while completing item processing cleanly and tracking progress via /batch-status/:jobId.
-      if (!turbo) {
-        try {
-          const batchInlineRequests = items.map((item) => ({
-            contents: [
-              {
-                role: 'user',
-                parts: [
-                  {
-                    inlineData: {
-                      data: item.imageBase64.replace(/^data:[^;]+;base64,/, ''),
-                      mimeType: ALLOWED_MIME_TYPES.has(item.mimeType || '')
-                        ? item.mimeType!
-                        : 'image/jpeg',
-                    },
-                  },
-                  {
-                    text: buildEyewearSplitSheetPrompt({
-                      frameType: ALLOWED_FRAME_MODES.has(item.frameType as EyewearFrameMode)
-                        ? (item.frameType as EyewearFrameMode)
-                        : 'prescription',
-                      subCategory: item.subCategory === 'sun' ? 'sun' : 'optical',
-                      isClipOnAttachment: Boolean(item.isClipOnAttachment),
-                      keepLensBranding: Boolean(item.keepLensBranding),
-                      isCrystalFrame: Boolean(item.isCrystalFrame),
-                      lensWidthMm: item.lensWidthMm,
-                      bridgeWidthMm: item.bridgeWidthMm,
-                      templeLengthMm: item.templeLengthMm,
-                      totalFrameWidthMm: item.totalFrameWidthMm,
-                    }),
-                  },
-                ],
-              },
-            ],
-          }));
 
-          const batchOp = await (ai as unknown as {
-            batches?: {
-              create?: (args: unknown) => Promise<{ name?: string }>;
-            };
-          }).batches?.create?.({
-            model: 'gemini-3.1-flash-lite-image',
-            src: batchInlineRequests,
-            config: {
-              displayName: `optiverse-${jobId}`,
-            },
-          });
-
-          if (batchOp?.name) {
-            job.geminiBatchName = batchOp.name;
-          }
-        } catch {
-          // Graceful background queue fallback if inline batch creation is unavailable for the project
-        }
-      }
 
       const processQueueAsync = async () => {
         const concurrency = turbo ? 4 : 2;

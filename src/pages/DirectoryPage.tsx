@@ -227,7 +227,7 @@ export function DirectoryPage() {
                     </button>
 
                     <div className="grid grid-cols-2 gap-2">
-                      {s.mapsUrl ? (
+                      {Boolean(s.mapsUrl && /^https?:\/\//i.test(s.mapsUrl)) ? (
                         <a
                           href={s.mapsUrl}
                           target="_blank"

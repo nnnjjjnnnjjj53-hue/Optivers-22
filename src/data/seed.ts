@@ -213,7 +213,7 @@ export const DEFAULT_LANDING_PREVIEW_FRAMES = [
     type: 'aviator' as const,
     frameColor: '#C9A24B',
     lensColor: '#475569',
-    dimensions: '54□16-142',
+    dimensions: '54-16-142',
     widthPx: 146,
   },
   {
@@ -222,7 +222,7 @@ export const DEFAULT_LANDING_PREVIEW_FRAMES = [
     type: 'wayfarer' as const,
     frameColor: '#1a1a1a',
     lensColor: '#334155',
-    dimensions: '52□18-140',
+    dimensions: '52-18-140',
     widthPx: 142,
   },
   {
@@ -231,7 +231,7 @@ export const DEFAULT_LANDING_PREVIEW_FRAMES = [
     type: 'rimless' as const,
     frameColor: '#C0C7D1',
     lensColor: '#cfe8ff',
-    dimensions: '51□19-138',
+    dimensions: '51-19-138',
     widthPx: 138,
   },
 ];
@@ -276,9 +276,9 @@ export const PLATFORM_SETTINGS0: PlatformSettings = {
 export const SHOPS0: Shop[] = [
   {
     id: DEFAULT_SHOP_ID,
-    name: 'OptiVepe',
-    ownerName: 'أحمد الدهبي',
-    ownerEmail: 'dahab@optiverse.app',
+    name: 'أوبتيفايب للبصريات (OptiVibe)',
+    ownerName: 'أحمد فايب',
+    ownerEmail: 'optivibe@optiverse.app',
     city: 'القاهرة',
     governorate: 'القاهرة',
     address: '14 شارع عباس العقاد، مدينة نصر',
@@ -300,7 +300,7 @@ export const SHOPS0: Shop[] = [
     status: 'trial',
     trialEndsAt: addDaysIso(14),
     exp: 'تجربة 14 يوماً',
-    slug: 'dahab-optics',
+    slug: 'optivibe',
     price: 999,
     color: '#0284C7',
     wa: '01001234567',
@@ -858,7 +858,7 @@ export const INQ0: Inquiry[] = [
 ];
 
 export const PAYMENTS0: PaymentRecord[] = [
-  { id: 'INV-2041', shopName: 'دهب للبصريات', amount: 999, method: 'InstaPay', referenceNo: 'IPN-884210', status: 'ok', date: 'اليوم' },
+  { id: 'INV-2041', shopName: 'أوبتيفايب للبصريات', amount: 999, method: 'InstaPay', referenceNo: 'IPN-884210', status: 'ok', date: 'اليوم' },
   { id: 'INV-2040', shopName: 'مودرن أفياتور', amount: 1399, method: 'Vodafone Cash', referenceNo: 'VFC-991042', status: 'ok', date: 'أمس' },
   { id: 'INV-2039', shopName: 'رؤية ستور', amount: 599, method: 'InstaPay', referenceNo: 'IPN-773190', status: 'wait', date: 'منذ يومين' },
   { id: 'INV-2038', shopName: 'عدسات النيل', amount: 599, method: 'Vodafone Cash', referenceNo: 'VFC-660128', status: 'late', date: 'منذ 4 أيام' },

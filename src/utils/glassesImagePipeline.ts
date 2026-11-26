@@ -343,14 +343,6 @@ async function decodeAndDownscaleWithExif(source: Blob, maxSidePx = 1024): Promi
 let ortSessionPromise: Promise<{ session: ort.InferenceSession; backend: SegmentationBackend } | null> | null = null;
 
 function resolveWasmBaseUrl(): string {
-  try {
-    const loc = (globalThis as { location?: { origin?: string } }).location;
-    if (loc?.origin && loc.origin !== 'null' && !loc.origin.startsWith('file:')) {
-      return `${loc.origin}/ort/`;
-    }
-  } catch {
-    // ignore
-  }
   return ORT_WASM_CDN_FALLBACK;
 }
 

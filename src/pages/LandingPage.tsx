@@ -91,7 +91,7 @@ export function LandingPage() {
   }, []);
 
   const cur = previewFrames.find((f) => f.id === activeFrameId) || previewFrames[0];
-  const demoSlug = shops[0]?.slug || 'dahab-optics';
+  const demoSlug = shops[0]?.slug || 'optivibe';
   const directoryEnabled = Boolean(platformSettings.enableStoresDirectory);
   const isMerchantLoggedIn = Boolean(
     session && (session.role === 'merchant' || isAdminRole(session.role))
@@ -284,9 +284,9 @@ export function LandingPage() {
               <button
                 type="button"
                 className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white !py-3.5 !px-6 !text-sm sm:!text-base shadow-md"
-                onClick={() => navigate('/merchant?mode=login')}
+                onClick={() => navigate('/merchant?mode=signup')}
               >
-                <I n="store" s={18} /> تسجيل الدخول
+                <I n="spark" s={18} /> ابدأ تجربتك المجانية 14 يوماً
               </button>
             )}
             {directoryEnabled && (
@@ -360,12 +360,12 @@ export function LandingPage() {
 
               {/* Live Eyewear Frame Overlaid Directly Onto Her Eye Pupils & Nose Bridge */}
               <div
-                className="pointer-events-none absolute z-[4] flex items-center justify-center transition-all duration-200"
+                className="pointer-events-none absolute z-[6] flex items-center justify-center transition-all duration-200"
                 style={{
-                  top: '37.5%',
+                  top: '44%',
                   left: '50%',
                   transform: 'translate(-50%, -50%)',
-                  width: '38%',
+                  width: '43.5%',
                 }}
               >
                 {cur.imageUrl ? (
@@ -389,13 +389,13 @@ export function LandingPage() {
               <Corners />
 
               {/* 5 Calibrated Percentage-Positioned Biometric Landmark Dots (No Mesh Lines) */}
-              <div className="pointer-events-none absolute inset-0 z-[5]" aria-hidden="true">
+              <div className="pointer-events-none absolute inset-0 z-[4] opacity-60" aria-hidden="true">
                 {[
-                  { id: 'left-pupil', top: '37%', left: '42.5%' },
-                  { id: 'right-pupil', top: '37%', left: '57.5%' },
-                  { id: 'nose-bridge', top: '37.5%', left: '50%' },
-                  { id: 'nose-tip', top: '47.5%', left: '50%' },
-                  { id: 'chin', top: '61.5%', left: '50%' },
+                  { id: 'left-pupil', top: '42.5%', left: '42.8%' },
+                  { id: 'right-pupil', top: '42.5%', left: '57.2%' },
+                  { id: 'nose-bridge', top: '42%', left: '50%' },
+                  { id: 'nose-tip', top: '51%', left: '50%' },
+                  { id: 'chin', top: '65%', left: '50%' },
                 ].map((pt) => (
                   <span
                     key={pt.id}
@@ -590,7 +590,7 @@ export function LandingPage() {
                     (billing === 'annual' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-[#059669]')
                   }
                 >
-                  {discountMonths} شهور مجاناً
+                  {discountMonths === 2 ? 'شهران مجاناً' : `${discountMonths} شهور مجاناً`}
                 </span>
               )}
             </button>
@@ -733,7 +733,7 @@ export function LandingPage() {
               </div>
               <div className="px-2 sm:px-4 py-2.5 text-center bg-sky-50/70 hover:bg-sky-50 transition">
                 <div className="text-[0.68rem] sm:text-xs font-extrabold text-[#0F172A] truncate">
-                  الباقة المتقدمة
+                  الباقة الاحترافية
                 </div>
                 <div className="text-[0.68rem] sm:text-xs font-bold text-[#0284C7] mt-0.5 tabular-nums">
                   <span dir="ltr">{fmt(proPlan?.price ?? 999)}</span> ج.م / شهرياً

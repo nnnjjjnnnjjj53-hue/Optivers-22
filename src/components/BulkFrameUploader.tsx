@@ -32,6 +32,8 @@ import { Modal } from './UiShared';
 
 type CardProcessStatus = 'enhancing' | 'ready' | 'error';
 
+const MAX_BATCH_SIZE = 50;
+
 const BATCH_LIMITS_BY_MODE: Record<
   EyewearFrameMode,
   { min: number; max: number; label: string }

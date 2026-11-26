@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import ReactDOM from 'react-dom';
 import { CATS, FRAME_COLORS, SHAPES, TYPES } from '../data/seed';
 import { GlassesPhotoAngle, ProcessedGlassesPhoto, processMerchantGlassesPhoto } from '../ai';
 import { useOptiVerse } from '../services/optiverseStore';
@@ -788,14 +789,16 @@ export function GuidedCaptureWizard({
     </div>
   );
 
-  return (
+  const modalNode = (
     <div
-      className="fixed inset-0 z-[95] flex items-end sm:items-center justify-center p-0 sm:p-4"
-      style={{ background: 'rgba(3,8,16,.86)', backdropFilter: 'blur(8px)' }}
+      dir="rtl"
+      className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center p-0 sm:p-4"
+      style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(15, 23, 42, 0.78)', backdropFilter: 'blur(6px)' }}
       onClick={handleClose}
     >
       <div
-        className="pop glass-s w-full max-w-2xl rounded-t-3xl sm:rounded-3xl p-4 sm:p-6 max-h-[94dvh] overflow-y-auto"
+        className="pop bg-white text-[#0F172A] border border-slate-200 shadow-2xl w-full max-w-2xl rounded-t-3xl sm:rounded-3xl p-4 sm:p-6 max-h-[90vh] overflow-y-auto"
+        style={{ backgroundColor: '#FFFFFF' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-4 mb-4">
@@ -1525,4 +1528,9 @@ export function GuidedCaptureWizard({
       </div>
     </div>
   );
+
+  if (typeof document !== 'undefined') {
+    return ReactDOM.createPortal(modalNode, document.body);
+  }
+  return modalNode;
 }

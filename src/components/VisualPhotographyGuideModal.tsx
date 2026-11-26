@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import ReactDOM from 'react-dom';
 import { I } from './Icons';
 
 export interface VisualPhotographyGuideModalProps {
@@ -18,15 +19,19 @@ export function VisualPhotographyGuideModal({
 
   if (!isOpen) return null;
 
-  return (
+  const modalNode = (
     <div
       dir="rtl"
-      className="fixed inset-0 z-[99] flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-md fade overflow-y-auto"
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-md fade overflow-y-auto"
+      style={{ position: 'fixed', inset: 0, zIndex: 9999 }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-white rounded-3xl max-w-4xl w-full my-auto shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
+      <div
+        className="bg-white rounded-3xl max-w-4xl w-full my-auto shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]"
+        style={{ backgroundColor: '#FFFFFF' }}
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-5 sm:px-7 py-4 border-b border-slate-200 bg-[#F8F9FA] shrink-0">
           <div className="flex items-center gap-3">
@@ -756,7 +761,7 @@ export function VisualPhotographyGuideModal({
         {/* Modal Footer */}
         <div className="px-5 sm:px-7 py-3.5 border-t border-slate-200 bg-[#F8F9FA] flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div className="text-xs text-slate-500 font-medium">
-            تجد هذا الدليل متاحاً دائماً من الشريط العلوي وبجوار نموذج رفع النظارات.
+            تجد هذا الدليل متاحاً دائماً من قائمة المزيد وبجوار نموذج رفع النظارات.
           </div>
           <button
             type="button"
@@ -769,4 +774,9 @@ export function VisualPhotographyGuideModal({
       </div>
     </div>
   );
+
+  if (typeof document !== 'undefined') {
+    return ReactDOM.createPortal(modalNode, document.body);
+  }
+  return modalNode;
 }

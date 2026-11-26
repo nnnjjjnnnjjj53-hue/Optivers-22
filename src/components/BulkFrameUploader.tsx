@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import ReactDOM from 'react-dom';
 import { getShopMaxProducts, getShopPlanCapabilities, useOptiVerse } from '../services/optiverseStore';
 import {
   EyewearFrameMode,
@@ -448,9 +449,11 @@ async function sampleRoughHexFromFile(file: Blob): Promise<string> {
 export function BulkFrameUploader({
   onSaved,
   externalNewCollectionSignal = 0,
+  onNavigateToProds,
 }: {
   onSaved?: () => void;
   externalNewCollectionSignal?: number;
+  onNavigateToProds?: () => void;
 }) {
   const {
     session,
@@ -497,6 +500,7 @@ export function BulkFrameUploader({
 
   const [items, setItems] = useState<BulkFrameItem[]>([]);
   const [processing, setProcessing] = useState(false);
+  const [isQueueModalOpen, setIsQueueModalOpen] = useState(false);
   const [cancelled, setCancelled] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
@@ -512,6 +516,7 @@ export function BulkFrameUploader({
   const abortRef = useRef<AbortController | null>(null);
   const itemsRef = useRef<BulkFrameItem[]>([]);
   const pickerRef = useRef<HTMLInputElement | null>(null);
+  const queueAnchorRef = useRef<HTMLDivElement | null>(null);
   const pendingPickRef = useRef<{
     mode: EyewearFrameMode;
     sub: EyewearSubMode;
@@ -1202,6 +1207,7 @@ export function BulkFrameUploader({
 
     setItems((prev) => [...prev, ...newCards]);
     setProcessing(true);
+    setIsQueueModalOpen(true);
     setCancelled(false);
     setProgress({ done: 0, total: newCards.length });
     setVisibleLimit((lim) => Math.max(lim, PAGE_SIZE));
@@ -1952,7 +1958,7 @@ export function BulkFrameUploader({
 
       {/* Queue Progress Bar + Cancel Control */}
       {(processing || progress.total > 0) && (
-        <div className="rounded-xl bg-white border border-[#E2E8F0] p-3 space-y-2">
+        <div ref={queueAnchorRef} className="rounded-xl bg-white border border-[#E2E8F0] p-3 space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-[#0F172A]">
             <span className="flex items-center gap-2">
               {processing && (
@@ -2541,6 +2547,177 @@ export function BulkFrameUploader({
         frames={promoModalFrames || []}
         onToast={toast}
       />
+
+      {/* Portaled Live Image Processing Queue Modal (Auto-opens on upload; X minimizes to floating pill) */}
+      {isQueueModalOpen &&
+        (processing || progress.total > 0) &&
+        typeof document !== 'undefined' &&
+        ReactDOM.createPortal(
+          <div
+            dir="rtl"
+            className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-5 bg-slate-950/75 backdrop-blur-sm fade overflow-y-auto"
+            style={{ position: 'fixed', inset: 0, zIndex: 9999 }}
+            onClick={() => setIsQueueModalOpen(false)}
+          >
+            <div
+              className="pop bg-white rounded-3xl max-w-2xl w-full my-auto shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[88vh] text-[#0F172A]"
+              style={{ backgroundColor: '#FFFFFF' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal Header with clear X minimize button */}
+              <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-200 bg-[#F8F9FA] shrink-0">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {processing ? (
+                    <span className="w-5 h-5 rounded-full border-[2.5px] border-[#0284C7] border-t-transparent animate-spin shrink-0" />
+                  ) : (
+                    <span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs font-extrabold shrink-0">
+                      ✓
+                    </span>
+                  )}
+                  <div className="min-w-0">
+                    <h3 className="font-extrabold text-sm sm:text-base text-slate-900 truncate">
+                      {processing
+                        ? `جاري التحسين — تم تجهيز ${progress.done} من ${progress.total} نظارة`
+                        : cancelled
+                        ? `تم إيقاف المعالجة — تم تجهيز ${progress.done} من ${progress.total} نظارة`
+                        : `اكتمل تجهيز ${progress.done} من ${progress.total} نظارة ✓`}
+                    </h3>
+                    <p className="text-[0.72rem] text-slate-500 truncate">
+                      {processing
+                        ? 'يمكنك إغلاق هذه النافذة (✕) ومتابعة تصفح لوحة التاجر بينما يستمر التجهيز في الخلفية'
+                        : 'النظارات جاهزة الآن للمراجعة والاعتماد في جدول المنتجات'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsQueueModalOpen(false)}
+                  aria-label="تصغير نافذة المعالجة"
+                  className="w-9 h-9 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-extrabold flex items-center justify-center cursor-pointer shrink-0 shadow-xs"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Progress Bar */}
+              <div className="px-5 pt-4 pb-3 border-b border-slate-100 space-y-2 shrink-0 bg-white">
+                <div className="flex items-center justify-between text-xs font-extrabold">
+                  <span className="text-slate-700">
+                    {processing ? 'تقدم طابور المعالجة:' : 'حالة الدفعة:'}
+                  </span>
+                  <span className="text-[#0284C7] tabular-nums" dir="ltr">
+                    {progress.done} / {progress.total} ({pct}%)
+                  </span>
+                </div>
+                <div className="h-3 rounded-full bg-slate-200 overflow-hidden">
+                  <div
+                    className="h-full bg-[#0284C7] rounded-full transition-all duration-200"
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Active Frame Queue Cards */}
+              <div className="p-4 sm:p-5 overflow-y-auto flex-1 space-y-2.5 bg-white">
+                {items.slice(-Math.max(progress.total, 6)).map((it) => {
+                  const isEnh = it.status === 'enhancing';
+                  const isErr = it.status === 'error';
+                  const previewSrc = it.frontCatalogPath || it.imagePath || it.originalThumbUrl;
+                  return (
+                    <div
+                      key={it.localId}
+                      className="flex items-center gap-3 p-2.5 rounded-2xl border border-slate-200 bg-[#F8F9FA]"
+                    >
+                      <div className="w-16 h-12 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
+                        {previewSrc ? (
+                          <img src={previewSrc} alt={it.name} className="w-full h-full object-contain p-1" />
+                        ) : (
+                          <I n="eye" s={16} c="text-slate-400" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-extrabold text-xs text-slate-900 truncate">{it.name}</div>
+                        <div className="text-[0.68rem] text-slate-500 mt-0.5 truncate">
+                          {it.stageLabel} · <span className="font-mono" dir="ltr">{it.code}</span>
+                        </div>
+                      </div>
+                      <span
+                        className={
+                          'px-2.5 py-1 rounded-full text-[0.66rem] font-extrabold shrink-0 ' +
+                          (isEnh
+                            ? 'bg-sky-50 text-[#0284C7] border border-sky-200'
+                            : isErr
+                            ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                            : 'bg-emerald-50 text-emerald-700 border border-emerald-200')
+                        }
+                      >
+                        {isEnh ? 'جاري التحسين...' : isErr ? 'تعذر' : 'جاهزة ✓'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Footer Controls */}
+              <div className="px-5 py-3.5 border-t border-slate-200 bg-[#F8F9FA] flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <div className="flex items-center gap-2">
+                  {processing && (
+                    <button
+                      type="button"
+                      onClick={handleCancelQueue}
+                      className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-extrabold cursor-pointer transition"
+                    >
+                      إيقاف مؤقت / إلغاء
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsQueueModalOpen(false);
+                    if (!processing) {
+                      onNavigateToProds?.();
+                      setTimeout(() => {
+                        queueAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }, 80);
+                    }
+                  }}
+                  className="btn btn-p px-5 py-2 text-xs font-extrabold cursor-pointer"
+                >
+                  {processing ? 'تصغير ومتابعة التصفح ↓' : 'عرض النظارات للمراجعة والاعتماد ✓'}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* Floating Minimize Pill while processing is minimized (auto-hides when done) */}
+      {processing &&
+        !isQueueModalOpen &&
+        progress.total > 0 &&
+        typeof document !== 'undefined' &&
+        ReactDOM.createPortal(
+          <button
+            type="button"
+            dir="rtl"
+            onClick={() => {
+              onNavigateToProds?.();
+              setIsQueueModalOpen(true);
+              setTimeout(() => {
+                queueAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }, 80);
+            }}
+            style={{ position: 'fixed', bottom: 84, right: 16, zIndex: 9990 }}
+            className="px-4 py-2.5 rounded-full bg-[#0F172A] hover:bg-slate-800 text-white border border-sky-400/50 shadow-2xl flex items-center gap-2 text-xs font-extrabold cursor-pointer transition active:scale-95"
+          >
+            <span className="w-3.5 h-3.5 rounded-full border-2 border-amber-300 border-t-transparent animate-spin shrink-0" />
+            <span>
+              المعالجة في الأسفل (<span dir="ltr">{progress.done}/{progress.total}</span>) ↓
+            </span>
+          </button>,
+          document.body
+        )}
     </div>
   );
 }

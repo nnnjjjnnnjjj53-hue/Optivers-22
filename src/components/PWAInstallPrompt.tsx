@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import ReactDOM from 'react-dom';
 import { I } from './Icons';
 
 interface BeforeInstallPromptEvent extends Event {
@@ -86,6 +87,62 @@ export function PWAInstallButton({
     setShowGuideModal(true);
   };
 
+  const guideModal = showGuideModal ? (
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-sm fade overflow-y-auto"
+      style={{ position: 'fixed', inset: 0, zIndex: 9999 }}
+      onClick={() => setShowGuideModal(false)}
+    >
+      <div
+        dir="rtl"
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-slate-200 text-slate-900 my-auto"
+        style={{ backgroundColor: '#FFFFFF' }}
+      >
+        <div className="flex items-center justify-between">
+          <div className="font-extrabold text-base flex items-center gap-2">
+            <span>📲 تثبيت لوحة التاجر كتطبيق</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowGuideModal(false)}
+            className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold flex items-center justify-center cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+
+        {isIOS ? (
+          <div className="rounded-2xl bg-sky-50 border border-sky-200 p-4 text-xs sm:text-sm text-slate-700 space-y-2 leading-6">
+            <p className="font-bold text-[#0284C7]">خطوات التثبيت على iPhone / iPad:</p>
+            <ol className="list-decimal list-inside space-y-1.5">
+              <li>افتح الصفحة في متصفح <b>Safari</b>.</li>
+              <li>اضغط على أيقونة المشاركة <b>(Share ⎙)</b> أسفل الشاشة.</li>
+              <li>اختر <b>«إضافة إلى الشاشة الرئيسية» (Add to Home Screen)</b> ثم اضغط إضافة.</li>
+            </ol>
+          </div>
+        ) : (
+          <div className="rounded-2xl bg-sky-50 border border-sky-200 p-4 text-xs sm:text-sm text-slate-700 space-y-2 leading-6">
+            <p className="font-bold text-[#0284C7]">خطوات التثبيت على الموبايل أو الكمبيوتر:</p>
+            <ol className="list-decimal list-inside space-y-1.5">
+              <li>افتح قائمة المتصفح (النقاط الثلاث ⋮) أو أيقونة التثبيت في شريط العنوان.</li>
+              <li>اختر <b>«تثبيت التطبيق» (Install App / Add to Home Screen)</b>.</li>
+              <li>سيعمل تطبيق التاجر في نافذة مستقلة بوصول فوري وسريع للمخزون والطلبات.</li>
+            </ol>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setShowGuideModal(false)}
+          className="w-full py-2.5 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-white font-extrabold text-xs cursor-pointer"
+        >
+          حسناً ✓
+        </button>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <>
       <button
@@ -100,59 +157,7 @@ export function PWAInstallButton({
         <span>{label}</span>
       </button>
 
-      {showGuideModal && (
-        <div
-          className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-sm fade"
-          onClick={() => setShowGuideModal(false)}
-        >
-          <div
-            dir="rtl"
-            onClick={(e) => e.stopPropagation()}
-            className="bg-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-slate-200 text-slate-900"
-          >
-            <div className="flex items-center justify-between">
-              <div className="font-extrabold text-base flex items-center gap-2">
-                <span>📲 تثبيت لوحة التاجر كتطبيق</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowGuideModal(false)}
-                className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold flex items-center justify-center cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            {isIOS ? (
-              <div className="rounded-2xl bg-sky-50 border border-sky-200 p-4 text-xs sm:text-sm text-slate-700 space-y-2 leading-6">
-                <p className="font-bold text-[#0284C7]">خطوات التثبيت على iPhone / iPad:</p>
-                <ol className="list-decimal list-inside space-y-1.5">
-                  <li>افتح الصفحة في متصفح <b>Safari</b>.</li>
-                  <li>اضغط على أيقونة المشاركة <b>(Share ⎙)</b> أسفل الشاشة.</li>
-                  <li>اختر <b>«إضافة إلى الشاشة الرئيسية» (Add to Home Screen)</b> ثم اضغط إضافة.</li>
-                </ol>
-              </div>
-            ) : (
-              <div className="rounded-2xl bg-sky-50 border border-sky-200 p-4 text-xs sm:text-sm text-slate-700 space-y-2 leading-6">
-                <p className="font-bold text-[#0284C7]">خطوات التثبيت على الموبايل أو الكمبيوتر:</p>
-                <ol className="list-decimal list-inside space-y-1.5">
-                  <li>افتح قائمة المتصفح (النقاط الثلاث ⋮) أو أيقونة التثبيت في شريط العنوان.</li>
-                  <li>اختر <b>«تثبيت التطبيق» (Install App / Add to Home Screen)</b>.</li>
-                  <li>سيعمل تطبيق التاجر في نافذة مستقلة بوصول فوري وسريع للمخزون والطلبات.</li>
-                </ol>
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setShowGuideModal(false)}
-              className="w-full py-2.5 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-white font-extrabold text-xs cursor-pointer"
-            >
-              حسناً ✓
-            </button>
-          </div>
-        </div>
-      )}
+      {guideModal && (typeof document !== 'undefined' ? ReactDOM.createPortal(guideModal, document.body) : guideModal)}
     </>
   );
 }

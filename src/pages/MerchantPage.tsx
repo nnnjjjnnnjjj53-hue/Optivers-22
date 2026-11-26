@@ -1011,16 +1011,24 @@ export function MerchantPage() {
       mobileMode="dock"
       primaryDockIds={['home', 'prods', 'crm']}
       onSignOut={signOut}
+      drawerExtra={(closeDrawer) => (
+        <div className="pt-2 border-t border-slate-100 mt-2 space-y-1">
+          <button
+            type="button"
+            onClick={() => {
+              closeDrawer();
+              setPhotoGuideModalOpen(true);
+            }}
+            className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-bold text-[#0284C7] bg-sky-50/80 hover:bg-sky-100 border border-sky-200 transition text-start cursor-pointer shadow-xs"
+          >
+            <I n="camera" s={18} />
+            <span className="truncate">دليل التصوير المصور 📷</span>
+          </button>
+        </div>
+      )}
       headerAction={
         <div className="flex items-center gap-2 flex-wrap">
           <PWAInstallButton />
-          <button
-            type="button"
-            className="btn btn-g btn-sm whitespace-nowrap shrink-0 font-extrabold text-[#0284C7] bg-sky-50 border-sky-200 hover:bg-sky-100"
-            onClick={() => setPhotoGuideModalOpen(true)}
-          >
-            دليل التصوير المصور 📸
-          </button>
           <button
             type="button"
             className="btn btn-tryon btn-sm whitespace-nowrap shrink-0"
@@ -1269,37 +1277,46 @@ export function MerchantPage() {
       )}
 
       {sec === 'prods' && (
-        <>
-          <Head
-            t="منتجاتي"
-            sub={
-              <>
-                <span dir="ltr" className="inline-block font-bold text-[#0F172A]">
-                  {shopProducts.length} / {maxProducts}
-                </span>{' '}
-                نظارة متاحة في الكتالوج
-              </>
-            }
+        <Head
+          t="منتجاتي"
+          sub={
+            <>
+              <span dir="ltr" className="inline-block font-bold text-[#0F172A]">
+                {shopProducts.length} / {maxProducts}
+              </span>{' '}
+              نظارة متاحة في الكتالوج
+            </>
+          }
+        >
+          <button
+            type="button"
+            onClick={() => setSec('inventory')}
+            className="btn btn-g btn-sm whitespace-nowrap shrink-0 font-bold"
           >
-            <button
-              type="button"
-              onClick={() => setSec('inventory')}
-              className="btn btn-g btn-sm whitespace-nowrap shrink-0 font-bold"
-            >
-              إدارة المخزن الذكي 📦
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setNewCollectionSignal((s) => s + 1);
-                toast('تم تفعيل وضع الكوليكشن الجديد — اختر فئة النظارات لرفع المجموعة ✨');
-              }}
-              className="btn btn-sm !bg-[#D97706] hover:!bg-[#B45309] !text-white font-extrabold whitespace-nowrap shrink-0 shadow-sm"
-            >
-              إضافة كوليكشن جديد ✨
-            </button>
-          </Head>
-          <BulkFrameUploader externalNewCollectionSignal={newCollectionSignal} />
+            إدارة المخزن الذكي 📦
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setNewCollectionSignal((s) => s + 1);
+              toast('تم تفعيل وضع الكوليكشن الجديد — اختر فئة النظارات لرفع المجموعة ✨');
+            }}
+            className="btn btn-sm !bg-[#D97706] hover:!bg-[#B45309] !text-white font-extrabold whitespace-nowrap shrink-0 shadow-sm"
+          >
+            إضافة كوليكشن جديد ✨
+          </button>
+        </Head>
+      )}
+
+      <div className={sec === 'prods' ? 'block' : 'hidden'}>
+        <BulkFrameUploader
+          externalNewCollectionSignal={newCollectionSignal}
+          onNavigateToProds={() => setSec('prods')}
+        />
+      </div>
+
+      {sec === 'prods' && (
+        <>
           <div className="glass rounded-2xl p-4 mb-4 flex flex-wrap items-center gap-3">
             <div className="flex-1 min-w-[200px]">
               <div className="font-bold text-sm">حذف نظارة بالكود (بعد البيع)</div>

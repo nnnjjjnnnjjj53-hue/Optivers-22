@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import ReactDOM from 'react-dom';
 import { InquiryStatus, OrderStage, ShopStatus } from '../types';
 import { I } from './Icons';
 
@@ -138,26 +139,48 @@ export function Modal({
   children: React.ReactNode;
   w?: string;
 }) {
-  return (
+  const content = (
     <div
-      className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4"
-      style={{ background: 'rgba(15, 23, 42, 0.55)', backdropFilter: 'blur(4px)' }}
+      dir="rtl"
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 9999,
+        background: 'rgba(15, 23, 42, 0.72)',
+        backdropFilter: 'blur(6px)',
+      }}
       onClick={onClose}
     >
       <div
-        className={'pop glass-s w-full ' + w + ' rounded-t-3xl sm:rounded-3xl p-5 max-h-[92vh] overflow-y-auto text-[#0F172A]'}
+        className={
+          'pop w-full ' +
+          w +
+          ' rounded-3xl p-5 sm:p-6 bg-white shadow-2xl border border-slate-200 text-[#0F172A] my-auto max-h-[90vh] flex flex-col'
+        }
+        style={{ backgroundColor: '#FFFFFF' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between mb-4 gap-3">
+        <div className="flex items-center justify-between mb-4 gap-3 border-b border-slate-100 pb-3 shrink-0">
           <h3 className="font-extrabold text-lg text-[#0F172A] truncate">{title}</h3>
-          <button className="btn btn-g btn-sm !p-2 shrink-0" onClick={onClose} aria-label="إغلاق">
-            <I n="x" s={16} />
+          <button
+            type="button"
+            className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-sm transition cursor-pointer shrink-0"
+            onClick={onClose}
+            aria-label="إغلاق"
+          >
+            ✕
           </button>
         </div>
-        {children}
+        <div className="overflow-y-auto flex-1">{children}</div>
       </div>
     </div>
   );
+
+  if (typeof document !== 'undefined') {
+    return ReactDOM.createPortal(content, document.body);
+  }
+  return content;
 }
 
 export function Switch({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
@@ -338,6 +361,7 @@ export function Shell({
   onSignOut,
   mobileMode = 'drawer',
   primaryDockIds,
+  drawerExtra,
 }: {
   items: ShellNavItem[];
   active: string;
@@ -350,11 +374,14 @@ export function Shell({
   onSignOut?: () => void;
   mobileMode?: 'drawer' | 'dock';
   primaryDockIds?: string[];
+  drawerExtra?: React.ReactNode | ((closeDrawer: () => void) => React.ReactNode);
 }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [dockVisible, setDockVisible] = useState(true);
   const lastScrollYRef = useRef(0);
   const totalBadges = items.reduce((sum, it) => sum + (it[3] || 0), 0);
+  const renderedDrawerExtra =
+    typeof drawerExtra === 'function' ? drawerExtra(() => setDrawerOpen(false)) : drawerExtra;
 
   useEffect(() => {
     if (mobileMode !== 'dock' || typeof window === 'undefined') return;
@@ -435,6 +462,7 @@ export function Shell({
               </button>
             );
           })}
+          {renderedDrawerExtra && <div className="pt-2">{renderedDrawerExtra}</div>}
         </nav>
 
         {(headerAction || onSignOut) && (
@@ -466,8 +494,7 @@ export function Shell({
 
       {/* Main Content Area (safe bottom clearance for dock or floating menu) */}
       <main
-        className={'flex-1 p-4 lg:p-7 min-w-0 fade ' + (mobileMode === 'dock' ? 'pb-24 lg:pb-8' : 'pb-28 lg:pb-8')}
-        key={active}
+        className={'flex-1 p-4 lg:p-7 min-w-0 ' + (mobileMode === 'dock' ? 'pb-24 lg:pb-8' : 'pb-28 lg:pb-8')}
       >
         {children}
       </main>
@@ -531,75 +558,95 @@ export function Shell({
             </button>
           </nav>
 
-          {/* Clean Slide-Up Bottom Sheet Drawer for Secondary Sections */}
-          <div
-            className={
-              'lg:hidden fixed inset-0 z-50 transition-opacity duration-200 ' +
-              (drawerOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none')
-            }
-            aria-hidden={!drawerOpen}
-          >
-            <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]" onClick={() => setDrawerOpen(false)} />
-            <div
-              className={
-                'fixed inset-x-0 bottom-0 bg-white border-t border-[#E2E8F0] rounded-t-3xl shadow-2xl p-4 pb-6 max-h-[82vh] flex flex-col transition-transform duration-200 ease-out ' +
-                (drawerOpen ? 'translate-y-0' : 'translate-y-full')
-              }
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="w-10 h-1 rounded-full bg-slate-300 mx-auto mb-3 shrink-0" />
-              <div className="flex items-center justify-between gap-2 pb-3 mb-2 border-b border-[#E2E8F0]">
-                <div className="min-w-0">
-                  <div className="font-extrabold text-[#0F172A] truncate">{title}</div>
-                  <div className="text-xs text-slate-500 truncate">{sub}</div>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-g btn-sm !p-2 shrink-0"
+          {/* Clean Slide-Up Bottom Sheet Drawer for Secondary Sections (Portaled to body) */}
+          {typeof document !== 'undefined' &&
+            ReactDOM.createPortal(
+              <div
+                dir="rtl"
+                className={
+                  'lg:hidden fixed inset-0 z-[9999] transition-opacity duration-200 ' +
+                  (drawerOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none')
+                }
+                style={{ position: 'fixed', inset: 0, zIndex: 9999 }}
+                aria-hidden={!drawerOpen}
+              >
+                <div
+                  className="absolute inset-0 bg-slate-900/60 backdrop-blur-[2px]"
                   onClick={() => setDrawerOpen(false)}
-                  aria-label="إغلاق القائمة"
+                />
+                <div
+                  className={
+                    'fixed inset-x-0 bottom-0 bg-white border-t border-[#E2E8F0] rounded-t-3xl shadow-2xl p-4 pb-6 max-h-[85vh] flex flex-col transition-transform duration-200 ease-out ' +
+                    (drawerOpen ? 'translate-y-0' : 'translate-y-full')
+                  }
+                  style={{
+                    position: 'fixed',
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    maxHeight: '85vh',
+                    overflowY: 'auto',
+                    backgroundColor: '#FFFFFF',
+                    zIndex: 9999,
+                  }}
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  <I n="x" s={16} />
-                </button>
-              </div>
-
-              <nav className="flex-1 overflow-y-auto space-y-1 py-1">
-                {secondaryDockItems.map((it) => {
-                  const isAct = active === it[0];
-                  return (
+                  <div className="w-10 h-1 rounded-full bg-slate-300 mx-auto mb-3 shrink-0" />
+                  <div className="flex items-center justify-between gap-2 pb-3 mb-2 border-b border-[#E2E8F0]">
+                    <div className="min-w-0">
+                      <div className="font-extrabold text-[#0F172A] truncate">{title}</div>
+                      <div className="text-xs text-slate-500 truncate">{sub}</div>
+                    </div>
                     <button
-                      key={it[0]}
                       type="button"
-                      onClick={() => selectTab(it[0])}
-                      className={
-                        'w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-bold transition text-start cursor-pointer ' +
-                        (isAct ? 'bg-[#0F172A] text-white' : 'text-slate-700 hover:bg-[#F8F9FA]')
-                      }
+                      className="btn btn-g btn-sm !p-2 shrink-0"
+                      onClick={() => setDrawerOpen(false)}
+                      aria-label="إغلاق القائمة"
                     >
-                      <I n={it[2]} s={18} />
-                      <span className="truncate">{it[1]}</span>
-                      {(it[3] || 0) > 0 && <span className="ms-auto badge b-bad tabular-nums">{it[3]}</span>}
+                      <I n="x" s={16} />
                     </button>
-                  );
-                })}
-              </nav>
+                  </div>
 
-              {onSignOut && (
-                <div className="pt-3 mt-2 border-t border-[#E2E8F0]">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDrawerOpen(false);
-                      onSignOut();
-                    }}
-                    className="w-full btn btn-d justify-center"
-                  >
-                    <I n="logout" s={16} /> تسجيل الخروج
-                  </button>
+                  <nav className="flex-1 overflow-y-auto space-y-1 py-1">
+                    {secondaryDockItems.map((it) => {
+                      const isAct = active === it[0];
+                      return (
+                        <button
+                          key={it[0]}
+                          type="button"
+                          onClick={() => selectTab(it[0])}
+                          className={
+                            'w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-bold transition text-start cursor-pointer ' +
+                            (isAct ? 'bg-[#0F172A] text-white' : 'text-slate-700 hover:bg-[#F8F9FA]')
+                          }
+                        >
+                          <I n={it[2]} s={18} />
+                          <span className="truncate">{it[1]}</span>
+                          {(it[3] || 0) > 0 && <span className="ms-auto badge b-bad tabular-nums">{it[3]}</span>}
+                        </button>
+                      );
+                    })}
+                    {renderedDrawerExtra && <div className="pt-2">{renderedDrawerExtra}</div>}
+                  </nav>
+
+                  {onSignOut && (
+                    <div className="pt-3 mt-2 border-t border-[#E2E8F0]">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDrawerOpen(false);
+                          onSignOut();
+                        }}
+                        className="w-full btn btn-d justify-center"
+                      >
+                        <I n="logout" s={16} /> تسجيل الخروج
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          </div>
+              </div>,
+              document.body
+            )}
         </>
       ) : (
         <>
@@ -619,77 +666,85 @@ export function Shell({
             )}
           </button>
 
-          {/* Smooth Slide-Over Drawer (Compositor transform + opacity) */}
-          <div
-            className={
-              'lg:hidden fixed inset-0 z-50 transition-opacity duration-200 ' +
-              (drawerOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none')
-            }
-            aria-hidden={!drawerOpen}
-          >
-            <div
-              className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]"
-              onClick={() => setDrawerOpen(false)}
-            />
-            <div
-              className={
-                'fixed inset-y-0 left-0 w-[82vw] max-w-[310px] bg-white border-e border-[#E2E8F0] shadow-2xl p-4 flex flex-col transition-transform duration-200 ease-out ' +
-                (drawerOpen ? 'translate-x-0' : '-translate-x-full')
-              }
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between gap-2 pb-3 mb-3 border-b border-[#E2E8F0]">
-                <div className="min-w-0">
-                  <div className="font-extrabold text-[#0F172A] truncate">{title}</div>
-                  <div className="text-xs text-slate-500 truncate">{sub}</div>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-g btn-sm !p-2 shrink-0"
+          {/* Smooth Slide-Over Drawer (Portaled to document.body) */}
+          {typeof document !== 'undefined' &&
+            ReactDOM.createPortal(
+              <div
+                dir="rtl"
+                className={
+                  'lg:hidden fixed inset-0 z-[9999] transition-opacity duration-200 ' +
+                  (drawerOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none')
+                }
+                style={{ position: 'fixed', inset: 0, zIndex: 9999 }}
+                aria-hidden={!drawerOpen}
+              >
+                <div
+                  className="absolute inset-0 bg-slate-900/60 backdrop-blur-[2px]"
                   onClick={() => setDrawerOpen(false)}
-                  aria-label="إغلاق القائمة"
+                />
+                <div
+                  className={
+                    'fixed inset-y-0 start-0 w-[82vw] max-w-[310px] bg-white border-e border-[#E2E8F0] shadow-2xl p-4 flex flex-col transition-transform duration-200 ease-out ' +
+                    (drawerOpen ? 'translate-x-0' : '-translate-x-full rtl:translate-x-full')
+                  }
+                  style={{ backgroundColor: '#FFFFFF', zIndex: 9999 }}
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  <I n="x" s={16} />
-                </button>
-              </div>
-
-              <nav className="flex-1 overflow-y-auto space-y-1 py-1">
-                {items.map((it) => {
-                  const isAct = active === it[0];
-                  return (
+                  <div className="flex items-center justify-between gap-2 pb-3 mb-3 border-b border-[#E2E8F0]">
+                    <div className="min-w-0">
+                      <div className="font-extrabold text-[#0F172A] truncate">{title}</div>
+                      <div className="text-xs text-slate-500 truncate">{sub}</div>
+                    </div>
                     <button
-                      key={it[0]}
                       type="button"
-                      onClick={() => selectTab(it[0])}
-                      className={
-                        'w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-bold transition text-start cursor-pointer ' +
-                        (isAct ? 'bg-[#0F172A] text-white' : 'text-slate-700 hover:bg-[#F8F9FA]')
-                      }
+                      className="btn btn-g btn-sm !p-2 shrink-0"
+                      onClick={() => setDrawerOpen(false)}
+                      aria-label="إغلاق القائمة"
                     >
-                      <I n={it[2]} s={18} />
-                      <span className="truncate">{it[1]}</span>
-                      {(it[3] || 0) > 0 && <span className="ms-auto badge b-bad tabular-nums">{it[3]}</span>}
+                      <I n="x" s={16} />
                     </button>
-                  );
-                })}
-              </nav>
+                  </div>
 
-              <div className="pt-3 mt-3 border-t border-[#E2E8F0] space-y-2">
-                {onSignOut && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDrawerOpen(false);
-                      onSignOut();
-                    }}
-                    className="w-full btn btn-d justify-center"
-                  >
-                    <I n="logout" s={16} /> تسجيل الخروج
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
+                  <nav className="flex-1 overflow-y-auto space-y-1 py-1">
+                    {items.map((it) => {
+                      const isAct = active === it[0];
+                      return (
+                        <button
+                          key={it[0]}
+                          type="button"
+                          onClick={() => selectTab(it[0])}
+                          className={
+                            'w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-bold transition text-start cursor-pointer ' +
+                            (isAct ? 'bg-[#0F172A] text-white' : 'text-slate-700 hover:bg-[#F8F9FA]')
+                          }
+                        >
+                          <I n={it[2]} s={18} />
+                          <span className="truncate">{it[1]}</span>
+                          {(it[3] || 0) > 0 && <span className="ms-auto badge b-bad tabular-nums">{it[3]}</span>}
+                        </button>
+                      );
+                    })}
+                    {renderedDrawerExtra && <div className="pt-2">{renderedDrawerExtra}</div>}
+                  </nav>
+
+                  <div className="pt-3 mt-3 border-t border-[#E2E8F0] space-y-2">
+                    {onSignOut && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDrawerOpen(false);
+                          onSignOut();
+                        }}
+                        className="w-full btn btn-d justify-center"
+                      >
+                        <I n="logout" s={16} /> تسجيل الخروج
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )}
         </>
       )}
     </div>

@@ -208,6 +208,15 @@ export function resolveStoreTheme(themeKey?: string, legacyColor?: string): Stor
 
 export const DEFAULT_LANDING_PREVIEW_FRAMES = [
   {
+    id: 'lp-wayfarer',
+    name: 'Wayfarer',
+    type: 'wayfarer' as const,
+    frameColor: '#111827',
+    lensColor: '#334155',
+    dimensions: '52-18-140',
+    widthPx: 142,
+  },
+  {
     id: 'lp-aviator',
     name: 'Aviator',
     type: 'aviator' as const,
@@ -215,15 +224,6 @@ export const DEFAULT_LANDING_PREVIEW_FRAMES = [
     lensColor: '#475569',
     dimensions: '54-16-142',
     widthPx: 146,
-  },
-  {
-    id: 'lp-wayfarer',
-    name: 'Wayfarer',
-    type: 'wayfarer' as const,
-    frameColor: '#1a1a1a',
-    lensColor: '#334155',
-    dimensions: '52-18-140',
-    widthPx: 142,
   },
   {
     id: 'lp-rimless',

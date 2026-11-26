@@ -362,10 +362,10 @@ export function LandingPage() {
               <div
                 className="pointer-events-none absolute z-[6] flex items-center justify-center transition-all duration-200"
                 style={{
-                  top: '44%',
+                  top: '43.5%',
                   left: '50%',
-                  transform: 'translate(-50%, -50%)',
-                  width: '43.5%',
+                  transform: 'translate(-50%, -50%) rotate(-1.2deg)',
+                  width: '34.5%',
                 }}
               >
                 {cur.imageUrl ? (
@@ -375,41 +375,19 @@ export function LandingPage() {
                     className="w-full h-auto object-contain drop-shadow-[0_6px_12px_rgba(15,23,42,0.35)]"
                   />
                 ) : (
-                  <svg viewBox="-115 -44 230 88" className="w-full h-auto overflow-visible drop-shadow-[0_6px_10px_rgba(15,23,42,0.28)]">
+                  <svg viewBox="-88 -30 176 62" className="w-full h-auto overflow-visible drop-shadow-[0_6px_10px_rgba(15,23,42,0.28)]">
                     <Glasses
                       type={cur.type}
                       frame={cur.frameColor}
                       lens={cur.lensColor}
                       isSun={false}
+                      hideTemples={true}
                     />
                   </svg>
                 )}
               </div>
 
               <Corners />
-
-              {/* 5 Calibrated Percentage-Positioned Biometric Landmark Dots (No Mesh Lines) */}
-              <div className="pointer-events-none absolute inset-0 z-[4] opacity-60" aria-hidden="true">
-                {[
-                  { id: 'left-pupil', top: '42.5%', left: '42.8%' },
-                  { id: 'right-pupil', top: '42.5%', left: '57.2%' },
-                  { id: 'nose-bridge', top: '42%', left: '50%' },
-                  { id: 'nose-tip', top: '51%', left: '50%' },
-                  { id: 'chin', top: '65%', left: '50%' },
-                ].map((pt) => (
-                  <span
-                    key={pt.id}
-                    className="absolute flex items-center justify-center w-3.5 h-3.5 rounded-full bg-amber-400/25"
-                    style={{
-                      top: pt.top,
-                      left: pt.left,
-                      transform: 'translate(-50%, -50%)',
-                    }}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#FBBF24] shadow-[0_0_8px_rgba(251,191,36,0.9)]" />
-                  </span>
-                ))}
-              </div>
 
               {/* Subtle Horizontal Optical Scan Sweep */}
               <svg
@@ -438,7 +416,7 @@ export function LandingPage() {
               <span className="absolute top-3 end-3 z-[6] badge !bg-[#059669] !text-white !border-0 shadow-sm">
                 <span>مقاس مثالي</span>{' '}
                 <span dir="ltr" className="inline-block font-mono">
-                  98% · {cur.dimensions}
+                  98% · {cur.dimensions?.replace(/□/g, '-')}
                 </span>
               </span>
 
@@ -465,7 +443,7 @@ export function LandingPage() {
                     {cur.name}
                   </div>
                   <div dir="ltr" className="text-[0.62rem] font-mono text-[#0284C7]">
-                    {cur.dimensions} mm
+                    {cur.dimensions?.replace(/□/g, '-')} mm
                   </div>
                 </div>
               </div>

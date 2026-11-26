@@ -68,7 +68,7 @@ import {
 } from '../src/data/opticalLensMatrix';
 import { getShopMaxProducts } from '../src/services/optiverseStore';
 import { analyzeRgbaFrameColorVariance } from '../src/utils/splitSheetApi';
-import { buildSharedCacheKeys } from '../server';
+import { buildSharedCacheKeys } from '../api/index';
 
 function makeImage(w: number, h: number, bg: [number, number, number]): Uint8ClampedArray {
   const arr = new Uint8ClampedArray(w * h * 4);
@@ -969,7 +969,7 @@ console.log('=== OptiVerse Automated Technical Verification ===');
   assert.equal(bfs.pixels[(34 * 140 + 39) * 4 + 3], 20, 'Left-half split lens hollowed to optical sheen alpha=20');
 
   // D. Server, Metadata, Package & Client Isolation Verification
-  const serverSrc = fs.readFileSync(path.join(root, 'server.ts'), 'utf8');
+  const serverSrc = fs.readFileSync(path.join(root, 'api/index.ts'), 'utf8');
   const splitApiSrc = fs.readFileSync(path.join(root, 'src/utils/splitSheetApi.ts'), 'utf8');
   const workerSrc = fs.readFileSync(path.join(root, 'src/workers/cutoutWorker.ts'), 'utf8');
   const clientSrc = fs.readFileSync(path.join(root, 'src/utils/cutoutWorkerClient.ts'), 'utf8');
@@ -1165,7 +1165,7 @@ console.log('=== OptiVerse Automated Technical Verification ===');
   assert.notEqual(solidKey.primaryKey, patKey.primaryKey);
 
   // C. Wiring assertions across server, storefront, PDP, modals, merchant & landing
-  const serverSrc = fs.readFileSync(path.join(root, 'server.ts'), 'utf8');
+  const serverSrc = fs.readFileSync(path.join(root, 'api/index.ts'), 'utf8');
   const bulkSrc = fs.readFileSync(path.join(root, 'src/components/BulkFrameUploader.tsx'), 'utf8');
   const storefrontSrc = fs.readFileSync(path.join(root, 'src/pages/StorefrontPage.tsx'), 'utf8');
   const pdpSrc = fs.readFileSync(path.join(root, 'src/components/ProductDetailsView.tsx'), 'utf8');

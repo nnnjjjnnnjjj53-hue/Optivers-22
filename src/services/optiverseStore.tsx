@@ -433,9 +433,15 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       if (idbSnap.platformSettings) {
         const ps = idbSnap.platformSettings;
         const lensesOn = Boolean(ps.enableLensesSystem ?? ps.enablePrescriptionLenses);
+        const rawFrames = Array.isArray(ps.landingPreviewFrames) && ps.landingPreviewFrames.length ? ps.landingPreviewFrames : DEFAULT_LANDING_PREVIEW_FRAMES;
+        const sanitizedFrames = rawFrames.map((f: any) => ({
+          ...f,
+          dimensions: typeof f.dimensions === 'string' ? f.dimensions.replace(/□/g, '-') : f.dimensions,
+        }));
         setPlatformSettings({
           ...PLATFORM_SETTINGS0,
           ...ps,
+          landingPreviewFrames: sanitizedFrames,
           enablePrescriptionLenses: lensesOn,
           enableLensesSystem: lensesOn,
           officialLensBrands:
@@ -961,10 +967,14 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           allowMerchantLensBrandingToggle: Boolean(sRow.allow_merchant_lens_branding_toggle),
           enableSponsoredSuppliers: Boolean(sRow.enable_sponsored_suppliers),
           enableStoresDirectory: Boolean(sRow.enable_stores_directory),
-          landingPreviewFrames:
+          landingPreviewFrames: (
             Array.isArray(sRow.landing_preview_frames) && sRow.landing_preview_frames.length
               ? sRow.landing_preview_frames
-              : DEFAULT_LANDING_PREVIEW_FRAMES,
+              : DEFAULT_LANDING_PREVIEW_FRAMES
+          ).map((f: any) => ({
+            ...f,
+            dimensions: typeof f.dimensions === 'string' ? f.dimensions.replace(/□/g, '-') : f.dimensions,
+          })),
           officialLensBrands:
             Array.isArray(sRow.official_lens_brands) && sRow.official_lens_brands.length
               ? sRow.official_lens_brands

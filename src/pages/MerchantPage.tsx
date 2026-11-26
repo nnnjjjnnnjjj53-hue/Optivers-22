@@ -278,6 +278,7 @@ export function MerchantPage() {
   const [code, setCode] = useState('');
   const [aiLogoBusy, setAiLogoBusy] = useState(false);
   const [visibleProdsCount, setVisibleProdsCount] = useState(MERCHANT_PAGE_SIZE);
+  const [photoGuideModalOpen, setPhotoGuideModalOpen] = useState(false);
   const qrWrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -958,15 +959,62 @@ export function MerchantPage() {
       primaryDockIds={['home', 'prods', 'crm']}
       onSignOut={signOut}
       headerAction={
-        <button
-          type="button"
-          className="btn btn-tryon btn-sm whitespace-nowrap shrink-0"
-          onClick={() => navigate(`/shop/${activeShop.slug}?preview=1`)}
-        >
-          <I n="eye" s={14} /> معاينة المتجر
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="btn btn-g btn-sm whitespace-nowrap shrink-0 font-extrabold text-[#0284C7] bg-sky-50 border-sky-200 hover:bg-sky-100"
+            onClick={() => setPhotoGuideModalOpen(true)}
+          >
+            دليل التصوير المصور 📸
+          </button>
+          <button
+            type="button"
+            className="btn btn-tryon btn-sm whitespace-nowrap shrink-0"
+            onClick={() => navigate(`/shop/${activeShop.slug}?preview=1`)}
+          >
+            <I n="eye" s={14} /> معاينة المتجر
+          </button>
+        </div>
       }
     >
+      {photoGuideModalOpen && (
+        <div className="fixed inset-0 z-[99] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm fade">
+          <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-lg w-full space-y-4 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between">
+              <div className="font-extrabold text-base text-slate-900 flex items-center gap-2">
+                <span>📸 دليل التصوير المصور للإطارات</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPhotoGuideModalOpen(false)}
+                className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center font-extrabold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-3 text-xs sm:text-sm text-slate-700 leading-7">
+              <div className="rounded-xl bg-sky-50 border border-sky-200 p-3.5 space-y-2 text-[#0284C7]">
+                <div className="font-extrabold flex items-center gap-1.5">
+                  <I n="spark" s={16} /> قواعد التصوير الأساسية لذكاء الكتالوج والـ 3D:
+                </div>
+                <ul className="list-disc list-inside space-y-1.5 text-slate-800 text-xs">
+                  <li><b>زاوية التصوير:</b> لقطة أمامية مستقيمة تماماً على مستوى العين (Eye-level) بدون ميلان رأسي أو أفقي.</li>
+                  <li><b>الأذرع:</b> طي أذرع الإطار للخلف تماماً بحيث تكون مخفية خلف الشنبر ولا تظهر بارزة للخارج.</li>
+                  <li><b>نظارات بغيار شمس (Clip-On):</b> ارفع صورتين (الصورة الأولى بالإطار الطبي بدون الغيار، والصورة الثانية بالغيار الشمسي المغناطيسي).</li>
+                  <li><b>الإضاءة والخلفية:</b> إضاءة بيضاء ناعمة ومتساوية (بدون ظلال قاسية أو انعكاسات حادة) على خلفية بيضاء أو فاتحة سادة.</li>
+                </ul>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPhotoGuideModalOpen(false)}
+              className="w-full py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs cursor-pointer transition"
+            >
+              فهمت، شكراً ✓
+            </button>
+          </div>
+        </div>
+      )}
       {sec === 'home' && (
         <>
           {/* 14-Day Free Trial Countdown / Expired Renewal Banner (ONLY on Home tab) */}

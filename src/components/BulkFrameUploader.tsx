@@ -38,11 +38,11 @@ const BATCH_LIMITS_BY_MODE: Record<
   EyewearFrameMode,
   { min: number; max: number; label: string }
 > = {
-  prescription: { min: 10, max: 50, label: 'نظارات طبية' },
-  sunglasses: { min: 10, max: 50, label: 'نظارات شمسية' },
-  metal: { min: 10, max: 50, label: 'نظارات شمس معادن' },
-  clip_on: { min: 10, max: 30, label: 'نظارات بغيار شمس' },
-  kids: { min: 10, max: 30, label: 'نظارات أطفال' },
+  prescription: { min: 2, max: 50, label: 'نظارات طبية' },
+  sunglasses: { min: 2, max: 50, label: 'نظارات شمسية' },
+  metal: { min: 2, max: 50, label: 'نظارات معادن' },
+  clip_on: { min: 2, max: 30, label: 'نظارات بغيار شمس' },
+  kids: { min: 2, max: 30, label: 'نظارات أطفال' },
 };
 
 interface BulkFrameItem {
@@ -1030,58 +1030,10 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
     siblingCard: BulkFrameItem,
     signal?: AbortSignal
   ): Promise<BulkFrameItem | null> => {
-    if (signal?.aborted || !siblingCard.sourceFile || !leadCard.imagePath || !leadCard.frontCatalogPath) {
+    if (signal?.aborted || !siblingCard.sourceFile) {
       return null;
     }
-    try {
-      const targetHex = await sampleRoughHexFromFile(siblingCard.sourceFile);
-      const [tintedCut, tintedFront, tintedSide] = await Promise.all([
-        generateTintedCatalogAsset(leadCard.imagePath, targetHex),
-        generateTintedCatalogAsset(leadCard.frontCatalogPath, targetHex),
-        leadCard.sideImagePath
-          ? generateTintedCatalogAsset(leadCard.sideImagePath, targetHex)
-          : Promise.resolve(null),
-      ]);
-      if (signal?.aborted) return null;
-
-      const [imagePath, frontCatalogPath, sideImagePath] = await Promise.all([
-        uploadAssetToStorage(tintedCut.blob, `products/${activeShop.id}/cutouts`, 'webp'),
-        uploadAssetToStorage(tintedFront.blob, `products/${activeShop.id}/front`, 'webp'),
-        tintedSide
-          ? uploadAssetToStorage(tintedSide.blob, `products/${activeShop.id}/side`, 'webp')
-          : Promise.resolve(leadCard.sideImagePath || ''),
-      ]);
-
-      return await finalizeProcessedCard(
-        {
-          ...siblingCard,
-          modelCode: leadCard.modelCode,
-          frameWidthMm: leadCard.frameWidthMm,
-          lensWidthMm: leadCard.lensWidthMm,
-          bridgeWidthMm: leadCard.bridgeWidthMm,
-          templeLengthMm: leadCard.templeLengthMm,
-          totalFrameWidthMm: leadCard.totalFrameWidthMm,
-          opticalDimensions: leadCard.opticalDimensions,
-          isCrystalFrame: leadCard.isCrystalFrame,
-        },
-        {
-          imagePath,
-          frontCatalogPath,
-          sideImagePath: sideImagePath || frontCatalogPath,
-          maskUrl: leadCard.maskUrl,
-          aspectRatio: leadCard.aspectRatio,
-          frameHexColor: targetHex,
-          frameOpacity: leadCard.frameOpacity,
-          detectedMaterial: leadCard.material,
-          detectedType: leadCard.type,
-          calibration: leadCard.calibration,
-          quality: 'good',
-          autoColorSibling: true,
-        }
-      );
-    } catch {
-      return null;
-    }
+    return await processSingleCard(siblingCard, signal);
   };
 
   const handleFilesSelected = async (
@@ -1654,8 +1606,8 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
         )}
       </div>
 
-      {/* 4 Clean 1-Tap Category Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+      {/* 5 Clean 1-Tap Category Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
         {/* Card 1: نظارات طبية -> Direct File Picker */}
         <button
           type="button"
@@ -1674,7 +1626,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
             <div className="font-extrabold text-sm text-[#0F172A]">نظارات طبية</div>
             <div className="text-[0.7rem] text-slate-500 mt-0.5">تفريغ العدسات وتجهيز الكتالوج فوراً</div>
             <div className="text-[0.65rem] font-bold text-[#0284C7] mt-1">
-              الدفعة: <span dir="ltr">10–50</span> نظارة
+              الدفعة: <span dir="ltr">2–50</span> نظارة
             </div>
           </div>
         </button>
@@ -1698,7 +1650,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
               <div className="font-extrabold text-sm text-[#0F172A]">نظارات شمسية</div>
               <div className="text-[0.7rem] text-slate-500 mt-0.5">الحفاظ على لون وتظليل عدسة الشمس</div>
               <div className="text-[0.65rem] font-bold text-[#D97706] mt-1">
-                الدفعة: <span dir="ltr">10–50</span> نظارة
+                الدفعة: <span dir="ltr">2–50</span> نظارة
               </div>
             </div>
           </button>
@@ -1722,7 +1674,30 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
           )}
         </div>
 
-        {/* Card 3: نظارات بغيار شمس -> Direct File Picker (Even Pairs) */}
+        {/* Card 3: نظارات معادن -> Direct File Picker */}
+        <button
+          type="button"
+          onClick={() => openCategoryPicker('metal', 'optical', 'metal')}
+          className="rounded-2xl bg-white border border-[#E2E8F0] hover:border-[#0284C7] hover:shadow-md p-3.5 text-start transition cursor-pointer flex flex-col justify-between gap-2"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="w-9 h-9 rounded-xl bg-purple-50 text-purple-700 flex items-center justify-center shrink-0">
+              <I n="glasses" s={19} />
+            </span>
+            <span className="text-[0.65rem] font-bold px-2 py-0.5 rounded-md bg-purple-50 text-purple-700">
+              رفع مباشر
+            </span>
+          </div>
+          <div>
+            <div className="font-extrabold text-sm text-[#0F172A]">نظارات معادن</div>
+            <div className="text-[0.7rem] text-slate-500 mt-0.5">الحواف الدقيقة ولمعان معدني واقعي</div>
+            <div className="text-[0.65rem] font-bold text-purple-700 mt-1">
+              الدفعة: <span dir="ltr">2–50</span> نظارة
+            </div>
+          </div>
+        </button>
+
+        {/* Card 4: نظارات بغيار شمس -> Direct File Picker (Even Pairs) */}
         <button
           type="button"
           onClick={() => openCategoryPicker('clip_on', 'optical', 'tr_plastic')}
@@ -1740,12 +1715,12 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
             <div className="font-extrabold text-sm text-[#0F172A]">نظارات بغيار شمس</div>
             <div className="text-[0.7rem] text-slate-500 mt-0.5">صورتان لكل نظارة (بدون + بالغيار)</div>
             <div className="text-[0.65rem] font-bold text-[#059669] mt-1">
-              الدفعة: <span dir="ltr">10–30</span> نظارة
+              الدفعة: <span dir="ltr">2–30</span> نظارة
             </div>
           </div>
         </button>
 
-        {/* Card 4: نظارات أطفال -> Expand 2 Sub-Options */}
+        {/* Card 5: نظارات أطفال -> Expand 2 Sub-Options */}
         <div className="rounded-2xl bg-white border border-[#E2E8F0] hover:border-[#0284C7] p-3.5 flex flex-col justify-between gap-2 transition">
           <button
             type="button"
@@ -1764,7 +1739,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
               <div className="font-extrabold text-sm text-[#0F172A]">نظارات أطفال</div>
               <div className="text-[0.7rem] text-slate-500 mt-0.5">مقياس أطفال مخصص (0.90x)</div>
               <div className="text-[0.65rem] font-bold text-indigo-700 mt-1">
-                الدفعة: <span dir="ltr">10–30</span> نظارة
+                الدفعة: <span dir="ltr">2–30</span> نظارة
               </div>
             </div>
           </button>
@@ -1798,6 +1773,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
               [
                 { mode: 'prescription', sub: 'optical', mat: 'tr_plastic', label: 'طبية' },
                 { mode: 'sunglasses', sub: 'sun', mat: 'tr_plastic', label: 'شمسية' },
+                { mode: 'metal', sub: 'optical', mat: 'metal', label: 'معادن' },
                 { mode: 'clip_on', sub: 'optical', mat: 'tr_plastic', label: 'بغيار شمس' },
                 { mode: 'kids', sub: 'optical', mat: 'tr_plastic', label: 'أطفال' },
               ] as const
@@ -2023,7 +1999,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                       {isEnhancing ? (
                         <span className="text-[0.68rem] px-2 py-0.5 rounded-lg bg-sky-50 text-[#0284C7] border border-sky-200 font-bold flex items-center gap-1.5">
                           <span className="w-3 h-3 rounded-full border-2 border-[#0284C7] border-t-transparent animate-spin inline-block" />
-                          {it.stageLabel || 'جاري التحسين'}
+                          جاري المعالجة...
                         </span>
                       ) : isError ? (
                         <span className="text-[0.68rem] px-2 py-0.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 font-bold">
@@ -2033,9 +2009,13 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                         <span className="text-[0.68rem] px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
                           معتمدة ومنشورة ✓
                         </span>
+                      ) : isReady ? (
+                        <span className="text-[0.68rem] px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-300 font-bold">
+                          تمت المعالجة ✅
+                        </span>
                       ) : (
                         <span className="text-[0.68rem] px-2 py-0.5 rounded-lg bg-[#0F172A] text-white font-semibold">
-                          {it.cacheHit ? 'من الكتالوج المشترك ⚡' : it.autoColorSibling ? 'لون مضاف محلياً 🎨' : 'بانتظار الاعتماد'}
+                          بانتظار الاعتماد
                         </span>
                       )}
                       <span className="text-[0.66rem] px-2 py-0.5 rounded-lg bg-[#F8F9FA] border border-[#E2E8F0] text-slate-700 font-bold">
@@ -2117,9 +2097,9 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                     </div>
                   )}
 
-                  {/* 3 Studio Outputs: Front Studio Catalog, 3/4 Side Catalog, & Transparent Try-On */}
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="relative h-28 rounded-xl border border-[#E2E8F0] bg-[#F8F9FA] flex items-center justify-center overflow-hidden p-1.5">
+                  {/* 2 Studio Outputs: Front Studio Catalog & 3/4 Side Catalog */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="relative h-32 rounded-xl border border-[#E2E8F0] bg-[#F8F9FA] flex items-center justify-center overflow-hidden p-1.5">
                       <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-[#0F172A]/85 text-white text-[0.54rem] font-bold">
                         أمامي كتالوج
                       </span>
@@ -2138,7 +2118,7 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                       )}
                     </div>
 
-                    <div className="relative h-28 rounded-xl border border-[#E2E8F0] bg-[#F8F9FA] flex items-center justify-center overflow-hidden p-1.5">
+                    <div className="relative h-32 rounded-xl border border-[#E2E8F0] bg-[#F8F9FA] flex items-center justify-center overflow-hidden p-1.5">
                       <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-[#0F172A]/85 text-white text-[0.54rem] font-bold">
                         جانبي 3/4
                       </span>
@@ -2169,34 +2149,6 @@ export function BulkFrameUploader({ onSaved }: { onSaved?: () => void }) {
                             }}
                           />
                         </label>
-                      )}
-                    </div>
-
-                    <div
-                      className="relative h-28 rounded-xl border border-[#E2E8F0] flex items-center justify-center overflow-hidden p-1.5"
-                      style={{
-                        backgroundImage:
-                          'linear-gradient(45deg, #e2e8f0 25%, transparent 25%), linear-gradient(-45deg, #e2e8f0 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e2e8f0 75%), linear-gradient(-45deg, transparent 75%, #e2e8f0 75%)',
-                        backgroundSize: '14px 14px',
-                        backgroundPosition: '0 0, 0 7px, 7px -7px, -7px 0',
-                        backgroundColor: '#f8fafc',
-                      }}
-                    >
-                      <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-[#0284C7] text-white text-[0.54rem] font-bold">
-                        مفرّغة للتجربة
-                      </span>
-                      {isEnhancing ? (
-                        <div className="w-5 h-5 rounded-full border-2 border-[#0284C7] border-t-transparent animate-spin" />
-                      ) : activeTryOnPreview ? (
-                        <img
-                          src={activeTryOnPreview}
-                          alt={`مفرغة ${it.name}`}
-                          loading="lazy"
-                          decoding="async"
-                          className="max-h-full max-w-full object-contain"
-                        />
-                      ) : (
-                        <span className="text-[0.6rem] text-slate-400">جاري التجهيز</span>
                       )}
                     </div>
                   </div>

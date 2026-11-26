@@ -128,6 +128,8 @@ export interface Shop {
   bannerImageUrl?: string;
   videoUrl?: string;
   merchantLensConfigs?: MerchantLensBrandConfig[];
+  groupColorsInStore?: boolean;
+  showColorSwatchesToCustomer?: boolean;
 }
 
 export type LensTrack = 'single_vision' | 'custom_lab';

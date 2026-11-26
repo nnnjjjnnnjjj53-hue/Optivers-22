@@ -665,8 +665,8 @@ console.log('=== OptiVerse Automated Technical Verification ===');
   assert.ok(
     bulkSrc.includes('أمامي كتالوج') &&
       bulkSrc.includes('جانبي 3/4') &&
-      bulkSrc.includes('مفرّغة للتجربة') &&
-      bulkSrc.includes("quality === 'check'")
+      bulkSrc.includes('جاري المعالجة...') &&
+      bulkSrc.includes('تمت المعالجة ✅')
   );
   assert.ok(bulkSrc.includes('عرض المزيد') && bulkSrc.includes('addProduct') && !bulkSrc.includes('.slice(0, 350)'));
   assert.ok(bulkSrc.includes('loading="lazy"') && bulkSrc.includes('decoding="async"'));

@@ -3,9 +3,10 @@ import * as THREE from 'three';
 import { WebGPURenderer } from 'three/webgpu';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FrameSize, Product } from '../types';
-import { resolveTryOnFrontUrl } from '../utils/bulkFrameProcessor';
+import { resolveStoreFrontUrl, resolveTryOnFrontUrl } from '../utils/bulkFrameProcessor';
 import { FRAME_SIZE_SCALE, getFaceLandmarker, getLandmarkerRuntimeInfo } from '../utils/faceTracker';
 import { assessOpticalFit, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
+import { recordStoreCameraTryOn } from '../utils/storeAnalytics';
 
 interface TryOnRenderer {
   domElement: HTMLCanvasElement;
@@ -333,6 +334,7 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
   const firstNoFaceAtRef = useRef<number | null>(null);
   const fpsCounterRef = useRef({ frames: 0, lastAt: performance.now(), fps: 0 });
   const lastFitStatusRef = useRef<FrameFitStatus | null>(null);
+  const trackedTryOnProductsRef = useRef<Set<string>>(new Set());
 
   const [fitIndicator, setFitIndicator] = useState<{
     status: FrameFitStatus;
@@ -362,6 +364,18 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
     landmarksCount: 0,
     lastError: 'none',
   });
+
+  useEffect(() => {
+    if (!active || !debugStats.faceDetected || !product.id || !product.shopId) return;
+    const trackKey = `${product.shopId}:${product.id}`;
+    if (trackedTryOnProductsRef.current.has(trackKey)) return;
+    trackedTryOnProductsRef.current.add(trackKey);
+    recordStoreCameraTryOn(product.shopId, {
+      id: product.id,
+      name: product.name,
+      imageUrl: resolveStoreFrontUrl(product) || frontImageUrl,
+    });
+  }, [active, debugStats.faceDetected, product.id, product.shopId, product.name, frontImageUrl]);
 
   const opticalSpec = resolveProductOpticalDimensions(product);
   const frameWidthMm =

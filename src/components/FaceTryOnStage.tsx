@@ -23,6 +23,7 @@ import { Glasses, MiniGlasses, getCoatingStyle } from './GlassesGraphics';
 import { I } from './Icons';
 import { resolveStoreFrontUrl, resolveTryOnFrontUrl } from '../utils/bulkFrameProcessor';
 import { resolveProductOpticalDimensions } from '../utils/opticalDimensions';
+import { recordStoreFriendShare } from '../utils/storeAnalytics';
 
 export type TryOnMode = 'camera' | 'photo';
 
@@ -1225,6 +1226,7 @@ export function FaceTryOnStage({
           title: product.name,
           text,
         });
+        recordStoreFriendShare(product.shopId);
         setShotToast('تمت المشاركة مع أصدقائك ✓');
         return;
       }
@@ -1234,6 +1236,7 @@ export function FaceTryOnStage({
           text,
           ...(pageUrl ? { url: pageUrl } : {}),
         });
+        recordStoreFriendShare(product.shopId);
         setShotToast('تمت المشاركة مع أصدقائك ✓');
         return;
       }
@@ -1785,7 +1788,10 @@ export function FaceTryOnStage({
                 href={`https://wa.me/?text=${encodeURIComponent(buildShareTextAndUrl().text)}`}
                 target="_blank"
                 rel="noreferrer"
-                onClick={() => handleSaveScreenshot()}
+                onClick={() => {
+                  recordStoreFriendShare(product.shopId);
+                  handleSaveScreenshot();
+                }}
                 className="btn bg-emerald-600 hover:bg-emerald-700 text-white !py-2.5 text-xs font-extrabold"
               >
                 <I n="msg" s={15} /> واتساب

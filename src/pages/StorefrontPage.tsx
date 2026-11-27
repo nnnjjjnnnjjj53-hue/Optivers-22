@@ -32,6 +32,7 @@ import { D, Egp, Empty, Modal, Pr, Stages, fmt, qBadge, waNum } from '../compone
 import { canvasToBlob, loadImageToCanvas } from '../utils/visionPipeline';
 import { resolveAngled45Url, resolveStoreFrontUrl } from '../utils/bulkFrameProcessor';
 import { formatOpticalDimensions, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
+import { recordStoreFriendShare, recordStoreVisit } from '../utils/storeAnalytics';
 
 const STORE_PAGE_SIZE = 24;
 
@@ -77,6 +78,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     cart,
     setCart,
     inq,
+    lensTypes,
     addInquiry,
     toast,
     setModal,
@@ -89,6 +91,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   const directoryEnabled = Boolean(platformSettings.enableStoresDirectory);
 
   const shop = shops.find((s) => s.slug === slug);
+  const storeTradeName = (shop?.name || '').trim() || 'متجر البصريات';
   const theme = resolveStoreTheme(shop?.themeKey, shop?.color);
   const isImageLogo = Boolean(shop?.logo && (/^(https?:|data:image\/|blob:|\/)/i.test(shop.logo)));
   const queryString = route.includes('?')
@@ -99,7 +102,8 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   const queryParams = new URLSearchParams(queryString);
   const isMerchantPreview = queryParams.get('preview') === '1';
   const autoFocusReview = queryParams.get('review') === '1';
-  const autoTryOn = queryParams.get('tryon') === '1';
+  const tryProductParam = queryParams.get('try')?.trim() || '';
+  const autoTryOn = queryParams.get('tryon') === '1' || Boolean(tryProductParam);
   const showPreviewBar =
     isMerchantPreview || Boolean(session && (session.role === 'merchant' || isAdminRole(session.role)));
 
@@ -155,12 +159,22 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   const [cardSelectedColors, setCardSelectedColors] = useState<Record<string, string>>({});
 
   const [step, setStep] = useState(1);
+  const [lensQuickMode, setLensQuickMode] = useState(true);
   const [lensTrack, setLensTrack] = useState<LensTrack>('single_vision');
   const [labDesign, setLabDesign] = useState<CustomLabDesign>('progressive');
   const [lensCategory, setLensCategory] = useState<LensCategoryKey>('blue_cut');
   const [photoVariant, setPhotoVariant] = useState<PhotoVariant>('photo_grey');
-  const [lensIndexChoice, setLensIndexChoice] = useState<LensIndex | 'store_decide'>('1.56');
+  const [lensIndexChoice, setLensIndexChoice] = useState<LensIndex | 'store_decide'>('store_decide');
   const [selectedLensBrandId, setSelectedLensBrandId] = useState<string>('');
+
+  const [directOrder, setDirectOrder] = useState<{
+    product: Product;
+    color: string;
+    size: FrameSize;
+  } | null>(null);
+  const [directLensMode, setDirectLensMode] = useState<'specialist' | 'custom'>('specialist');
+  const [directLensChoiceId, setDirectLensChoiceId] = useState<string>('');
+  const [directSubmitting, setDirectSubmitting] = useState(false);
 
   const [img, setImg] = useState<string | null>(null);
   const [rxLocalPreview, setRxLocalPreview] = useState<string | null>(null);
@@ -177,17 +191,44 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   const tryOnHandledRef = useRef<string>('');
 
   useEffect(() => {
-    if (autoTryOn && tryOnHandledRef.current !== route) {
-      tryOnHandledRef.current = route;
-      setTab('shop');
-      setDetailId(null);
-      setCamOn(true);
+    if (autoTryOn) {
+      const key = `${route}|${tryProductParam}|${products.length}`;
+      if (tryOnHandledRef.current !== key) {
+        if (tryProductParam && products.length > 0) {
+          const lowerTry = tryProductParam.toLowerCase();
+          const matchedTry =
+            products.find((p) => p.id === tryProductParam) ||
+            products.find(
+              (p) =>
+                (p.code || '').trim().toLowerCase() === lowerTry ||
+                (p.modelCode || '').trim().toLowerCase() === lowerTry
+            );
+          if (matchedTry) {
+            tryOnHandledRef.current = key;
+            setCurId(matchedTry.id);
+            setTab('shop');
+            setDetailId(null);
+            setCamOn(true);
+          }
+        } else if (!tryProductParam) {
+          tryOnHandledRef.current = key;
+          setTab('shop');
+          setDetailId(null);
+          setCamOn(true);
+        }
+      }
     }
-  }, [autoTryOn, route]);
+  }, [autoTryOn, tryProductParam, route, products]);
 
   useEffect(() => {
     setStoreVisibleCount(STORE_PAGE_SIZE);
   }, [cat, shapeFilter, colorFilter, searchQuery, shop?.id]);
+
+  useEffect(() => {
+    if (shop?.id && !isMerchantPreview) {
+      recordStoreVisit(shop.id);
+    }
+  }, [shop?.id, isMerchantPreview]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !slug) return;
@@ -268,6 +309,25 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
       }
     }
 
+    const tryParam = params.get('try')?.trim();
+    if (tryParam) {
+      const lowerTry = tryParam.toLowerCase();
+      const targetTry =
+        products.find((p) => p.id === tryParam) ||
+        products.find(
+          (p) =>
+            (p.code || '').trim().toLowerCase() === lowerTry ||
+            (p.modelCode || '').trim().toLowerCase() === lowerTry
+        );
+      if (targetTry) {
+        setCurId(targetTry.id);
+        setDetailId(null);
+        setTab('shop');
+        setCamOn(true);
+        return;
+      }
+    }
+
     const productParam = params.get('product');
     if (productParam) {
       const targetById = products.find((p) => p.id === productParam.trim());
@@ -302,10 +362,10 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
 
     const prevTitle = document.title;
     const locationLabel = shop.governorate || shop.city || 'مصر';
-    const seoTitle = `${shop.name} | نظارات طبية وشمسية بتجربة 3D في ${locationLabel}`;
+    const seoTitle = `${storeTradeName} | نظارات طبية وشمسية بتجربة 3D في ${locationLabel}`;
     const seoDescription =
       shop.tagline?.trim() ||
-      `تصفّح أحدث النظارات الطبية والشمسية في ${shop.name} (${locationLabel}) وجرّبها على وجهك مباشرة بالكاميرا 3D بمقياس 1:1 mm مع إرسال الكشف عبر واتساب.`;
+      `تصفّح أحدث النظارات الطبية والشمسية في ${storeTradeName} (${locationLabel}) وجرّبها على وجهك مباشرة بالكاميرا 3D بمقياس 1:1 mm مع إرسال الكشف عبر واتساب.`;
     const canonicalUrl =
       typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '';
 
@@ -359,7 +419,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     const opticianSchema: Record<string, unknown> = {
       '@context': 'https://schema.org',
       '@type': 'Optician',
-      name: shop.name,
+      name: storeTradeName,
       description: seoDescription,
       ...(canonicalUrl ? { url: canonicalUrl } : {}),
       ...(shop.wa ? { telephone: shop.wa } : {}),
@@ -430,7 +490,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
           <span className="w-16 h-16 rounded-full b-warn inline-flex items-center justify-center">
             <I n="pause" s={28} />
           </span>
-          <h1 className="font-extrabold text-xl">{shop.name}</h1>
+          <h1 className="font-extrabold text-xl">{storeTradeName}</h1>
           <p className="text-sm opacity-75 leading-7">
             {isExpired
               ? 'هذا المتجر متوقف مؤقتاً لحين تجديد اشتراكه. تواصل مع إدارة المحل لمزيد من التفاصيل.'
@@ -453,12 +513,12 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
             style={{ backgroundColor: theme.primary }}
           >
             {isImageLogo ? (
-              <img src={shop.logo} alt={shop.name} className="w-full h-full object-contain bg-white p-1" />
+              <img src={shop.logo} alt={storeTradeName} className="w-full h-full object-contain bg-white p-1" />
             ) : (
               shop.logo
             )}
           </span>
-          <h1 className="font-extrabold text-xl">{shop.name}</h1>
+          <h1 className="font-extrabold text-xl">{storeTradeName}</h1>
           <p className="text-sm opacity-75">لا توجد نظارات منشورة في هذا المتجر حالياً — ترقّب أحدث الموديلات قريباً.</p>
         </div>
       </div>
@@ -660,12 +720,19 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     }
   };
 
+  const shopLensChoices = lensTypes.filter(
+    (l) => (l.shopId || DEFAULT_SHOP_ID) === shop.id && l.on !== false
+  );
+
   const submitRx = async () => {
     if (!cname.trim() || !cphone.trim()) {
       toast('اكتب اسمك ورقم موبايلك أولاً');
       return;
     }
-    const brandDisplay = selectedBrandOption
+    const isSpecialistQuick = lensQuickMode;
+    const brandDisplay = isSpecialistQuick
+      ? 'يُحدد مع أخصائي المحل'
+      : selectedBrandOption
       ? `${selectedBrandOption.nameAr}${
           selectedBrandOption.sponsorBadge !== 'none'
             ? ` (${SPONSOR_BADGE_LABELS[selectedBrandOption.sponsorBadge]})`
@@ -673,7 +740,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
         }`
       : '—';
     const estDaysTxt =
-      lensTrack === 'custom_lab' && selectedBrandOption?.estimatedDays
+      !isSpecialistQuick && lensTrack === 'custom_lab' && selectedBrandOption?.estimatedDays
         ? ` · مدة التجهيز المتوقعة: ${selectedBrandOption.estimatedDays} أيام`
         : '';
 
@@ -687,13 +754,17 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
       type: cur.type,
       frame: fc,
       lens: lc,
-      lensName: `${activeCatMeta.nameAr}${variantSuffix}`,
+      lensName: isSpecialistQuick
+        ? 'تحديد العدسات مع أخصائي المحل (موصى به)'
+        : `${activeCatMeta.nameAr}${variantSuffix}`,
       brandName: brandDisplay,
-      extrasTxt: `${trackLabelAr} · ${indexLabelAr}${estDaysTxt}`,
+      extrasTxt: isSpecialistQuick
+        ? `مقاس ${selectedSize} · مراجعة الكشف وتحديد الأنسب مع أخصائي المحل`
+        : `${trackLabelAr} · ${indexLabelAr}${estDaysTxt}`,
       fp: cur.price,
-      lensPrice: lensEstimatedPrice,
+      lensPrice: isSpecialistQuick ? 0 : lensEstimatedPrice,
       add: 0,
-      price: total,
+      price: isSpecialistQuick ? cur.price : total,
       img,
       notes,
       pd,
@@ -705,9 +776,66 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     };
     await addInquiry(q);
     setModal({ t: 'sent', q });
+    setRxLocalPreview(null);
     setImg(null);
     setNotes('');
     setStep(1);
+  };
+
+  const submitDirectOrder = async () => {
+    if (!directOrder) return;
+    if (!cname.trim() || !cphone.trim()) {
+      toast('اكتب اسمك ورقم موبايلك أولاً');
+      return;
+    }
+    setDirectSubmitting(true);
+    try {
+      const targetProd = D(directOrder.product);
+      const chosenCustomShopLens = shopLensChoices.find((l) => l.id === directLensChoiceId);
+      const chosenCatLens = LENS_CATEGORIES.find((c) => c.key === directLensChoiceId);
+      const isSpecialist = directLensMode === 'specialist';
+      const customLensLabel =
+        chosenCustomShopLens?.name || chosenCatLens?.nameAr || `${activeCatMeta.nameAr}${variantSuffix}`;
+      const customLensPrice = chosenCustomShopLens?.price ?? (isSpecialist ? 0 : lensEstimatedPrice);
+
+      const q: Inquiry = {
+        id: '#Q-' + (320 + Math.floor(Math.random() * 600)),
+        shopId: shop.id,
+        kind: 'rx',
+        cust: cname.trim(),
+        phone: cphone.trim(),
+        frameName: `${targetProd.name} (${directOrder.size})`,
+        type: targetProd.type,
+        frame: directOrder.color,
+        lens: targetProd.lens,
+        lensName: isSpecialist ? 'تحديد العدسات مع أخصائي المحل (موصى به)' : customLensLabel,
+        brandName: isSpecialist ? 'يُحدد مع المحل' : 'اختيار العميل',
+        extrasTxt: isSpecialist
+          ? `طلب شمبر مباشر (${directOrder.color === 'transparent' ? 'شفاف' : directOrder.color}) · مراجعة الكشف مع أخصائي المحل`
+          : `طلب شمبر مباشر · نوع العدسة المختار: ${customLensLabel}`,
+        fp: targetProd.price,
+        lensPrice: isSpecialist ? 0 : customLensPrice,
+        add: 0,
+        price: targetProd.price + (isSpecialist ? 0 : customLensPrice),
+        img,
+        notes,
+        pd,
+        status: 'new',
+        stage: 'review',
+        time: 'الآن',
+        mine: true,
+        rxn: Math.floor(Math.random() * 4),
+      };
+      await addInquiry(q);
+      setDirectOrder(null);
+      setRxLocalPreview(null);
+      setImg(null);
+      setNotes('');
+      setModal({ t: 'sent', q });
+      toast('تم إرسال طلبك والكشف الطبي للمحل ✓');
+    } finally {
+      setDirectSubmitting(false);
+    }
   };
 
   const Heart = ({ p }: { p: Product }) => (
@@ -784,14 +912,14 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
               style={{ backgroundColor: theme.primary }}
             >
               {isImageLogo ? (
-                <img src={shop.logo} alt={shop.name} className="w-full h-full object-contain bg-white p-0.5" />
+                <img src={shop.logo} alt={storeTradeName} className="w-full h-full object-contain bg-white p-0.5" />
               ) : (
                 shop.logo
               )}
             </span>
             <div className="min-w-0">
-              <div className="font-extrabold leading-tight truncate flex items-center gap-1.5">
-                <span>{shop.name}</span>
+              <div className="font-extrabold text-base sm:text-lg leading-tight truncate flex items-center gap-1.5 text-[#0F172A]">
+                <span>{storeTradeName}</span>
                 {shop.isFeatured && <span title="متجر مميز">⭐</span>}
               </div>
               <div className="text-xs opacity-75 flex items-center gap-1.5 flex-wrap">
@@ -916,7 +1044,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
             ) : shop.bannerImageUrl ? (
               <img
                 src={shop.bannerImageUrl}
-                alt={shop.name}
+                alt={storeTradeName}
                 className="absolute inset-0 w-full h-full object-cover"
               />
             ) : (
@@ -946,7 +1074,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                 <div className="flex items-center gap-3 mb-3 flex-wrap">
                   <span className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-white/95 text-[#0F172A] text-2xl sm:text-3xl flex items-center justify-center shadow-md shrink-0 overflow-hidden border border-white/40">
                     {isImageLogo ? (
-                      <img src={shop.logo} alt={shop.name} className="w-full h-full object-contain p-1" />
+                      <img src={shop.logo} alt={storeTradeName} className="w-full h-full object-contain p-1" />
                     ) : (
                       shop.logo
                     )}
@@ -958,7 +1086,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                     </span>
                   </div>
                 </div>
-                <h1 className="text-2xl sm:text-4xl font-extrabold leading-tight">{shop.name}</h1>
+                <h1 className="text-2xl sm:text-4xl font-extrabold leading-tight">{storeTradeName}</h1>
                 <p className="text-xs sm:text-sm text-slate-200 mt-1.5 leading-6">
                   {shop.tagline?.trim()
                     ? shop.tagline
@@ -1054,23 +1182,9 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                 setCurId(detailProduct.id);
                 setFc(color);
                 setSelectedSize(size);
-                closeFrameDetail();
-                if (rxEnabled) {
-                  setTab('lens');
-                } else {
-                  addCart({
-                    productId: detailProduct.id,
-                    name: detailProduct.name,
-                    desc: `إطار فقط · مقاس ${size}`,
-                    price: detailProduct.price,
-                    type: detailProduct.type,
-                    frame: color,
-                    lens: detailProduct.lens,
-                    size,
-                  });
-                  setTab('cart');
-                  setModal({ t: 'checkout', total: cartTotal + detailProduct.price });
-                }
+                setDirectLensMode('specialist');
+                setDirectLensChoiceId('');
+                setDirectOrder({ product: detailProduct, color, size });
               }}
             />
           </div>
@@ -1085,23 +1199,9 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
             const targetProd = products.find((p) => p.id === pid) || cur;
             setCurId(pid);
             setCamOn(false);
-            closeFrameDetail();
-            if (rxEnabled) {
-              setTab('lens');
-            } else {
-              addCart({
-                productId: targetProd.id,
-                name: targetProd.name,
-                desc: `إطار فقط · مقاس ${selectedSize}`,
-                price: targetProd.price,
-                type: targetProd.type,
-                frame: fc,
-                lens: lc,
-                size: selectedSize,
-              });
-              setTab('cart');
-              setModal({ t: 'checkout', total: cartTotal + targetProd.price });
-            }
+            setDirectLensMode('specialist');
+            setDirectLensChoiceId('');
+            setDirectOrder({ product: targetProd, color: fc, size: selectedSize });
           }}
           initialRxUrl={rxLocalPreview && rxLocalPreview !== 'pdf' ? rxLocalPreview : img}
           onRxAttached={async (rxUrl) => {
@@ -1240,7 +1340,12 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                           : 'border-slate-200 hover:border-slate-300 shadow-sm')
                       }
                     >
-                      <div className="relative rounded-xl bg-[#F8F9FA] border border-slate-100 py-5 px-2 flex flex-col items-center justify-center min-h-[155px] sm:min-h-[175px]">
+                      <div
+                        className={
+                          'relative rounded-xl bg-[#F8F9FA] border border-slate-100 px-2 flex flex-col items-center justify-center min-h-[155px] sm:min-h-[175px] ' +
+                          (angled45Img ? 'pt-10 pb-10' : 'pt-10 pb-5')
+                        }
+                      >
                         <MiniGlasses
                           type={activeVariant.type}
                           frame={activeSwatch}
@@ -1271,46 +1376,34 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                           {isCompared ? 'مختارة ✓' : 'قارن ⚖️'}
                         </button>
 
-                        {/* Bottom-Right Floating Try-On Pill Button */}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setCurId(activeVariant.id);
-                            setFc(activeSwatch);
-                            setDetailId(null);
-                            setCamOn(true);
-                          }}
-                          className="absolute bottom-2 start-2 z-10 px-2.5 py-1 rounded-full bg-[#0284C7] hover:bg-[#0369A1] text-white text-[0.66rem] font-extrabold shadow-sm cursor-pointer transition"
-                        >
-                          جرّب على وجهك
-                        </button>
-
+                        {/* Dedicated View Angle Switcher (Isolated cleanly from Try-On button) */}
                         {angled45Img && (
                           <div
-                            className="absolute bottom-2 end-2 z-10 inline-flex rounded-lg bg-white/90 p-0.5 border border-slate-200"
+                            className="absolute bottom-2 inset-x-0 z-10 flex justify-center pointer-events-none"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <button
-                              type="button"
-                              onClick={() => setCardAngles((prev) => ({ ...prev, [p.id]: 'front' }))}
-                              className={
-                                'px-1.5 py-0.5 rounded text-[0.58rem] font-bold cursor-pointer ' +
-                                (activeAngle === 'front' ? 'bg-slate-900 text-white' : 'text-slate-600')
-                              }
-                            >
-                              أمامي
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setCardAngles((prev) => ({ ...prev, [p.id]: 'angled45' }))}
-                              className={
-                                'px-1.5 py-0.5 rounded text-[0.58rem] font-bold cursor-pointer ' +
-                                (activeAngle === 'angled45' ? 'bg-slate-900 text-white' : 'text-slate-600')
-                              }
-                            >
-                              جانبي 3/4
-                            </button>
+                            <div className="pointer-events-auto inline-flex rounded-lg bg-white/95 p-0.5 border border-slate-200 shadow-xs">
+                              <button
+                                type="button"
+                                onClick={() => setCardAngles((prev) => ({ ...prev, [p.id]: 'front' }))}
+                                className={
+                                  'px-2 py-0.5 rounded text-[0.6rem] font-bold cursor-pointer ' +
+                                  (activeAngle === 'front' ? 'bg-slate-900 text-white' : 'text-slate-600')
+                                }
+                              >
+                                أمامي
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setCardAngles((prev) => ({ ...prev, [p.id]: 'angled45' }))}
+                                className={
+                                  'px-2 py-0.5 rounded text-[0.6rem] font-bold cursor-pointer ' +
+                                  (activeAngle === 'angled45' ? 'bg-slate-900 text-white' : 'text-slate-600')
+                                }
+                              >
+                                جانبي 3/4
+                              </button>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -1365,7 +1458,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                         </div>
                       )}
 
-                      <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-100 gap-1">
+                      <div className="flex items-center justify-between mt-auto pt-2.5 border-t border-slate-100 gap-1">
                         <span className="text-[#0F172A] font-extrabold text-sm">
                           <Pr x={activeVariant} />
                         </span>
@@ -1373,6 +1466,22 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                           {faceMatch(activeVariant, face)}%
                         </span>
                       </div>
+
+                      {/* Dedicated Full-Width Try-On Button (Separated from angle toggle to prevent mobile overlap) */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCurId(activeVariant.id);
+                          setFc(activeSwatch);
+                          setDetailId(null);
+                          setCamOn(true);
+                        }}
+                        className="mt-2.5 w-full py-2 px-2.5 rounded-xl bg-[#0284C7] hover:bg-[#0369A1] text-white text-[0.72rem] sm:text-xs font-extrabold shadow-xs cursor-pointer transition flex items-center justify-center gap-1.5"
+                      >
+                        <I n="camera" s={14} />
+                        <span>جرّب على وجهك</span>
+                      </button>
                     </div>
                   );
                 })}
@@ -1625,91 +1734,245 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                   <span>الإطار</span>
                   <Egp v={cur.price} />
                 </div>
-                <div className="flex justify-between text-slate-600">
-                  <span>نوع الكشف</span>
-                  <b className="text-[#0F172A]">{trackLabelAr}</b>
-                </div>
-                <div className="flex justify-between text-slate-600">
-                  <span>خاصية العدسة</span>
-                  <b className="text-[#0F172A]">
-                    {activeCatMeta.nameAr}
-                    {variantSuffix}
-                  </b>
-                </div>
-                <div className="flex justify-between text-slate-600">
-                  <span>ضغط العدسة</span>
-                  <b className="text-[#0284C7]">{indexLabelAr}</b>
-                </div>
-                <div className="flex justify-between text-slate-600 pb-1">
-                  <span>الشركة: {selectedBrandOption?.nameAr || '—'}</span>
-                  {selectedBrandOption?.isStoreDecide ? (
-                    <span dir="ltr" className="font-bold text-[#0284C7]">
-                      {fmt(selectedBrandOption.minPrice)}–{fmt(selectedBrandOption.maxPrice)} ج.م
-                    </span>
-                  ) : (
-                    <Egp v={lensEstimatedPrice} />
-                  )}
-                </div>
-                <div className="flex justify-between font-extrabold text-lg border-t border-[#E2E8F0] pt-3 text-[#0F172A]">
-                  <span>{selectedBrandOption?.isStoreDecide ? 'الإجمالي يبدأ من' : 'الإجمالي'}</span>
-                  <span className="text-[#D97706]">
-                    <Egp v={total} />
-                  </span>
-                </div>
+                {lensQuickMode ? (
+                  <>
+                    <div className="flex justify-between text-slate-600">
+                      <span>العدسات</span>
+                      <b className="text-[#059669]">تحديد العدسات مع أخصائي المحل (موصى به)</b>
+                    </div>
+                    <div className="flex justify-between font-extrabold text-lg border-t border-[#E2E8F0] pt-3 text-[#0F172A]">
+                      <span>سعر الإطار المبدئي</span>
+                      <span className="text-[#D97706]">
+                        <Egp v={cur.price} />
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex justify-between text-slate-600">
+                      <span>نوع الكشف</span>
+                      <b className="text-[#0F172A]">{trackLabelAr}</b>
+                    </div>
+                    <div className="flex justify-between text-slate-600">
+                      <span>خاصية العدسة</span>
+                      <b className="text-[#0F172A]">
+                        {activeCatMeta.nameAr}
+                        {variantSuffix}
+                      </b>
+                    </div>
+                    <div className="flex justify-between text-slate-600">
+                      <span>ضغط العدسة</span>
+                      <b className="text-[#0284C7]">{indexLabelAr}</b>
+                    </div>
+                    <div className="flex justify-between text-slate-600 pb-1">
+                      <span>الشركة: {selectedBrandOption?.nameAr || '—'}</span>
+                      {selectedBrandOption?.isStoreDecide ? (
+                        <span dir="ltr" className="font-bold text-[#0284C7]">
+                          {fmt(selectedBrandOption.minPrice)}–{fmt(selectedBrandOption.maxPrice)} ج.م
+                        </span>
+                      ) : (
+                        <Egp v={lensEstimatedPrice} />
+                      )}
+                    </div>
+                    <div className="flex justify-between font-extrabold text-lg border-t border-[#E2E8F0] pt-3 text-[#0F172A]">
+                      <span>{selectedBrandOption?.isStoreDecide ? 'الإجمالي يبدأ من' : 'الإجمالي'}</span>
+                      <span className="text-[#D97706]">
+                        <Egp v={total} />
+                      </span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
-            <div className="lg:col-span-3">
-              <div className="glass rounded-2xl p-3 mb-4">
-                <div className="flex items-center">
-                  {steps.map((s, i) => (
-                    <React.Fragment key={s}>
-                      <button
-                        type="button"
-                        onClick={() => setStep(i + 1)}
-                        className="flex flex-col items-center gap-1 flex-1 min-w-0 cursor-pointer"
-                      >
-                        <span
-                          className={
-                            'w-9 h-9 rounded-full flex items-center justify-center text-sm font-extrabold transition ' +
-                            (step === i + 1
-                              ? 'bg-[#0F172A] text-white shadow-sm'
-                              : step > i + 1
-                              ? 'bg-emerald-50 text-[#059669] border border-emerald-200'
-                              : 'bg-slate-100 text-slate-600')
-                          }
-                        >
-                          {step > i + 1 ? <I n="check" s={16} /> : i + 1}
-                        </span>
-                        <span
-                          className={
-                            'text-[.65rem] text-center leading-tight ' +
-                            (step === i + 1 ? 'font-bold text-[#0F172A]' : 'text-slate-500')
-                          }
-                        >
-                          {s}
-                        </span>
-                      </button>
-                      {i < 3 && (
-                        <span
-                          className={
-                            'h-0.5 w-4 sm:w-8 rounded ' +
-                            (step > i + 1 ? 'bg-[#059669]' : 'bg-slate-200')
-                          }
-                        />
-                      )}
-                    </React.Fragment>
-                  ))}
+            <div className="lg:col-span-3 space-y-4">
+              {/* Default Specialist Choice vs Optional Detailed Lens Selector */}
+              <div className="glass rounded-2xl p-4 space-y-3 bg-white">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="font-extrabold text-sm text-[#0F172A]">تحديد العدسات</div>
+                    <div className="text-xs text-slate-500">
+                      الخيار الافتراضي يترك تحديد العدسة الأنسب لأخصائي البصريات بعد مراجعة الكشف
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setLensQuickMode((v) => !v)}
+                    className={
+                      'px-3 py-1.5 rounded-xl border text-xs font-extrabold cursor-pointer transition ' +
+                      (!lensQuickMode
+                        ? 'bg-[#0284C7] text-white border-[#0284C7]'
+                        : 'bg-[#F8F9FA] text-[#0F172A] border-[#E2E8F0] hover:border-[#0284C7]')
+                    }
+                  >
+                    {lensQuickMode ? 'اختيار نوع العدسة (اختياري) ▾' : 'العودة للوضع السريع (موصى به) ✓'}
+                  </button>
                 </div>
+
+                {lensQuickMode && (
+                  <div className="space-y-3 pt-2 border-t border-slate-100">
+                    <div className="rounded-2xl border-2 border-[#059669] bg-emerald-50/70 p-3.5 flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-extrabold text-sm text-[#0F172A] flex items-center gap-1.5">
+                          <span>تحديد العدسات مع أخصائي المحل (موصى به)</span>
+                        </div>
+                        <div className="text-xs text-slate-600 mt-0.5 leading-5">
+                          ارفع صورة الكشف الطبي وسيرشّح لك أخصائي {storeTradeName} نوع العدسة والضغط الأنسب لكشفك ويؤكد السعر النهائي على واتساب.
+                        </div>
+                      </div>
+                      <span className="badge b-ok shrink-0">افتراضي ✓</span>
+                    </div>
+
+                    {!img ? (
+                      <div className="grid sm:grid-cols-2 gap-2.5">
+                        <label className="rounded-2xl border-2 border-dashed border-slate-300 bg-white hover:border-[#0284C7] p-4 text-center cursor-pointer block transition">
+                          <span className="text-[#0284C7] inline-block">
+                            <I n="upload" s={24} />
+                          </span>
+                          <div className="text-xs sm:text-sm font-bold text-[#0F172A] mt-1">
+                            ارفع صورة الكشف الطبي (اختياري)
+                          </div>
+                          <div className="text-[0.68rem] text-slate-500">من المعرض أو الكاميرا</div>
+                          <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" onChange={onFile} />
+                        </label>
+                        <button
+                          type="button"
+                          className="rounded-2xl border border-[#E2E8F0] bg-[#F8F9FA] hover:bg-slate-100 p-4 text-center cursor-pointer transition"
+                          onClick={() => {
+                            setRxLocalPreview(null);
+                            setImg('demo');
+                          }}
+                        >
+                          <span className="text-[#0284C7] inline-block">
+                            <I n="receipt" s={24} />
+                          </span>
+                          <div className="text-xs sm:text-sm font-bold text-[#0F172A] mt-1">
+                            استخدم كشف تجريبي
+                          </div>
+                          <div className="text-[0.68rem] text-slate-500">لتجربة الشاشة فقط</div>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center gap-3">
+                        <div className="w-20 shrink-0 rounded-lg overflow-hidden border border-slate-200">
+                          {img === 'demo' ? (
+                            <div className="text-xs p-2.5 bg-white text-[#0F172A] font-bold text-center">كشف تجريبي</div>
+                          ) : rxLocalPreview === 'pdf' || img.endsWith('.pdf') ? (
+                            <div className="text-xs p-2.5 bg-white text-[#0F172A] font-bold text-center">ملف PDF</div>
+                          ) : (
+                            <img src={rxLocalPreview || img} alt="كشف" className="w-full h-20 object-cover" />
+                          )}
+                        </div>
+                        <div className="flex-1 text-xs">
+                          <div className="font-bold text-[#0F172A]">تم إرفاق صورة الكشف ✓</div>
+                          <div className="text-slate-500">سيصل مباشرة لقسم الكشوفات عند التاجر</div>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-d btn-sm"
+                          onClick={() => {
+                            setRxLocalPreview(null);
+                            setImg(null);
+                          }}
+                        >
+                          <I n="trash" s={14} />
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <input
+                        className="inp"
+                        placeholder="اسمك"
+                        value={cname}
+                        onChange={(e) => setCname(e.target.value)}
+                      />
+                      <input
+                        className="inp"
+                        dir="ltr"
+                        placeholder="رقم الموبايل"
+                        value={cphone}
+                        onChange={(e) => setCphone(e.target.value)}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <input
+                        className="inp"
+                        dir="ltr"
+                        placeholder="مقاس PD (اختياري) مثال: 63"
+                        value={pd}
+                        onChange={(e) => setPd(e.target.value)}
+                      />
+                      <input
+                        className="inp"
+                        placeholder="ملاحظات إضافية (اختياري)"
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="btn bg-[#D97706] hover:bg-[#B45309] text-white w-full !py-3.5 text-sm sm:text-base shadow-sm"
+                      onClick={submitRx}
+                    >
+                      <I n="msg" s={18} /> إرسال الطلب والكشف للمحل عبر واتساب
+                    </button>
+                  </div>
+                )}
               </div>
 
-              <div className="fade" key={step}>
-                {/* Step 1: نوع الكشف */}
-                {step === 1 && (
-                  <div className="space-y-3">
-                    <h3 className="font-extrabold text-[#0F172A]">
-                      الخطوة 1: اختر نوع الكشف
-                    </h3>
+              {!lensQuickMode && (
+                <>
+                  <div className="glass rounded-2xl p-3 mb-4">
+                    <div className="flex items-center">
+                      {steps.map((s, i) => (
+                        <React.Fragment key={s}>
+                          <button
+                            type="button"
+                            onClick={() => setStep(i + 1)}
+                            className="flex flex-col items-center gap-1 flex-1 min-w-0 cursor-pointer"
+                          >
+                            <span
+                              className={
+                                'w-9 h-9 rounded-full flex items-center justify-center text-sm font-extrabold transition ' +
+                                (step === i + 1
+                                  ? 'bg-[#0F172A] text-white shadow-sm'
+                                  : step > i + 1
+                                  ? 'bg-emerald-50 text-[#059669] border border-emerald-200'
+                                  : 'bg-slate-100 text-slate-600')
+                              }
+                            >
+                              {step > i + 1 ? <I n="check" s={16} /> : i + 1}
+                            </span>
+                            <span
+                              className={
+                                'text-[.65rem] text-center leading-tight ' +
+                                (step === i + 1 ? 'font-bold text-[#0F172A]' : 'text-slate-500')
+                              }
+                            >
+                              {s}
+                            </span>
+                          </button>
+                          {i < 3 && (
+                            <span
+                              className={
+                                'h-0.5 w-4 sm:w-8 rounded ' +
+                                (step > i + 1 ? 'bg-[#059669]' : 'bg-slate-200')
+                              }
+                            />
+                          )}
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="fade" key={step}>
+                    {/* Step 1: نوع الكشف */}
+                    {step === 1 && (
+                      <div className="space-y-3">
+                        <h3 className="font-extrabold text-[#0F172A]">
+                          الخطوة 1: اختر نوع الكشف
+                        </h3>
                     <div className="space-y-2.5">
                       {LENS_TRACKS.map((tr) => {
                         const active = lensTrack === tr.key;
@@ -2151,24 +2414,26 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                     </button>
                   </div>
                 )}
-              </div>
+                  </div>
 
-              <div className="flex justify-between mt-4">
-                <button
-                  type="button"
-                  className="btn btn-g"
-                  disabled={step === 1}
-                  style={{ opacity: step === 1 ? 0.35 : 1 }}
-                  onClick={() => setStep((s) => Math.max(1, s - 1))}
-                >
-                  السابق
-                </button>
-                {step < 4 && (
-                  <button type="button" className="btn btn-p" onClick={() => setStep((s) => s + 1)}>
-                    التالي
-                  </button>
-                )}
-              </div>
+                  <div className="flex justify-between mt-4">
+                    <button
+                      type="button"
+                      className="btn btn-g"
+                      disabled={step === 1}
+                      style={{ opacity: step === 1 ? 0.35 : 1 }}
+                      onClick={() => setStep((s) => Math.max(1, s - 1))}
+                    >
+                      السابق
+                    </button>
+                    {step < 4 && (
+                      <button type="button" className="btn btn-p" onClick={() => setStep((s) => s + 1)}>
+                        التالي
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -2462,7 +2727,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                 const matchPct = faceMatch(item, face);
                 const dims = resolveProductOpticalDimensions(item);
                 const waText = encodeURIComponent(
-                  `مرحباً ${shop.name}، بعد المقارنة اخترت نظارة "${item.name}" (${item.modelCode || item.code}) بسعر ${fmt(item.price)} ج.م.`
+                  `مرحباً ${storeTradeName}، بعد المقارنة اخترت نظارة "${item.name}" (${item.modelCode || item.code}) بسعر ${fmt(item.price)} ج.م.`
                 );
                 return (
                   <div key={item.id} className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex flex-col gap-2.5">
@@ -2515,12 +2780,248 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                   typeof window !== 'undefined'
                     ? `${window.location.origin}/s/${shop.slug}?poll=${cmpA.id},${cmpB.id}`
                     : `https://optiverse.app/s/${shop.slug}?poll=${cmpA.id},${cmpB.id}`;
+                recordStoreFriendShare(shop.id);
                 setCompareModalOpen(false);
                 setModal({ t: 'vote', p: cmpA, p2: cmpB, link: pollLink });
               }}
               className="btn bg-[#0284C7] hover:bg-[#0369A1] text-white w-full !py-3 text-xs sm:text-sm"
             >
               <I n="share" s={16} /> اسأل أصدقاءك: أيهما أحلى عليّ؟ ⚖️
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Direct Frame Request & Medical Prescription Upload Modal */}
+      {directOrder && (
+        <Modal
+          title={`طلب الشمبر وإرسال الكشف — ${storeTradeName}`}
+          onClose={() => setDirectOrder(null)}
+          w="max-w-lg"
+        >
+          <div className="space-y-3.5">
+            {/* Selected Frame Summary */}
+            <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center gap-3">
+              <div className="rounded-xl bg-white border border-slate-200 p-2 shrink-0">
+                <MiniGlasses
+                  type={directOrder.product.type}
+                  frame={directOrder.color}
+                  lens={directOrder.product.lens}
+                  w={82}
+                  imageUrl={resolveStoreFrontUrl(directOrder.product)}
+                />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-extrabold text-sm text-[#0F172A] truncate">
+                  {directOrder.product.name}
+                </div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  المقاس: {directOrder.size} · {TYPES[directOrder.product.type]}
+                </div>
+                <div className="text-sm font-extrabold text-[#D97706] mt-1">
+                  <Pr x={directOrder.product} />
+                </div>
+              </div>
+            </div>
+
+            {/* Default Lens Choice + Optional Custom Lens Picker */}
+            <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-extrabold text-[#0F172A]">اختيار العدسات</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDirectLensMode((m) => (m === 'specialist' ? 'custom' : 'specialist'))
+                  }
+                  className={
+                    'px-2.5 py-1 rounded-lg border text-[0.7rem] font-extrabold cursor-pointer transition ' +
+                    (directLensMode === 'custom'
+                      ? 'bg-[#0284C7] text-white border-[#0284C7]'
+                      : 'bg-white text-[#0284C7] border-sky-200 hover:bg-sky-50')
+                  }
+                >
+                  {directLensMode === 'specialist'
+                    ? 'اختيار نوع العدسة (اختياري) ▾'
+                    : 'العودة للاختيار الموصى به ✓'}
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setDirectLensMode('specialist')}
+                className={
+                  'w-full rounded-xl p-3 border text-start cursor-pointer transition flex items-start justify-between gap-2 ' +
+                  (directLensMode === 'specialist'
+                    ? 'bg-emerald-50/90 border-[#059669] ring-1 ring-[#059669]'
+                    : 'bg-white border-slate-200 opacity-80 hover:opacity-100')
+                }
+              >
+                <div>
+                  <div className="font-extrabold text-xs sm:text-sm text-[#0F172A]">
+                    تحديد العدسات مع أخصائي المحل (موصى به)
+                  </div>
+                  <div className="text-[0.7rem] text-slate-600 mt-0.5 leading-5">
+                    يراجع أخصائي {storeTradeName} كشفك ويرشّح لك العدسة الأنسب لمقاسك قبل أي دفع.
+                  </div>
+                </div>
+                {directLensMode === 'specialist' && (
+                  <span className="badge b-ok shrink-0">موصى به ✓</span>
+                )}
+              </button>
+
+              {directLensMode === 'custom' && (
+                <div className="space-y-2 pt-1">
+                  <div className="text-[0.7rem] font-bold text-slate-600">
+                    اختر نوع العدسة المبدئي (اختياري):
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {shopLensChoices.map((lt) => {
+                      const active = directLensChoiceId === lt.id;
+                      return (
+                        <button
+                          key={lt.id}
+                          type="button"
+                          onClick={() => setDirectLensChoiceId(lt.id)}
+                          className={
+                            'p-2 rounded-xl border text-start text-xs cursor-pointer transition ' +
+                            (active
+                              ? 'border-[#0284C7] bg-sky-50 text-[#0F172A] font-extrabold'
+                              : 'border-slate-200 bg-white text-slate-700 font-bold')
+                          }
+                        >
+                          <div className="truncate">{lt.name}</div>
+                          <div className="text-[0.65rem] text-[#D97706] tabular-nums">
+                            +{fmt(lt.price)} ج.م
+                          </div>
+                        </button>
+                      );
+                    })}
+                    {!shopLensChoices.length &&
+                      LENS_CATEGORIES.map((catOpt) => {
+                        const active = directLensChoiceId === catOpt.key;
+                        return (
+                          <button
+                            key={catOpt.key}
+                            type="button"
+                            onClick={() => setDirectLensChoiceId(catOpt.key)}
+                            className={
+                              'p-2 rounded-xl border text-start text-xs cursor-pointer transition ' +
+                              (active
+                                ? 'border-[#0284C7] bg-sky-50 text-[#0F172A] font-extrabold'
+                                : 'border-slate-200 bg-white text-slate-700 font-bold')
+                            }
+                          >
+                            <div className="truncate">{catOpt.nameAr}</div>
+                          </button>
+                        );
+                      })}
+                  </div>
+                  {rxEnabled && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDirectOrder(null);
+                        closeFrameDetail();
+                        setLensQuickMode(false);
+                        setTab('lens');
+                      }}
+                      className="text-[0.7rem] font-extrabold text-[#0284C7] hover:underline cursor-pointer"
+                    >
+                      فتح محدد العدسات التفصيلي (الشركات ودرجة الضغط) ↗
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Direct Medical Prescription Upload */}
+            {!img ? (
+              <label className="rounded-2xl border-2 border-dashed border-sky-300 bg-sky-50/40 hover:bg-sky-50 p-3.5 text-center cursor-pointer block transition">
+                <span className="text-[#0284C7] inline-block">
+                  <I n="upload" s={22} />
+                </span>
+                <div className="text-xs sm:text-sm font-extrabold text-[#0F172A] mt-1">
+                  📸 ارفع صورة الكشف الطبي مباشرة (اختياري)
+                </div>
+                <div className="text-[0.68rem] text-slate-500">
+                  تصل فوراً لقسم طلبات الواتساب والكشوفات الطبية عند {storeTradeName}
+                </div>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,application/pdf"
+                  className="hidden"
+                  onChange={onFile}
+                />
+              </label>
+            ) : (
+              <div className="rounded-2xl bg-[#F8F9FA] border border-emerald-300 p-2.5 flex items-center gap-3">
+                <div className="w-16 h-16 shrink-0 rounded-lg overflow-hidden border border-slate-200 bg-white flex items-center justify-center">
+                  {img === 'demo' ? (
+                    <span className="text-[0.65rem] font-bold">كشف تجريبي</span>
+                  ) : rxLocalPreview === 'pdf' || img.endsWith('.pdf') ? (
+                    <span className="text-[0.65rem] font-bold">ملف PDF</span>
+                  ) : (
+                    <img src={rxLocalPreview || img} alt="الكشف الطبي" className="w-full h-full object-cover" />
+                  )}
+                </div>
+                <div className="flex-1 text-xs">
+                  <div className="font-extrabold text-[#059669]">✓ تم إرفاق صورة الكشف الطبي</div>
+                  <div className="text-slate-500">ستظهر للتاجر فور إرسال الطلب</div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-d btn-sm"
+                  onClick={() => {
+                    setRxLocalPreview(null);
+                    setImg(null);
+                  }}
+                >
+                  <I n="trash" s={14} />
+                </button>
+              </div>
+            )}
+
+            {/* Customer Contact & Submit */}
+            <div className="grid grid-cols-2 gap-2.5">
+              <input
+                className="inp"
+                placeholder="اسمك *"
+                value={cname}
+                onChange={(e) => setCname(e.target.value)}
+              />
+              <input
+                className="inp"
+                dir="ltr"
+                placeholder="رقم الموبايل *"
+                value={cphone}
+                onChange={(e) => setCphone(e.target.value)}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <input
+                className="inp"
+                dir="ltr"
+                placeholder="مقاس PD (اختياري)"
+                value={pd}
+                onChange={(e) => setPd(e.target.value)}
+              />
+              <input
+                className="inp"
+                placeholder="ملاحظات للمحل (اختياري)"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+            </div>
+
+            <button
+              type="button"
+              disabled={directSubmitting}
+              onClick={() => void submitDirectOrder()}
+              className="btn bg-[#D97706] hover:bg-[#B45309] text-white w-full !py-3.5 text-sm sm:text-base shadow-sm"
+            >
+              <I n="msg" s={18} />{' '}
+              {directSubmitting ? 'جاري إرسال الطلب...' : 'إرسال طلب الشمبر والكشف عبر واتساب'}
             </button>
           </div>
         </Modal>

@@ -1733,6 +1733,173 @@ export function createEyewearServerApp() {
     }
   });
 
+  // 8. Smart Paper Ledger OCR Scanner (Zero-credit extraction via gemini-3.5-flash-lite)
+  app.post('/api/merchant/scan-ledger', async (req: Request, res: Response) => {
+    try {
+      await authenticateRequest(req, { requireCredits: false, allowPreviewWithoutAuth: true });
+
+      const body = (req.body || {}) as { imageBase64?: unknown; mimeType?: unknown };
+      const rawBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64.trim() : '';
+      const rawMime = typeof body.mimeType === 'string' ? body.mimeType.trim() : 'image/jpeg';
+
+      if (!rawBase64) {
+        res.status(400).json({ error: 'يرجى اختيار صورة دفتر العملاء أو الفاتورة أولاً.' });
+        return;
+      }
+
+      const cleanBase64 = rawBase64.replace(/^data:[^;]+;base64,/, '');
+      if (!cleanBase64 || cleanBase64.length > 12_000_000) {
+        res.status(413).json({ error: 'حجم الصورة يتجاوز الحد المسموح به (9MB).' });
+        return;
+      }
+
+      const safeMimeType = ALLOWED_MIME_TYPES.has(rawMime) ? rawMime : 'image/jpeg';
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const ai = getGeminiClient();
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.5-flash-lite',
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                data: cleanBase64,
+                mimeType: safeMimeType,
+              },
+            },
+            {
+              text: [
+                'You are an expert Arabic/English optical store OCR assistant.',
+                'Inspect this photo of an eyewear shop paper ledger, handwritten notebook, invoice, or customer table.',
+                'Extract EVERY distinct customer order/row visible into a JSON array.',
+                'Rules:',
+                '- customerName: Customer full name in Arabic or English as written. Never invent names; if missing write "عميل دفتر".',
+                '- phone: Normalize Arabic-Indic digits (٠١٢٣٤٥٦٧٨٩) to English digits and normalize Egyptian mobile format to 01xxxxxxxxx (11 digits starting with 010, 011, 012, or 015). If country code +20 / 20 is present, convert to 01xxxxxxxxx. If unclear, return best digits visible or "".',
+                '- productName: Frame model, frame code, and/or lens description (e.g., "شنبر أسيتات + عدسة بلو كت"). Default to "نظارة طبية" if unspecified.',
+                `- orderDate: Date in YYYY-MM-DD format (convert Arabic numerals and DD/MM/YYYY or D/M/YY formats accurately). If year is omitted, assume ${todayIso.slice(0, 4)}. If no date is visible for a row, use "${todayIso}".`,
+                '- pd: Pupillary distance (e.g., "63") if written, else null.',
+                '- pricePaid: Total numeric price in EGP if written, else null.',
+                '- notes: Short optical/Rx or delivery note if written (e.g., R/L sphere/cyl summary), else null.',
+                '- Return an empty array [] if no customer rows are legible.',
+              ].join('\n'),
+            },
+          ],
+        },
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                customerName: { type: Type.STRING },
+                phone: { type: Type.STRING },
+                productName: { type: Type.STRING },
+                orderDate: { type: Type.STRING },
+                pd: { type: Type.STRING, nullable: true },
+                pricePaid: { type: Type.NUMBER, nullable: true },
+                notes: { type: Type.STRING, nullable: true },
+              },
+              required: ['customerName', 'phone', 'productName', 'orderDate'],
+            },
+          },
+        },
+      });
+
+      const toLatinDigits = (val: string) =>
+        val
+          .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+          .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
+
+      const normalizeEgyptianPhone = (raw: unknown): string => {
+        if (typeof raw !== 'string') return '';
+        let digits = toLatinDigits(raw).replace(/[^\d+]/g, '');
+        if (digits.startsWith('+20')) digits = '0' + digits.slice(3);
+        else if (digits.startsWith('0020')) digits = '0' + digits.slice(4);
+        else if (digits.startsWith('20') && digits.length >= 12) digits = '0' + digits.slice(2);
+        else if (/^1[0125]\d{8}$/.test(digits)) digits = '0' + digits;
+        digits = digits.replace(/\D/g, '');
+        const match = digits.match(/01[0125]\d{8}/);
+        if (match) return match[0];
+        return digits.slice(0, 15);
+      };
+
+      const normalizeDateStr = (raw: unknown): string => {
+        if (typeof raw !== 'string' || !raw.trim()) return todayIso;
+        const cleaned = toLatinDigits(raw.trim());
+        if (/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) {
+          const parsed = new Date(cleaned);
+          if (!Number.isNaN(parsed.getTime())) return cleaned;
+        }
+        const dmy = cleaned.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);
+        if (dmy) {
+          const dd = dmy[1].padStart(2, '0');
+          const mm = dmy[2].padStart(2, '0');
+          const yyyy = dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3];
+          const iso = `${yyyy}-${mm}-${dd}`;
+          if (!Number.isNaN(new Date(iso).getTime())) return iso;
+        }
+        return todayIso;
+      };
+
+      let rawArr: unknown[] = [];
+      try {
+        const parsed = JSON.parse(response.text || '[]') as unknown;
+        if (Array.isArray(parsed)) rawArr = parsed;
+      } catch {
+        rawArr = [];
+      }
+
+      const customers = rawArr
+        .slice(0, 60)
+        .map((entry) => {
+          const row = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+          const customerName =
+            typeof row.customerName === 'string' && row.customerName.trim()
+              ? row.customerName.trim().slice(0, 80)
+              : 'عميل دفتر';
+          const phone = normalizeEgyptianPhone(row.phone);
+          const productName =
+            typeof row.productName === 'string' && row.productName.trim()
+              ? row.productName.trim().slice(0, 120)
+              : 'نظارة طبية';
+          const orderDate = normalizeDateStr(row.orderDate);
+          const pd =
+            typeof row.pd === 'string' && row.pd.trim()
+              ? toLatinDigits(row.pd.trim()).slice(0, 20)
+              : undefined;
+          const priceNum =
+            typeof row.pricePaid === 'number' && Number.isFinite(row.pricePaid) && row.pricePaid > 0
+              ? Math.round(row.pricePaid)
+              : undefined;
+          const notes =
+            typeof row.notes === 'string' && row.notes.trim()
+              ? row.notes.trim().slice(0, 200)
+              : undefined;
+          return {
+            customerName,
+            phone,
+            productName,
+            orderDate,
+            ...(pd ? { pd } : {}),
+            ...(priceNum ? { pricePaid: priceNum } : {}),
+            ...(notes ? { notes } : {}),
+          };
+        })
+        .filter((c) => Boolean(c.customerName || c.phone));
+
+      res.json({ ok: true, customers });
+    } catch (err) {
+      const code = (err as Error & { statusCode?: number }).statusCode;
+      const message =
+        err instanceof Error ? err.message : 'تعذر قراءة صورة الدفتر حالياً — حاول بصورة أوضح.';
+      const status =
+        code ||
+        (message.includes('GEMINI_API_KEY') || message.includes('Settings > Secrets') ? 503 : 500);
+      res.status(status).json({ error: message });
+    }
+  });
+
   return app;
 }
 

@@ -1,20 +1,17 @@
 import React from 'react';
 import { FrameType } from '../types';
 import { Face } from './GlassesGraphics';
-import { I } from './Icons';
 
 export function PhotoUploadGuidelines() {
   return (
-    <div className="rounded-xl bg-sky-50 border border-sky-200 p-3 text-xs space-y-1.5 text-[#0F172A]">
-      <div className="font-extrabold text-[#0284C7] flex items-center gap-1.5">
-        <I n="spark" s={14} /> إرشادات تصوير الإطار للحصول على تجربة واقعية مطابقة للطبيعة:
+    <div className="rounded-xl bg-sky-50 border border-sky-200 p-3.5 text-xs space-y-1.5 text-[#0F172A]">
+      <div className="font-extrabold text-[#0284C7] text-[0.78rem]">
+        📸 طريقة التصوير السريعة (على الاستاند أو الرف):
       </div>
-      <ul className="grid sm:grid-cols-2 gap-x-4 gap-y-1 text-[0.72rem] text-slate-700 list-disc list-inside">
-        <li>لقطة أمامية مستقيمة تماماً على مستوى العين</li>
-        <li>ذات الأذرع المطوية للخلف بحيث تكون مخفية خلف الإطار</li>
-        <li>خلفية فاتحة سادة أو بلون موحد نظيف</li>
-        <li>إضاءة متساوية بدون ظلال قاسية أو لمعان حاد</li>
-        <li>ملء الإطار لعرض الصورة بأكبر مساحة ممكنة</li>
+      <ul className="space-y-1 text-[0.75rem] text-slate-700 leading-6">
+        <li>• صوّر النظارة من الأمام مباشرة في مستوى العين.</li>
+        <li>• اجعل النظارة في منتصف الكادر واضحة ومضيئة.</li>
+        <li>• لنظارات غيار الشمس (Clip-On): صوّر النظارة أولاً ثم الغيار بعدها مباشرة.</li>
       </ul>
     </div>
   );

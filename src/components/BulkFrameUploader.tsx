@@ -73,6 +73,7 @@ interface BulkFrameItem {
   qualityNoteAr?: string;
   approved: boolean;
   isPublished: boolean;
+  hiding?: boolean;
   mergedIntoExistingProduct?: boolean;
   showFacePreview?: boolean;
   previewClipOn?: boolean;
@@ -592,6 +593,7 @@ export function BulkFrameUploader({
   const [inspectItem, setInspectItem] = useState<BulkFrameItem | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  const hideTimersRef = useRef<number[]>([]);
   const itemsRef = useRef<BulkFrameItem[]>([]);
   const pickerRef = useRef<HTMLInputElement | null>(null);
   const splitSheetPickerRef = useRef<HTMLInputElement | null>(null);
@@ -633,6 +635,8 @@ export function BulkFrameUploader({
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      hideTimersRef.current.forEach((id) => window.clearTimeout(id));
+      hideTimersRef.current = [];
       itemsRef.current.forEach((it) => {
         if (it.originalThumbUrl && it.originalThumbUrl.startsWith('blob:')) {
           URL.revokeObjectURL(it.originalThumbUrl);
@@ -1917,15 +1921,44 @@ export function BulkFrameUploader({
     );
   };
 
+  const scheduleHideApprovedCards = (approvedIds: string[], triggerBatchComplete: boolean) => {
+    const idSet = new Set(approvedIds);
+    const timer = window.setTimeout(() => {
+      hideTimersRef.current = hideTimersRef.current.filter((t) => t !== timer);
+      setItems((prev) => {
+        const removed = prev.filter((x) => idSet.has(x.localId));
+        removed.forEach((x) => {
+          if (x.originalThumbUrl && x.originalThumbUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(x.originalThumbUrl);
+          }
+          if (x.glbPreviewUrl) URL.revokeObjectURL(x.glbPreviewUrl);
+        });
+        const remaining = prev.filter((x) => !idSet.has(x.localId));
+        if (remaining.length === 0) {
+          setProgress({ done: 0, total: 0 });
+          setCancelled(false);
+        }
+        return remaining;
+      });
+      if (triggerBatchComplete && typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        toast('🎉 تم نشر جميع النظارات في متجرك بنجاح!');
+      }
+    }, 500);
+    hideTimersRef.current.push(timer);
+  };
+
   const handleApproveCard = async (localId: string) => {
     const target = itemsRef.current.find((x) => x.localId === localId);
     if (!target || target.status !== 'ready' || !target.frontCatalogPath || !target.imagePath) {
       return;
     }
+    const isLastInBatch = !itemsRef.current.some((x) => x.localId !== localId && !x.approved);
     const next: BulkFrameItem = {
       ...target,
       approved: true,
       isPublished: true,
+      hiding: true,
     };
     setItems((prev) => prev.map((x) => (x.localId === localId ? next : x)));
 
@@ -1937,8 +1970,11 @@ export function BulkFrameUploader({
       setItems((prev) => prev.map((x) => (x.localId === localId ? { ...x, savedProductId: saved.id } : x)));
     }
     await deleteDraftFrame(localId);
-    toast(`تم اعتماد ونشر "${next.name}" في المتجر ✓`);
+    if (!isLastInBatch) {
+      toast(`تم اعتماد ونشر "${next.name}" في المتجر ✓`);
+    }
     onSaved?.();
+    scheduleHideApprovedCards([localId], isLastInBatch);
   };
 
   const handleApproveAllReady = async () => {
@@ -1947,23 +1983,34 @@ export function BulkFrameUploader({
     );
     if (!toApprove.length) return;
 
+    const toApproveIds = toApprove.map((it) => it.localId);
+    const idSet = new Set(toApproveIds);
+    const isLastInBatch = !itemsRef.current.some((x) => !idSet.has(x.localId) && !x.approved);
+
     const batch: { productId: string; patch: Partial<Omit<Product, 'id' | 'shopId'>> }[] = [];
+    setItems((prev) =>
+      prev.map((it) =>
+        idSet.has(it.localId) ? { ...it, approved: true, isPublished: true, hiding: true } : it
+      )
+    );
     for (const it of toApprove) {
       if (it.savedProductId) {
         batch.push({ productId: it.savedProductId, patch: { isPublished: true } });
+      } else {
+        const nextItem: BulkFrameItem = { ...it, approved: true, isPublished: true };
+        const { prod, images } = buildProductPayloadFromItem(activeShop.id, nextItem);
+        await addProduct(prod, images);
       }
       await deleteDraftFrame(it.localId);
     }
-    setItems((prev) =>
-      prev.map((it) =>
-        it.status === 'ready' && !it.approved ? { ...it, approved: true, isPublished: true } : it
-      )
-    );
     if (batch.length) {
       await updateProductsBatch(batch);
     }
-    toast(`تم اعتماد ونشر ${toApprove.length} نظارة في المتجر ✓`);
+    if (!isLastInBatch) {
+      toast(`تم اعتماد ونشر ${toApprove.length} نظارة في المتجر ✓`);
+    }
     onSaved?.();
+    scheduleHideApprovedCards(toApproveIds, isLastInBatch);
   };
 
   const handleRetryCard = async (localId: string) => {
@@ -2416,7 +2463,8 @@ export function BulkFrameUploader({
                 <div
                   key={it.localId}
                   className={
-                    'rounded-2xl p-3.5 flex flex-col gap-3 border transition bg-white ' +
+                    'rounded-2xl p-3.5 flex flex-col gap-3 border transition-all duration-300 bg-white ' +
+                    (it.hiding ? 'opacity-0 scale-95 pointer-events-none ' : '') +
                     (it.approved
                       ? 'border-emerald-400 ring-1 ring-emerald-300'
                       : needsCheck
@@ -2682,7 +2730,7 @@ export function BulkFrameUploader({
                             : 'bg-[#D97706] hover:bg-[#B45309] text-white cursor-pointer disabled:opacity-45')
                         }
                       >
-                        <I n="check" s={14} /> {it.approved ? 'تم الاعتماد ✓' : 'اعتماد'}
+                        <I n="check" s={14} /> {it.approved ? 'تم الاعتماد ✓' : 'اعتماد ✓'}
                       </button>
 
                       <button

@@ -9,6 +9,8 @@ import { I } from './Icons';
 import { Egp, Modal, Switch, fmt, waNum } from './UiShared';
 import { formatOpticalDimensions, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
 import { resolveStoreFrontUrl } from '../utils/bulkFrameProcessor';
+import { recordStoreFriendShare } from '../utils/storeAnalytics';
+import { canvasToBlob, loadImageToCanvas } from '../utils/visionPipeline';
 
 const SHAPE_TAG_OPTIONS: { key: FrameShapeTag; label: string }[] = [
   { key: 'round', label: 'دائري (Round)' },
@@ -166,6 +168,7 @@ function VoteModal({
           type="button"
           className="btn btn-g"
           onClick={() => {
+            recordStoreFriendShare(p.shopId);
             navigator.clipboard
               ?.writeText(link)
               .then(() => toast('تم نسخ رابط التصويت ✓'))
@@ -174,7 +177,13 @@ function VoteModal({
         >
           <I n="copy" s={15} /> نسخ الرابط
         </button>
-        <a className="btn btn-p" href={`https://wa.me/?text=${msg}`} target="_blank" rel="noreferrer">
+        <a
+          className="btn btn-p"
+          href={`https://wa.me/?text=${msg}`}
+          target="_blank"
+          rel="noreferrer"
+          onClick={() => recordStoreFriendShare(p.shopId)}
+        >
           <I n="msg" s={15} /> إرسال واتساب
         </a>
       </div>
@@ -585,13 +594,18 @@ export function Modals() {
     platformSettings,
     recordPayment,
     logAudit,
+    uploadRxPrescriptionToStorage,
   } = useOptiVerse();
   const [f, setF] = useState<Record<string, string>>({});
   const [done, setDone] = useState<Inquiry | null>(null);
+  const [checkoutRxRef, setCheckoutRxRef] = useState<string | null>(null);
+  const [checkoutRxPreview, setCheckoutRxPreview] = useState<string | null>(null);
 
   useEffect(() => {
     setF({});
     setDone(null);
+    setCheckoutRxRef(null);
+    setCheckoutRxPreview(null);
   }, [modal]);
 
   if (!modal) return null;
@@ -1273,10 +1287,42 @@ export function Modals() {
   }
 
   if (t === 'checkout' && typeof modal !== 'string' && modal.t === 'checkout') {
+    const storeDisplayName = (activeShop.name || '').trim() || 'المتجر';
     const deliveryEnabled = Boolean(activeShop.enableDeliveryService);
     const wantsDelivery = deliveryEnabled && f.dlv === 'delivery';
     const deliveryFee = wantsDelivery ? Number(activeShop.deliveryFee || 0) : 0;
     const grandTotal = modal.total + deliveryFee;
+
+    const handleCheckoutRxFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file) return;
+      const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+      try {
+        if (isPdf) {
+          if (file.size > 5 * 1024 * 1024) {
+            toast('حجم ملف الـ PDF يتجاوز الحد المسموح (5 ميجابايت)');
+            return;
+          }
+          const ref = await uploadRxPrescriptionToStorage(activeShop.id, file, 'pdf');
+          setCheckoutRxPreview('pdf');
+          setCheckoutRxRef(ref);
+          toast('تم إرفاق ملف الكشف الطبي ✓');
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => setCheckoutRxPreview(String(reader.result || ''));
+        reader.readAsDataURL(file);
+        const canvas = await loadImageToCanvas(file, 1600);
+        let blob = await canvasToBlob(canvas, 'image/jpeg', 0.85);
+        if (blob.size > 4_800_000) blob = await canvasToBlob(canvas, 'image/jpeg', 0.65);
+        const ref = await uploadRxPrescriptionToStorage(activeShop.id, blob, 'jpg');
+        setCheckoutRxRef(ref);
+        toast('تم رفع صورة الكشف الطبي ✓');
+      } catch {
+        toast('تعذر رفع ملف الكشف الطبي');
+      }
+    };
 
     const submit = async () => {
       if (!f.n || !f.p) {
@@ -1294,23 +1340,23 @@ export function Modals() {
       const q: Inquiry = {
         id: '#O-' + (400 + Math.floor(Math.random() * 500)),
         shopId: activeShop.id,
-        kind: 'order',
+        kind: checkoutRxRef ? 'rx' : 'order',
         cust: f.n.trim(),
         phone: f.p.trim(),
         frameName: cart.map((i) => (i.size ? `${i.name} (${i.size})` : i.name)).join(' + '),
         type: cart[0]?.type || 'aviator',
         frame: cart[0]?.frame || '#C9A24B',
         lens: cart[0]?.lens || '#475569',
-        lensName: 'طلب مباشر',
-        brandName: '—',
+        lensName: 'تحديد العدسات مع أخصائي المحل (موصى به)',
+        brandName: checkoutRxRef ? 'يُحدد مع المحل' : '—',
         extrasTxt: deliveryTxt,
         fp: modal.total,
         lensPrice: 0,
         add: deliveryFee,
         price: grandTotal,
-        img: null,
+        img: checkoutRxRef,
         notes: `الدفع عبر ${f.pay || 'InstaPay'} · ${deliveryTxt}`,
-        pd: '',
+        pd: f.pd?.trim() || '',
         deliveryAddress: wantsDelivery ? f.addr?.trim() : undefined,
         governorate: wantsDelivery ? (f.gov || activeShop.governorate || 'القاهرة') : undefined,
         deliveryFee,
@@ -1358,10 +1404,49 @@ export function Modals() {
     }
 
     return (
-      <Modal title="إتمام الطلب" onClose={close}>
+        <Modal title={`إتمام الطلب — ${storeDisplayName}`} onClose={close}>
         <div className="space-y-3">
           <input className="inp" placeholder="اسمك" value={f.n || ''} onChange={set('n')} />
           <input className="inp" dir="ltr" placeholder="رقم الموبايل" value={f.p || ''} onChange={set('p')} />
+          <input className="inp" dir="ltr" placeholder="مقاس PD (اختياري)" value={f.pd || ''} onChange={set('pd')} />
+
+          {!checkoutRxRef ? (
+            <label className="rounded-xl border-2 border-dashed border-sky-300 bg-sky-50/40 hover:bg-sky-50 p-3 text-center cursor-pointer block transition">
+              <div className="text-xs font-extrabold text-[#0F172A]">
+                📸 رفع صورة الكشف الطبي مباشرة (اختياري)
+              </div>
+              <div className="text-[0.68rem] text-slate-500 mt-0.5">
+                الافتراضي: تحديد العدسات مع أخصائي المحل (موصى به)
+              </div>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,application/pdf"
+                className="hidden"
+                onChange={handleCheckoutRxFile}
+              />
+            </label>
+          ) : (
+            <div className="rounded-xl bg-[#F8F9FA] border border-emerald-300 p-2.5 flex items-center gap-2.5">
+              <div className="w-12 h-12 rounded-lg overflow-hidden border border-slate-200 bg-white flex items-center justify-center shrink-0">
+                {checkoutRxPreview === 'pdf' ? (
+                  <span className="text-[0.65rem] font-bold">PDF</span>
+                ) : (
+                  <img src={checkoutRxPreview || ''} alt="كشف" className="w-full h-full object-cover" />
+                )}
+              </div>
+              <div className="flex-1 text-xs font-bold text-[#059669]">✓ تم إرفاق صورة الكشف الطبي</div>
+              <button
+                type="button"
+                className="btn btn-d btn-sm"
+                onClick={() => {
+                  setCheckoutRxRef(null);
+                  setCheckoutRxPreview(null);
+                }}
+              >
+                <I n="trash" s={13} />
+              </button>
+            </div>
+          )}
 
           {deliveryEnabled && (
             <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 space-y-2.5">

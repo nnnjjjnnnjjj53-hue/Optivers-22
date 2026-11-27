@@ -893,3 +893,70 @@ export async function pollBatchSplitSheetStatus(
     results: mapped,
   };
 }
+
+export interface ScannedLedgerCustomer {
+  localId: string;
+  customerName: string;
+  phone: string;
+  productName: string;
+  orderDate: string;
+  pd?: string;
+  pricePaid?: number;
+  notes?: string;
+}
+
+export async function scanPaperLedgerViaServer(
+  file: Blob,
+  authMeta?: {
+    authToken?: string | null;
+    shopId?: string | null;
+    role?: string | null;
+    planTier?: string | null;
+    isDemoAdminStore?: boolean;
+  }
+): Promise<ScannedLedgerCustomer[]> {
+  const { base64, mimeType } = await encodeCompactUploadBase64(file, 1600);
+  const response = await fetch('/api/merchant/scan-ledger', {
+    method: 'POST',
+    headers: buildAuthHeaders(authMeta),
+    body: JSON.stringify({
+      imageBase64: base64,
+      mimeType,
+    }),
+  });
+  const rawText = await response.text().catch(() => '');
+  let payload: {
+    ok?: boolean;
+    customers?: Array<{
+      customerName?: string;
+      phone?: string;
+      productName?: string;
+      orderDate?: string;
+      pd?: string;
+      pricePaid?: number;
+      notes?: string;
+    }>;
+    error?: string;
+  } = {};
+  if (rawText) {
+    try {
+      payload = JSON.parse(rawText) as typeof payload;
+    } catch {
+      throw new Error(`استجابة غير صالحة من الخادم (${response.status})`);
+    }
+  }
+  if (!response.ok) {
+    throw new Error(payload.error || `تعذر قراءة الدفتر (${response.status})`);
+  }
+  const rows = Array.isArray(payload.customers) ? payload.customers : [];
+  return rows.map((row, idx) => ({
+    localId: `scan-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+    customerName: row.customerName || 'عميل دفتر',
+    phone: row.phone || '',
+    productName: row.productName || 'نظارة طبية',
+    orderDate: row.orderDate || new Date().toISOString().slice(0, 10),
+    pd: row.pd,
+    pricePaid: row.pricePaid,
+    notes: row.notes,
+  }));
+}

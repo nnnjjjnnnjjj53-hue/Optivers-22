@@ -474,7 +474,8 @@ export async function generateSplitSheetViaServer(
     }),
   });
 
-  const payload = (await response.json().catch(() => ({}))) as {
+  const rawText = await response.text().catch(() => '');
+  let payload: {
     cacheHit?: boolean;
     cachedAssets?: SharedCachedAssets;
     solidModelTemplate?: SharedCachedAssets;
@@ -482,9 +483,21 @@ export async function generateSplitSheetViaServer(
     splitImageBase64?: string;
     mimeType?: string;
     error?: string;
-  };
+  } = {};
+  if (rawText) {
+    try {
+      payload = JSON.parse(rawText) as typeof payload;
+    } catch {
+      throw new Error(`استجابة غير صالحة من الخادم (${response.status}) — لم يُرجع الخادم بيانات JSON`);
+    }
+  }
 
-  if (response.ok && payload.cacheHit && payload.cachedAssets) {
+  if (
+    response.ok &&
+    payload.cacheHit &&
+    payload.cachedAssets &&
+    (payload.cachedAssets.frontCatalogPath || payload.cachedAssets.imagePath)
+  ) {
     return {
       cacheHit: true,
       cachedAssets: payload.cachedAssets,
@@ -492,7 +505,11 @@ export async function generateSplitSheetViaServer(
     };
   }
 
-  if (response.ok && payload.solidModelTemplate) {
+  if (
+    response.ok &&
+    payload.solidModelTemplate &&
+    (payload.solidModelTemplate.frontCatalogPath || payload.solidModelTemplate.imagePath)
+  ) {
     return {
       cacheHit: false,
       solidModelTemplate: payload.solidModelTemplate,
@@ -501,7 +518,9 @@ export async function generateSplitSheetViaServer(
   }
 
   if (!response.ok || !payload.splitImageBase64) {
-    throw new Error(payload.error || `فشل توليد لوحة الاستوديو (${response.status})`);
+    throw new Error(
+      payload.error || `فشل توليد لوحة الاستوديو (${response.status}): لم يتم استلام الصورة من الخادم`
+    );
   }
 
   return {
@@ -622,13 +641,21 @@ export async function submitBatchSplitSheetViaServer(params: {
     }),
   });
 
-  const payload = (await response.json().catch(() => ({}))) as {
+  const rawText = await response.text().catch(() => '');
+  let payload: {
     ok?: boolean;
     jobId?: string;
     mode?: 'turbo' | 'batch_api';
     total?: number;
     error?: string;
-  };
+  } = {};
+  if (rawText) {
+    try {
+      payload = JSON.parse(rawText) as typeof payload;
+    } catch {
+      throw new Error(`تعذر بدء المعالجة الجماعية (${response.status}) — استجابة غير صالحة`);
+    }
+  }
   if (!response.ok || !payload.jobId) {
     throw new Error(payload.error || `تعذر بدء المعالجة الجماعية (${response.status})`);
   }
@@ -669,7 +696,8 @@ export async function pollBatchSplitSheetStatus(
     headers: buildAuthHeaders(authMeta),
     signal,
   });
-  const payload = (await response.json().catch(() => ({}))) as {
+  const rawText = await response.text().catch(() => '');
+  let payload: {
     status?: 'processing' | 'completed' | 'failed';
     total?: number;
     done?: number;
@@ -684,7 +712,14 @@ export async function pollBatchSplitSheetStatus(
       }
     >;
     error?: string;
-  };
+  } = {};
+  if (rawText) {
+    try {
+      payload = JSON.parse(rawText) as typeof payload;
+    } catch {
+      throw new Error(`استجابة غير صالحة أثناء متابعة حالة الدفعة (${response.status})`);
+    }
+  }
   if (!response.ok) {
     throw new Error(payload.error || 'تعذر متابعة حالة الدفعة');
   }

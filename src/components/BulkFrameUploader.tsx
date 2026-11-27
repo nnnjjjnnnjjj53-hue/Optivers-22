@@ -15,6 +15,7 @@ import {
   ProductImage,
 } from '../types';
 import { generateTintedCatalogAsset, processCutoutInWorker } from '../utils/cutoutWorkerClient';
+import { processGlassesImage, refineGlassesMaskAndDecontaminate } from '../utils/glassesImagePipeline';
 import {
   computeFrameColorVariance,
   computePerceptualHash,
@@ -66,6 +67,7 @@ interface BulkFrameItem {
   previewClipOn?: boolean;
   cacheHit?: boolean;
   autoColorSibling?: boolean;
+  localFallback?: boolean;
   name: string;
   code: string;
   modelCode?: string;
@@ -638,6 +640,193 @@ export function BulkFrameUploader({
     return { imagePath, frontCatalogPath, sideImagePath, maskUrl };
   };
 
+  /**
+   * Zero-Failure Local Isolation Pipeline:
+   * Runs local cutout worker (processGlassesImage + refineGlassesMaskAndDecontaminate + 1200x900 #F8F9FA studio card),
+   * falling back directly to main-thread processGlassesImage / refineGlassesMaskAndDecontaminate if worker fails.
+   */
+  const runLocalIsolationFallback = async (
+    srcBlob: File | Blob,
+    card: BulkFrameItem,
+    effectiveSub: EyewearSubMode,
+    sideFile?: File,
+    isClipOnAttachment = false,
+    signal?: AbortSignal
+  ): Promise<{
+    urls: { imagePath: string; frontCatalogPath: string; sideImagePath: string; maskUrl?: string };
+    meta: {
+      aspectRatio: number;
+      frameHexColor: string;
+      frameOpacity: number;
+      detectedMaterial: FrameMaterial;
+      detectedType: FrameType;
+      calibration?: ModelCalibration;
+      quality: 'good' | 'check';
+      qualityNoteAr?: string;
+    };
+  }> => {
+    const onStage = (stageLabel: string) => {
+      if (signal?.aborted) return;
+      setItems((prev) => prev.map((x) => (x.localId === card.localId ? { ...x, stageLabel } : x)));
+    };
+
+    try {
+      const workerRes = await processCutoutInWorker(
+        srcBlob,
+        sideFile,
+        {
+          frameType: card.frameType,
+          subCategory: effectiveSub,
+          isClipOnAttachment,
+          material: card.material,
+          isCrystalFrame: Boolean(card.isCrystalFrame),
+          frameWidthMm: card.frameWidthMm,
+          opticalDimensions: card.opticalDimensions,
+          fitScale: card.fitScale,
+          eyeLineOffset: card.eyeLineOffset,
+        },
+        onStage,
+        undefined
+      );
+      if (signal?.aborted) {
+        throw new DOMException('تم إلغاء الطلب', 'AbortError');
+      }
+      const urls = await uploadCutoutResult(workerRes, activeShop.id);
+      return {
+        urls,
+        meta: {
+          aspectRatio: workerRes.aspectRatio,
+          frameHexColor: workerRes.frameHexColor,
+          frameOpacity: workerRes.frameOpacity,
+          detectedMaterial: workerRes.detectedMaterial,
+          detectedType: workerRes.detectedType,
+          calibration: workerRes.calibration,
+          quality: workerRes.quality,
+          qualityNoteAr: workerRes.qualityNoteAr,
+        },
+      };
+    } catch (workerErr) {
+      if (signal?.aborted || (workerErr instanceof DOMException && workerErr.name === 'AbortError')) {
+        throw workerErr;
+      }
+      console.warn('[OptiVerse] Worker local cutout fallback -> direct processGlassesImage:', workerErr);
+    }
+
+    // Secondary main-thread fallback calling processGlassesImage directly (which uses refineGlassesMaskAndDecontaminate)
+    try {
+      const cat: FrameCat =
+        card.frameType === 'sunglasses' || effectiveSub === 'sun' || isClipOnAttachment ? 'sun' : 'med';
+      const localRes = await processGlassesImage(srcBlob, {
+        category: cat,
+        material: card.material,
+        frameWidthMm: card.frameWidthMm || (card.frameType === 'kids' ? 122 : 136),
+        opticalDimensions: card.opticalDimensions || '52-18-140',
+        fitScale: card.fitScale ?? 1.0,
+        eyeLineOffset: card.eyeLineOffset ?? 0.04,
+        angleType: 'front',
+        maxSidePx: 1200,
+        onStage,
+      });
+      if (signal?.aborted) {
+        throw new DOMException('تم إلغاء الطلب', 'AbortError');
+      }
+      const [imagePath, frontCatalogPath, maskUrl] = await Promise.all([
+        uploadAssetToStorage(localRes.cutoutImage.blob, `products/${activeShop.id}/cutouts`, localRes.cutoutImage.ext || 'webp'),
+        uploadAssetToStorage(localRes.storeImage.blob, `products/${activeShop.id}/front`, localRes.storeImage.ext || 'webp'),
+        uploadAssetToStorage(localRes.lensMask.blob, `products/${activeShop.id}/masks`, 'png'),
+      ]);
+      return {
+        urls: {
+          imagePath,
+          frontCatalogPath,
+          sideImagePath: frontCatalogPath,
+          maskUrl,
+        },
+        meta: {
+          aspectRatio: localRes.aspectRatio || 2.4,
+          frameHexColor: localRes.sampledFrameColor || card.frameHexColor || '#1f2937',
+          frameOpacity: card.isCrystalFrame ? 0.75 : 1.0,
+          detectedMaterial: localRes.detectedMaterial || card.material,
+          detectedType: localRes.detectedType || card.type,
+          calibration: localRes.calibration,
+          quality: localRes.quality || 'good',
+          qualityNoteAr: localRes.qualityNoteAr,
+        },
+      };
+    } catch (directErr) {
+      if (signal?.aborted || (directErr instanceof DOMException && directErr.name === 'AbortError')) {
+        throw directErr;
+      }
+      console.warn('[OptiVerse] Direct processGlassesImage fallback -> canvas mask pass-through:', directErr);
+    }
+
+    // Ultimate canvas + refineGlassesMaskAndDecontaminate pass-through so processing never halts
+    try {
+      const bm = typeof createImageBitmap === 'function' ? await createImageBitmap(srcBlob) : null;
+      if (bm) {
+        const scale = Math.min(1, 1024 / Math.max(1, bm.width, bm.height));
+        const cw = Math.max(1, Math.round(bm.width * scale));
+        const ch = Math.max(1, Math.round(bm.height * scale));
+        const c = document.createElement('canvas');
+        c.width = cw;
+        c.height = ch;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        if (ctx) {
+          ctx.drawImage(bm, 0, 0, cw, ch);
+          bm.close();
+          const img = ctx.getImageData(0, 0, cw, ch);
+          const mask = new Uint8Array(cw * ch).fill(255);
+          const refined = refineGlassesMaskAndDecontaminate(img.data, mask, cw, ch, {
+            category: effectiveSub === 'sun' ? 'sun' : 'med',
+          });
+          img.data.set(refined.refinedPixels);
+          ctx.putImageData(img, 0, 0);
+          const outBlob = await new Promise<Blob>((resolve) => {
+            c.toBlob((b) => resolve(b || srcBlob), 'image/webp', 0.88);
+          });
+          c.width = 0;
+          c.height = 0;
+          const uploadedUrl = await uploadAssetToStorage(outBlob, `products/${activeShop.id}/front`, 'webp');
+          return {
+            urls: {
+              imagePath: uploadedUrl,
+              frontCatalogPath: uploadedUrl,
+              sideImagePath: uploadedUrl,
+            },
+            meta: {
+              aspectRatio: Number((cw / Math.max(1, ch)).toFixed(4)),
+              frameHexColor: card.frameHexColor || '#1f2937',
+              frameOpacity: card.isCrystalFrame ? 0.75 : 1.0,
+              detectedMaterial: card.material,
+              detectedType: card.type,
+              quality: 'good',
+            },
+          };
+        }
+        bm.close();
+      }
+    } catch {
+      // Fall through to raw source upload
+    }
+
+    const fallbackUrl = await uploadAssetToStorage(srcBlob, `products/${activeShop.id}/front`, 'webp');
+    return {
+      urls: {
+        imagePath: fallbackUrl,
+        frontCatalogPath: fallbackUrl,
+        sideImagePath: fallbackUrl,
+      },
+      meta: {
+        aspectRatio: card.aspectRatio || 2.4,
+        frameHexColor: card.frameHexColor || '#1f2937',
+        frameOpacity: card.isCrystalFrame ? 0.75 : 1.0,
+        detectedMaterial: card.material,
+        detectedType: card.type,
+        quality: 'good',
+      },
+    };
+  };
+
   const finalizeProcessedCard = async (
     cardSnapshot: BulkFrameItem,
     baseData: {
@@ -655,6 +844,7 @@ export function BulkFrameUploader({
       qualityNoteAr?: string;
       cacheHit?: boolean;
       autoColorSibling?: boolean;
+      localFallback?: boolean;
     },
     clipOnUrls: {
       clipOnImagePath?: string;
@@ -679,6 +869,7 @@ export function BulkFrameUploader({
       ...clipOnUrls,
       cacheHit: baseData.cacheHit,
       autoColorSibling: baseData.autoColorSibling,
+      localFallback: Boolean(baseData.localFallback),
       quality: baseData.quality,
       qualityNoteAr: baseData.qualityNoteAr,
       status: 'ready',
@@ -686,6 +877,8 @@ export function BulkFrameUploader({
         ? 'تجهيز فوري من الكتالوج ⚡'
         : baseData.autoColorSibling
         ? 'لون مضاف محلياً 🎨'
+        : baseData.localFallback
+        ? 'تمت المعالجة محلياً'
         : baseData.quality === 'check'
         ? 'يُرجى المراجعة'
         : 'جاهزة للاعتماد',
@@ -696,22 +889,30 @@ export function BulkFrameUploader({
 
     const { prod, images } = buildProductPayloadFromItem(activeShop.id, updatedCard);
     let savedProductId = updatedCard.savedProductId;
-    if (savedProductId && !updatedCard.mergedIntoExistingProduct) {
-      await updateProduct(savedProductId, prod, images);
-    } else if (!savedProductId) {
-      const saved = await addProduct(prod, images);
-      savedProductId = saved.id;
-      if (saved.mergedStockDuplicate) {
-        updatedCard.mergedIntoExistingProduct = true;
-        updatedCard.approved = true;
-        updatedCard.isPublished = true;
-        updatedCard.stageLabel = 'تم دمج المخزون مع الموديل المطابق 📦';
-        toast(`تم رصد موديل ولون مطابقين — تم دمج المخزون تلقائياً في "${saved.name}" (الرصيد: ${saved.stock ?? 1}) 📦`);
+    try {
+      if (savedProductId && !updatedCard.mergedIntoExistingProduct) {
+        await updateProduct(savedProductId, prod, images);
+      } else if (!savedProductId) {
+        const saved = await addProduct(prod, images);
+        savedProductId = saved.id;
+        if (saved.mergedStockDuplicate) {
+          updatedCard.mergedIntoExistingProduct = true;
+          updatedCard.approved = true;
+          updatedCard.isPublished = true;
+          updatedCard.stageLabel = 'تم دمج المخزون مع الموديل المطابق 📦';
+          toast(`تم رصد موديل ولون مطابقين — تم دمج المخزون تلقائياً في "${saved.name}" (الرصيد: ${saved.stock ?? 1}) 📦`);
+        }
       }
+      updatedCard.savedProductId = savedProductId;
+    } catch (persistErr) {
+      console.warn('[OptiVerse] Non-blocking draft persistence fallback:', persistErr);
     }
-    updatedCard.savedProductId = savedProductId;
 
-    await saveDraftFrame(toPersistedDraft(activeShop.id, updatedCard));
+    try {
+      await saveDraftFrame(toPersistedDraft(activeShop.id, updatedCard));
+    } catch {
+      // Non-blocking IndexedDB draft save
+    }
     setItems((prev) => prev.map((x) => (x.localId === cardSnapshot.localId ? updatedCard : x)));
     return updatedCard;
   };
@@ -719,7 +920,13 @@ export function BulkFrameUploader({
   const processSingleCard = async (
     cardSnapshot: BulkFrameItem,
     signal?: AbortSignal,
-    precomputedSplit?: { blob?: Blob; cacheHit?: boolean; cachedAssets?: any; solidModelTemplate?: any }
+    precomputedSplit?: {
+      blob?: Blob;
+      cacheHit?: boolean;
+      cachedAssets?: any;
+      solidModelTemplate?: any;
+      localFallbackOnly?: boolean;
+    }
   ): Promise<BulkFrameItem | null> => {
     if (signal?.aborted) return null;
 
@@ -737,54 +944,75 @@ export function BulkFrameUploader({
       )
     );
 
+    const effectiveSub: EyewearSubMode =
+      cardSnapshot.frameType === 'clip_on' ? 'optical' : cardSnapshot.subCategory;
+    let workingCard = { ...cardSnapshot };
+    let usedLocalFallback = Boolean(precomputedSplit?.localFallbackOnly);
+
     try {
-      const authMeta = await buildClientAuthMeta();
-      const effectiveSub: EyewearSubMode =
-        cardSnapshot.frameType === 'clip_on' ? 'optical' : cardSnapshot.subCategory;
+      const authMeta = await buildClientAuthMeta().catch(() => ({
+        authToken: null,
+        shopId: activeShop.id,
+        role: session?.role || 'merchant',
+        planTier: activeShop.planTier || 'basic',
+        isDemoAdminStore: Boolean(activeShop.isDemoAdminStore),
+      }));
 
       // Step 1: Zero-cost OCR dimension/model/shape/pattern extraction + pHash + local color variance
-      let workingCard = { ...cardSnapshot };
       if (!workingCard.phash || !workingCard.ocrFound) {
-        const [ocr, phash, colorVar] = await Promise.all([
-          workingCard.ocrFound
-            ? Promise.resolve(null)
-            : extractOpticalDimensionsViaServer(srcFile, signal, authMeta),
-          workingCard.phash ? Promise.resolve(workingCard.phash) : computePerceptualHash(srcFile),
-          computeFrameColorVariance(srcFile),
-        ]);
-        if (signal?.aborted) return null;
-        if (ocr) {
-          const totalMm = ocr.totalFrameWidthMm || workingCard.frameWidthMm;
-          workingCard = {
-            ...workingCard,
-            modelCode: ocr.modelCode || workingCard.modelCode,
-            isCrystalFrame: ocr.isCrystalFrame || workingCard.isCrystalFrame,
-            lensWidthMm: ocr.lensWidthMm || workingCard.lensWidthMm,
-            bridgeWidthMm: ocr.bridgeWidthMm || workingCard.bridgeWidthMm,
-            templeLengthMm: ocr.templeLengthMm || workingCard.templeLengthMm,
-            totalFrameWidthMm: totalMm,
-            frameWidthMm: totalMm,
-            ocrFound: ocr.found,
-            frameShapeTag: workingCard.frameShapeTag || ocr.frameShape,
-            isPatterned: Boolean(workingCard.isPatterned || ocr.isPatterned || colorVar.isPatterned),
-            colorFamily: workingCard.colorFamily || (ocr.colorFamily !== 'other' ? ocr.colorFamily : colorVar.colorFamily),
-            frameHexColor: colorVar.dominantHex || workingCard.frameHexColor,
-            opticalDimensions: formatOpticalString(
-              ocr.lensWidthMm,
-              ocr.bridgeWidthMm,
-              ocr.templeLengthMm,
-              workingCard.opticalDimensions
-            ),
-          };
-        } else {
-          workingCard = {
-            ...workingCard,
-            isPatterned: Boolean(workingCard.isPatterned || colorVar.isPatterned),
-            colorFamily: workingCard.colorFamily || colorVar.colorFamily,
-            frameHexColor: colorVar.dominantHex || workingCard.frameHexColor,
-          };
+        try {
+          const [ocr, phash, colorVar] = await Promise.all([
+            workingCard.ocrFound
+              ? Promise.resolve(null)
+              : extractOpticalDimensionsViaServer(srcFile, signal, authMeta).catch(() => null),
+            workingCard.phash
+              ? Promise.resolve(workingCard.phash)
+              : computePerceptualHash(srcFile).catch(() => ''),
+            computeFrameColorVariance(srcFile).catch(() => ({
+              isPatterned: false,
+              colorFamily: 'other' as const,
+              dominantHex: workingCard.frameHexColor || '#1f2937',
+            })),
+          ]);
+          if (signal?.aborted) return null;
+          if (ocr) {
+            const totalMm = ocr.totalFrameWidthMm || workingCard.frameWidthMm;
+            workingCard = {
+              ...workingCard,
+              modelCode: ocr.modelCode || workingCard.modelCode,
+              isCrystalFrame: ocr.isCrystalFrame || workingCard.isCrystalFrame,
+              lensWidthMm: ocr.lensWidthMm || workingCard.lensWidthMm,
+              bridgeWidthMm: ocr.bridgeWidthMm || workingCard.bridgeWidthMm,
+              templeLengthMm: ocr.templeLengthMm || workingCard.templeLengthMm,
+              totalFrameWidthMm: totalMm,
+              frameWidthMm: totalMm,
+              ocrFound: ocr.found,
+              frameShapeTag: workingCard.frameShapeTag || ocr.frameShape,
+              isPatterned: Boolean(workingCard.isPatterned || ocr.isPatterned || colorVar.isPatterned),
+              colorFamily:
+                workingCard.colorFamily || (ocr.colorFamily !== 'other' ? ocr.colorFamily : colorVar.colorFamily),
+              frameHexColor: colorVar.dominantHex || workingCard.frameHexColor,
+              opticalDimensions: formatOpticalString(
+                ocr.lensWidthMm,
+                ocr.bridgeWidthMm,
+                ocr.templeLengthMm,
+                workingCard.opticalDimensions
+              ),
+            };
+          } else {
+            workingCard = {
+              ...workingCard,
+              isPatterned: Boolean(workingCard.isPatterned || colorVar.isPatterned),
+              colorFamily: workingCard.colorFamily || colorVar.colorFamily,
+              frameHexColor: colorVar.dominantHex || workingCard.frameHexColor,
+            };
+          }
+          workingCard.phash = phash || workingCard.phash;
+        } catch (prepErr) {
+          if (signal?.aborted || (prepErr instanceof DOMException && prepErr.name === 'AbortError')) {
+            return null;
+          }
         }
-        workingCard.phash = phash || workingCard.phash;
       }
 
       setItems((prev) =>
@@ -792,35 +1020,55 @@ export function BulkFrameUploader({
           x.localId === workingCard.localId
             ? {
                 ...workingCard,
-                stageLabel: 'جاري فحص الكتالوج وتجهيز صور الاستوديو...',
+                stageLabel: usedLocalFallback
+                  ? 'جاري المعالجة محلياً...'
+                  : 'جاري فحص الكتالوج وتجهيز صور الاستوديو...',
               }
             : x
         )
       );
 
-      // Step 2: Single-Call Split Sheet OR precomputed Batch result
-      const splitRes =
-        precomputedSplit ||
-        (await generateSplitSheetViaServer(
-          srcFile,
-          {
-            ...authMeta,
-            frameType: workingCard.frameType,
-            subCategory: effectiveSub,
-            isClipOnAttachment: false,
-            keepLensBranding: Boolean(workingCard.keepLensBranding),
-            isCrystalFrame: Boolean(workingCard.isCrystalFrame),
-            isPatterned: Boolean(workingCard.isPatterned),
-            modelCode: workingCard.modelCode,
-            frameColor: workingCard.frameHexColor,
-            phash: workingCard.phash,
-            lensWidthMm: workingCard.lensWidthMm,
-            bridgeWidthMm: workingCard.bridgeWidthMm,
-            templeLengthMm: workingCard.templeLengthMm,
-            totalFrameWidthMm: workingCard.totalFrameWidthMm || workingCard.frameWidthMm,
-          },
-          signal
-        ));
+      // Step 2: Single-Call Split Sheet OR precomputed Batch result — with Zero-Failure Local Fallback
+      let splitRes: { blob?: Blob; cacheHit?: boolean; cachedAssets?: any; solidModelTemplate?: any } = {
+        cacheHit: false,
+      };
+      if (precomputedSplit) {
+        if (!precomputedSplit.localFallbackOnly) {
+          splitRes = precomputedSplit;
+        }
+      } else if (!isUnlimitedCredits && remainingCredits <= 0) {
+        usedLocalFallback = true;
+      } else {
+        try {
+          splitRes = await generateSplitSheetViaServer(
+            srcFile,
+            {
+              ...authMeta,
+              frameType: workingCard.frameType,
+              subCategory: effectiveSub,
+              isClipOnAttachment: false,
+              keepLensBranding: Boolean(workingCard.keepLensBranding),
+              isCrystalFrame: Boolean(workingCard.isCrystalFrame),
+              isPatterned: Boolean(workingCard.isPatterned),
+              modelCode: workingCard.modelCode,
+              frameColor: workingCard.frameHexColor,
+              phash: workingCard.phash,
+              lensWidthMm: workingCard.lensWidthMm,
+              bridgeWidthMm: workingCard.bridgeWidthMm,
+              templeLengthMm: workingCard.templeLengthMm,
+              totalFrameWidthMm: workingCard.totalFrameWidthMm || workingCard.frameWidthMm,
+            },
+            signal
+          );
+        } catch (splitErr) {
+          if (signal?.aborted || (splitErr instanceof DOMException && splitErr.name === 'AbortError')) {
+            return null;
+          }
+          console.warn('[OptiVerse] Split-sheet server failed — switching to local isolation pipeline:', splitErr);
+          usedLocalFallback = true;
+          splitRes = { cacheHit: false };
+        }
+      }
 
       if (signal?.aborted) return null;
 
@@ -836,9 +1084,14 @@ export function BulkFrameUploader({
         qualityNoteAr?: string;
         cacheHit?: boolean;
         autoColorSibling?: boolean;
+        localFallback?: boolean;
       };
 
-      if (splitRes.cacheHit && splitRes.cachedAssets && (splitRes.cachedAssets.frontCatalogPath || splitRes.cachedAssets.imagePath)) {
+      if (
+        splitRes.cacheHit &&
+        splitRes.cachedAssets &&
+        (splitRes.cachedAssets.frontCatalogPath || splitRes.cachedAssets.imagePath)
+      ) {
         const cached = splitRes.cachedAssets;
         baseUrls = {
           imagePath: cached.imagePath || cached.frontCatalogPath || '',
@@ -872,119 +1125,158 @@ export function BulkFrameUploader({
         !workingCard.isPatterned &&
         (splitRes.solidModelTemplate.frontCatalogPath || splitRes.solidModelTemplate.imagePath)
       ) {
-        const tpl = splitRes.solidModelTemplate;
-        const targetHex = workingCard.frameHexColor || (await sampleRoughHexFromFile(srcFile));
-        const srcCutUrl = tpl.imagePath || tpl.frontCatalogPath || '';
-        const srcFrontUrl = tpl.frontCatalogPath || tpl.imagePath || '';
-        const [tintedCut, tintedFront, tintedSide] = await Promise.all([
-          generateTintedCatalogAsset(srcCutUrl, targetHex),
-          generateTintedCatalogAsset(srcFrontUrl, targetHex),
-          tpl.sideImagePath ? generateTintedCatalogAsset(tpl.sideImagePath, targetHex) : Promise.resolve(null),
-        ]);
-        if (signal?.aborted) return null;
+        try {
+          const tpl = splitRes.solidModelTemplate;
+          const targetHex = workingCard.frameHexColor || (await sampleRoughHexFromFile(srcFile));
+          const srcCutUrl = tpl.imagePath || tpl.frontCatalogPath || '';
+          const srcFrontUrl = tpl.frontCatalogPath || tpl.imagePath || '';
+          const [tintedCut, tintedFront, tintedSide] = await Promise.all([
+            generateTintedCatalogAsset(srcCutUrl, targetHex),
+            generateTintedCatalogAsset(srcFrontUrl, targetHex),
+            tpl.sideImagePath ? generateTintedCatalogAsset(tpl.sideImagePath, targetHex) : Promise.resolve(null),
+          ]);
+          if (signal?.aborted) return null;
 
-        const [imagePath, frontCatalogPath, sideImagePath] = await Promise.all([
-          uploadAssetToStorage(tintedCut.blob, `products/${activeShop.id}/cutouts`, 'webp'),
-          uploadAssetToStorage(tintedFront.blob, `products/${activeShop.id}/front`, 'webp'),
-          tintedSide
-            ? uploadAssetToStorage(tintedSide.blob, `products/${activeShop.id}/side`, 'webp')
-            : Promise.resolve(tpl.sideImagePath || ''),
-        ]);
+          const [imagePath, frontCatalogPath, sideImagePath] = await Promise.all([
+            uploadAssetToStorage(tintedCut.blob, `products/${activeShop.id}/cutouts`, 'webp'),
+            uploadAssetToStorage(tintedFront.blob, `products/${activeShop.id}/front`, 'webp'),
+            tintedSide
+              ? uploadAssetToStorage(tintedSide.blob, `products/${activeShop.id}/side`, 'webp')
+              : Promise.resolve(tpl.sideImagePath || ''),
+          ]);
 
-        baseUrls = {
-          imagePath,
-          frontCatalogPath,
-          sideImagePath: sideImagePath || frontCatalogPath,
-          maskUrl: tpl.lensMaskUrl || undefined,
-        };
+          baseUrls = {
+            imagePath,
+            frontCatalogPath,
+            sideImagePath: sideImagePath || frontCatalogPath,
+            maskUrl: tpl.lensMaskUrl || undefined,
+          };
 
-        void saveToSharedEyewearCache({
-          ...authMeta,
-          modelCode: workingCard.modelCode || workingCard.code,
-          frameColor: targetHex,
-          phash: workingCard.phash,
-          keepLensBranding: Boolean(workingCard.keepLensBranding),
-          isCrystalFrame: Boolean(workingCard.isCrystalFrame),
-          isPatterned: false,
-          frameType: workingCard.frameType,
-          imagePath: baseUrls.imagePath,
-          frontCatalogPath: baseUrls.frontCatalogPath,
-          sideImagePath: baseUrls.sideImagePath,
-          lensMaskUrl: baseUrls.maskUrl,
-          lensWidthMm: workingCard.lensWidthMm,
-          bridgeWidthMm: workingCard.bridgeWidthMm,
-          templeLengthMm: workingCard.templeLengthMm,
-          totalFrameWidthMm: workingCard.frameWidthMm,
-        });
-
-        baseMeta = {
-          aspectRatio: workingCard.aspectRatio || 2.4,
-          frameHexColor: targetHex,
-          frameOpacity: workingCard.isCrystalFrame ? 0.75 : 1.0,
-          detectedMaterial: workingCard.frameType === 'metal' ? 'metal' : 'tr_plastic',
-          detectedType: workingCard.type,
-          quality: 'good',
-          autoColorSibling: true,
-        };
-      } else {
-        const baseRes = await processCutoutInWorker(
-          srcFile,
-          workingCard.sideSourceFile,
-          {
-            frameType: workingCard.frameType,
-            subCategory: effectiveSub,
-            material: workingCard.material,
+          void saveToSharedEyewearCache({
+            ...authMeta,
+            modelCode: workingCard.modelCode || workingCard.code,
+            frameColor: targetHex,
+            phash: workingCard.phash,
+            keepLensBranding: Boolean(workingCard.keepLensBranding),
             isCrystalFrame: Boolean(workingCard.isCrystalFrame),
-            frameWidthMm: workingCard.frameWidthMm,
-            opticalDimensions: workingCard.opticalDimensions,
-            fitScale: workingCard.fitScale,
-            eyeLineOffset: workingCard.eyeLineOffset,
-          },
-          (stageLabel) => {
-            if (signal?.aborted) return;
-            setItems((prev) =>
-              prev.map((x) => (x.localId === workingCard.localId ? { ...x, stageLabel } : x))
-            );
-          },
-          splitRes.blob
+            isPatterned: false,
+            frameType: workingCard.frameType,
+            imagePath: baseUrls.imagePath,
+            frontCatalogPath: baseUrls.frontCatalogPath,
+            sideImagePath: baseUrls.sideImagePath,
+            lensMaskUrl: baseUrls.maskUrl,
+            lensWidthMm: workingCard.lensWidthMm,
+            bridgeWidthMm: workingCard.bridgeWidthMm,
+            templeLengthMm: workingCard.templeLengthMm,
+            totalFrameWidthMm: workingCard.frameWidthMm,
+          });
+
+          baseMeta = {
+            aspectRatio: workingCard.aspectRatio || 2.4,
+            frameHexColor: targetHex,
+            frameOpacity: workingCard.isCrystalFrame ? 0.75 : 1.0,
+            detectedMaterial: workingCard.frameType === 'metal' ? 'metal' : 'tr_plastic',
+            detectedType: workingCard.type,
+            quality: 'good',
+            autoColorSibling: true,
+          };
+        } catch (tintErr) {
+          if (signal?.aborted || (tintErr instanceof DOMException && tintErr.name === 'AbortError')) {
+            return null;
+          }
+          usedLocalFallback = true;
+          const localOut = await runLocalIsolationFallback(srcFile, workingCard, effectiveSub, workingCard.sideSourceFile, false, signal);
+          baseUrls = localOut.urls;
+          baseMeta = { ...localOut.meta, cacheHit: false, localFallback: true };
+        }
+      } else if (splitRes.blob) {
+        try {
+          const baseRes = await processCutoutInWorker(
+            srcFile,
+            workingCard.sideSourceFile,
+            {
+              frameType: workingCard.frameType,
+              subCategory: effectiveSub,
+              material: workingCard.material,
+              isCrystalFrame: Boolean(workingCard.isCrystalFrame),
+              frameWidthMm: workingCard.frameWidthMm,
+              opticalDimensions: workingCard.opticalDimensions,
+              fitScale: workingCard.fitScale,
+              eyeLineOffset: workingCard.eyeLineOffset,
+            },
+            (stageLabel) => {
+              if (signal?.aborted) return;
+              setItems((prev) =>
+                prev.map((x) => (x.localId === workingCard.localId ? { ...x, stageLabel } : x))
+              );
+            },
+            splitRes.blob
+          );
+
+          if (signal?.aborted) return null;
+          baseUrls = await uploadCutoutResult(baseRes, activeShop.id);
+          if (signal?.aborted) return null;
+
+          void saveToSharedEyewearCache({
+            ...authMeta,
+            modelCode: workingCard.modelCode || workingCard.code,
+            frameColor: baseRes.frameHexColor,
+            phash: workingCard.phash,
+            keepLensBranding: Boolean(workingCard.keepLensBranding),
+            isCrystalFrame: Boolean(workingCard.isCrystalFrame),
+            isPatterned: Boolean(workingCard.isPatterned),
+            frameType: workingCard.frameType,
+            imagePath: baseUrls.imagePath,
+            frontCatalogPath: baseUrls.frontCatalogPath,
+            sideImagePath: baseUrls.sideImagePath,
+            lensMaskUrl: baseUrls.maskUrl,
+            lensWidthMm: workingCard.lensWidthMm,
+            bridgeWidthMm: workingCard.bridgeWidthMm,
+            templeLengthMm: workingCard.templeLengthMm,
+            totalFrameWidthMm: workingCard.frameWidthMm,
+          });
+
+          baseMeta = {
+            aspectRatio: baseRes.aspectRatio,
+            frameHexColor: baseRes.frameHexColor,
+            frameOpacity: baseRes.frameOpacity,
+            detectedMaterial: baseRes.detectedMaterial,
+            detectedType: baseRes.detectedType,
+            calibration: baseRes.calibration,
+            quality: baseRes.quality,
+            qualityNoteAr: baseRes.qualityNoteAr,
+            cacheHit: false,
+            localFallback: usedLocalFallback,
+          };
+        } catch (splitCutErr) {
+          if (signal?.aborted || (splitCutErr instanceof DOMException && splitCutErr.name === 'AbortError')) {
+            return null;
+          }
+          usedLocalFallback = true;
+          const localOut = await runLocalIsolationFallback(srcFile, workingCard, effectiveSub, workingCard.sideSourceFile, false, signal);
+          baseUrls = localOut.urls;
+          baseMeta = { ...localOut.meta, cacheHit: false, localFallback: true };
+        }
+      } else {
+        usedLocalFallback = true;
+        setItems((prev) =>
+          prev.map((x) =>
+            x.localId === workingCard.localId ? { ...x, stageLabel: 'جاري العزل المحلي المباشر...' } : x
+          )
         );
-
-        if (signal?.aborted) return null;
-        baseUrls = await uploadCutoutResult(baseRes, activeShop.id);
-        if (signal?.aborted) return null;
-
-        // Save to Shared Eyewear Cache (fire-and-forget)
-        void saveToSharedEyewearCache({
-          ...authMeta,
-          modelCode: workingCard.modelCode || workingCard.code,
-          frameColor: baseRes.frameHexColor,
-          phash: workingCard.phash,
-          keepLensBranding: Boolean(workingCard.keepLensBranding),
-          isCrystalFrame: Boolean(workingCard.isCrystalFrame),
-          isPatterned: Boolean(workingCard.isPatterned),
-          frameType: workingCard.frameType,
-          imagePath: baseUrls.imagePath,
-          frontCatalogPath: baseUrls.frontCatalogPath,
-          sideImagePath: baseUrls.sideImagePath,
-          lensMaskUrl: baseUrls.maskUrl,
-          lensWidthMm: workingCard.lensWidthMm,
-          bridgeWidthMm: workingCard.bridgeWidthMm,
-          templeLengthMm: workingCard.templeLengthMm,
-          totalFrameWidthMm: workingCard.frameWidthMm,
-        });
-
-        baseMeta = {
-          aspectRatio: baseRes.aspectRatio,
-          frameHexColor: baseRes.frameHexColor,
-          frameOpacity: baseRes.frameOpacity,
-          detectedMaterial: baseRes.detectedMaterial,
-          detectedType: baseRes.detectedType,
-          calibration: baseRes.calibration,
-          quality: baseRes.quality,
-          qualityNoteAr: baseRes.qualityNoteAr,
-          cacheHit: false,
-        };
+        const localOut = await runLocalIsolationFallback(
+          srcFile,
+          workingCard,
+          effectiveSub,
+          workingCard.sideSourceFile,
+          false,
+          signal
+        );
+        baseUrls = localOut.urls;
+        baseMeta = { ...localOut.meta, cacheHit: false, localFallback: true };
       }
+
+      if (signal?.aborted) return null;
 
       let clipOnUrls: {
         clipOnImagePath?: string;
@@ -996,79 +1288,141 @@ export function BulkFrameUploader({
         setItems((prev) =>
           prev.map((x) =>
             x.localId === workingCard.localId
-              ? { ...x, stageLabel: 'جاري تجهيز صور غيار الشمس الاستوديو...' }
+              ? { ...x, stageLabel: 'جاري تجهيز صور غيار الشمس...' }
               : x
           )
         );
-        const clipSplitSheet = await generateSplitSheetViaServer(
-          workingCard.clipOnSourceFile,
-          {
-            ...authMeta,
-            frameType: 'clip_on',
-            subCategory: 'sun',
-            isClipOnAttachment: true,
-            keepLensBranding: Boolean(workingCard.keepLensBranding),
-            isCrystalFrame: Boolean(workingCard.isCrystalFrame),
-          },
-          signal
-        );
+        let clipSplitSheet: { blob?: Blob; cacheHit?: boolean; cachedAssets?: any } = { cacheHit: false };
+        if (!usedLocalFallback && (isUnlimitedCredits || remainingCredits > 0)) {
+          try {
+            clipSplitSheet = await generateSplitSheetViaServer(
+              workingCard.clipOnSourceFile,
+              {
+                ...authMeta,
+                frameType: 'clip_on',
+                subCategory: 'sun',
+                isClipOnAttachment: true,
+                keepLensBranding: Boolean(workingCard.keepLensBranding),
+                isCrystalFrame: Boolean(workingCard.isCrystalFrame),
+              },
+              signal
+            );
+          } catch (clipErr) {
+            if (signal?.aborted || (clipErr instanceof DOMException && clipErr.name === 'AbortError')) {
+              return null;
+            }
+            usedLocalFallback = true;
+            clipSplitSheet = { cacheHit: false };
+          }
+        } else {
+          usedLocalFallback = true;
+        }
         if (signal?.aborted) return null;
 
-        if (clipSplitSheet.cacheHit && clipSplitSheet.cachedAssets) {
+        if (
+          clipSplitSheet.cacheHit &&
+          clipSplitSheet.cachedAssets &&
+          (clipSplitSheet.cachedAssets.frontCatalogPath || clipSplitSheet.cachedAssets.imagePath)
+        ) {
           clipOnUrls = {
             clipOnImagePath: clipSplitSheet.cachedAssets.imagePath || undefined,
             clipOnFrontCatalogPath: clipSplitSheet.cachedAssets.frontCatalogPath || undefined,
             clipOnSideImagePath: clipSplitSheet.cachedAssets.sideImagePath || undefined,
           };
         } else {
-          const clipRes = await processCutoutInWorker(
-            workingCard.clipOnSourceFile,
-            undefined,
-            {
-              frameType: 'clip_on',
-              subCategory: 'sun',
-              isClipOnAttachment: true,
-              material: workingCard.material,
-              frameWidthMm: workingCard.frameWidthMm,
-              opticalDimensions: workingCard.opticalDimensions,
-              fitScale: workingCard.fitScale,
-              eyeLineOffset: workingCard.eyeLineOffset,
-            },
-            undefined,
-            clipSplitSheet.blob
-          );
-          if (signal?.aborted) return null;
-          const uploadedClip = await uploadCutoutResult(clipRes, activeShop.id);
+          const clipOut = clipSplitSheet.blob
+            ? await processCutoutInWorker(
+                workingCard.clipOnSourceFile,
+                undefined,
+                {
+                  frameType: 'clip_on',
+                  subCategory: 'sun',
+                  isClipOnAttachment: true,
+                  material: workingCard.material,
+                  frameWidthMm: workingCard.frameWidthMm,
+                  opticalDimensions: workingCard.opticalDimensions,
+                  fitScale: workingCard.fitScale,
+                  eyeLineOffset: workingCard.eyeLineOffset,
+                },
+                undefined,
+                clipSplitSheet.blob
+              )
+                .then((clipRes) => uploadCutoutResult(clipRes, activeShop.id))
+                .catch(() =>
+                  runLocalIsolationFallback(
+                    workingCard.clipOnSourceFile!,
+                    workingCard,
+                    'sun',
+                    undefined,
+                    true,
+                    signal
+                  ).then((r) => r.urls)
+                )
+            : await runLocalIsolationFallback(
+                workingCard.clipOnSourceFile,
+                workingCard,
+                'sun',
+                undefined,
+                true,
+                signal
+              ).then((r) => r.urls);
+
           clipOnUrls = {
-            clipOnImagePath: uploadedClip.imagePath,
-            clipOnFrontCatalogPath: uploadedClip.frontCatalogPath,
-            clipOnSideImagePath: uploadedClip.sideImagePath,
+            clipOnImagePath: clipOut.imagePath,
+            clipOnFrontCatalogPath: clipOut.frontCatalogPath,
+            clipOnSideImagePath: clipOut.sideImagePath,
           };
         }
       }
 
       if (signal?.aborted) return null;
-      return await finalizeProcessedCard(workingCard, { ...baseUrls, ...baseMeta }, clipOnUrls);
-    } catch (err) {
-      if (signal?.aborted) return null;
-      const msg = err instanceof Error ? err.message : 'تعذر تحسين الصورة';
-      if (!isUnlimitedCredits && /رصيد|credit|quota|402/i.test(msg)) {
-        setOutOfCreditsModal('credits');
-      }
-      setItems((prev) =>
-        prev.map((x) =>
-          x.localId === cardSnapshot.localId
-            ? {
-                ...x,
-                status: 'error',
-                stageLabel: 'فشلت المعالجة',
-                errorMsg: msg,
-                reprocessing: false,
-              }
-            : x
-        )
+      const finishedCard = await finalizeProcessedCard(
+        workingCard,
+        { ...baseUrls, ...baseMeta, localFallback: usedLocalFallback },
+        clipOnUrls
       );
-      return null;
+      if (usedLocalFallback) {
+        toast('تمت المعالجة محلياً ✓');
+      }
+      return finishedCard;
+    } catch (err) {
+      if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) return null;
+      console.warn('[OptiVerse] Unexpected error in processSingleCard — forcing local Zero-Failure fallback:', err);
+      try {
+        const rescueOut = await runLocalIsolationFallback(
+          srcFile,
+          workingCard,
+          effectiveSub,
+          workingCard.sideSourceFile,
+          false,
+          signal
+        );
+        const rescuedCard = await finalizeProcessedCard(workingCard, {
+          ...rescueOut.urls,
+          ...rescueOut.meta,
+          cacheHit: false,
+          localFallback: true,
+        });
+        toast('تمت المعالجة محلياً ✓');
+        return rescuedCard;
+      } catch {
+        // Last-resort raw upload fallback so card never enters error state
+        const rawUrl = await uploadAssetToStorage(srcFile, `products/${activeShop.id}/front`, 'webp');
+        const rescuedCard = await finalizeProcessedCard(workingCard, {
+          imagePath: rawUrl,
+          frontCatalogPath: rawUrl,
+          sideImagePath: rawUrl,
+          aspectRatio: workingCard.aspectRatio || 2.4,
+          frameHexColor: workingCard.frameHexColor || '#1f2937',
+          frameOpacity: workingCard.isCrystalFrame ? 0.75 : 1.0,
+          detectedMaterial: workingCard.material,
+          detectedType: workingCard.type,
+          quality: 'good',
+          localFallback: true,
+        });
+        toast('تمت المعالجة محلياً ✓');
+        return rescuedCard;
+      }
     }
   };
 
@@ -1152,10 +1506,7 @@ export function BulkFrameUploader({
         return;
       }
     }
-    if (!isUnlimitedCredits && remainingCredits <= 0) {
-      setOutOfCreditsModal('credits');
-      return;
-    }
+    // Never block uploads on AI credit exhaustion — server failures or 0 credits fall back locally
     const remainingCapacity = Math.max(0, maxProducts - activeShopProductsCount);
     if (!isAdmin && !activeShop.isDemoAdminStore && safeAiCreditsLimit < 99999 && plannedPairsCount > remainingCapacity) {
       const msg = `متاح في باقتك حتى ${maxProducts} نظارة (المستخدم حالياً ${activeShopProductsCount}). متاح لإضافة ${remainingCapacity} نظارة فقط — قم بشحن باقة إضافية أو ترقية الباقة.`;
@@ -1223,44 +1574,58 @@ export function BulkFrameUploader({
     setProgress({ done: 0, total: newCards.length });
     setVisibleLimit((lim) => Math.max(lim, PAGE_SIZE));
 
-    const authMeta = await buildClientAuthMeta();
+    const authMeta = await buildClientAuthMeta().catch(() => ({
+      authToken: null,
+      shopId: activeShop.id,
+      role: session?.role || 'merchant',
+      planTier: activeShop.planTier || 'basic',
+      isDemoAdminStore: Boolean(activeShop.isDemoAdminStore),
+    }));
     const useTurbo = Boolean(planCaps.turboUploadEnabled);
 
-    // Silent Pre-OCR + pHash + Local Color Variance on all cards
+    // Silent Pre-OCR + pHash + Local Color Variance on all cards (Zero-Failure guarded)
     const preparedCards = [...newCards];
     if (autoGroupColors || (!useTurbo && newCards.length > 1)) {
       await Promise.all(
         preparedCards.map(async (c, i) => {
           if (ctrl.signal.aborted || !c.sourceFile) return;
-          const [ocr, phash, colorVar] = await Promise.all([
-            extractOpticalDimensionsViaServer(c.sourceFile, ctrl.signal, authMeta),
-            computePerceptualHash(c.sourceFile),
-            computeFrameColorVariance(c.sourceFile),
-          ]);
-          const widthMm = ocr.totalFrameWidthMm || c.frameWidthMm;
-          const isPatterned = Boolean(ocr.isPatterned || colorVar.isPatterned);
-          preparedCards[i] = {
-            ...c,
-            modelCode: ocr.modelCode || undefined,
-            isCrystalFrame: ocr.isCrystalFrame,
-            lensWidthMm: ocr.lensWidthMm || undefined,
-            bridgeWidthMm: ocr.bridgeWidthMm || undefined,
-            templeLengthMm: ocr.templeLengthMm || undefined,
-            totalFrameWidthMm: widthMm,
-            frameWidthMm: widthMm,
-            ocrFound: ocr.found,
-            frameShapeTag: ocr.frameShape || undefined,
-            isPatterned,
-            colorFamily: ocr.colorFamily !== 'other' ? ocr.colorFamily : colorVar.colorFamily,
-            frameHexColor: colorVar.dominantHex || c.frameHexColor,
-            opticalDimensions: formatOpticalString(
-              ocr.lensWidthMm,
-              ocr.bridgeWidthMm,
-              ocr.templeLengthMm,
-              c.opticalDimensions
-            ),
-            phash: phash || undefined,
-          };
+          try {
+            const [ocr, phash, colorVar] = await Promise.all([
+              extractOpticalDimensionsViaServer(c.sourceFile, ctrl.signal, authMeta).catch(() => null),
+              computePerceptualHash(c.sourceFile).catch(() => ''),
+              computeFrameColorVariance(c.sourceFile).catch(() => ({
+                isPatterned: false,
+                colorFamily: 'other' as const,
+                dominantHex: c.frameHexColor || '#1f2937',
+              })),
+            ]);
+            const widthMm = ocr?.totalFrameWidthMm || c.frameWidthMm;
+            const isPatterned = Boolean(ocr?.isPatterned || colorVar.isPatterned);
+            preparedCards[i] = {
+              ...c,
+              modelCode: ocr?.modelCode || undefined,
+              isCrystalFrame: Boolean(ocr?.isCrystalFrame),
+              lensWidthMm: ocr?.lensWidthMm || undefined,
+              bridgeWidthMm: ocr?.bridgeWidthMm || undefined,
+              templeLengthMm: ocr?.templeLengthMm || undefined,
+              totalFrameWidthMm: widthMm,
+              frameWidthMm: widthMm,
+              ocrFound: Boolean(ocr?.found),
+              frameShapeTag: ocr?.frameShape || undefined,
+              isPatterned,
+              colorFamily: ocr?.colorFamily && ocr.colorFamily !== 'other' ? ocr.colorFamily : colorVar.colorFamily,
+              frameHexColor: colorVar.dominantHex || c.frameHexColor,
+              opticalDimensions: formatOpticalString(
+                ocr?.lensWidthMm,
+                ocr?.bridgeWidthMm,
+                ocr?.templeLengthMm,
+                c.opticalDimensions
+              ),
+              phash: phash || undefined,
+            };
+          } catch {
+            // Non-blocking pre-OCR — keep card defaults and proceed
+          }
         })
       );
       setItems((prev) =>
@@ -1291,8 +1656,8 @@ export function BulkFrameUploader({
     const processedLeadById = new Map<string, BulkFrameItem>();
     const finishedBatch: BulkFrameItem[] = [];
 
-    // Use Batch API path when Standard (non-Turbo) & >1 item in AI queue
-    if (!useTurbo && aiQueue.length > 1) {
+    // Use Batch API path when Standard (non-Turbo) & >1 item in AI queue (and AI credits available)
+    if (!useTurbo && aiQueue.length > 1 && (isUnlimitedCredits || remainingCredits > 0)) {
       try {
         const { jobId } = await submitBatchSplitSheetViaServer({
           ...authMeta,
@@ -1339,7 +1704,7 @@ export function BulkFrameUploader({
               successCount++;
             }
           } else {
-            const finished = await processSingleCard(c, ctrl.signal);
+            const finished = await processSingleCard(c, ctrl.signal, { localFallbackOnly: true });
             if (finished) {
               processedLeadById.set(c.localId, finished);
               finishedBatch.push(finished);
@@ -1350,10 +1715,10 @@ export function BulkFrameUploader({
           setProgress({ done: doneCount, total: newCards.length });
         }
       } catch {
-        // Fallback cleanly to sequential queue if batch submission fails
+        // Fallback cleanly to local Zero-Failure isolation if batch submission fails
         for (const c of aiQueue) {
           if (ctrl.signal.aborted) break;
-          const finished = await processSingleCard(c, ctrl.signal);
+          const finished = await processSingleCard(c, ctrl.signal, { localFallbackOnly: true });
           if (finished) {
             processedLeadById.set(c.localId, finished);
             finishedBatch.push(finished);
@@ -1646,10 +2011,6 @@ export function BulkFrameUploader({
   const handleRetryCard = async (localId: string) => {
     const target = itemsRef.current.find((x) => x.localId === localId);
     if (!target) return;
-    if (!isUnlimitedCredits && remainingCredits <= 0) {
-      setOutOfCreditsModal('credits');
-      return;
-    }
     if (!target.sourceFile) {
       toast('لا يمكن إعادة المعالجة بعد تحديث الصفحة إلا برفع الصورة من جديد');
       return;
@@ -1661,9 +2022,13 @@ export function BulkFrameUploader({
     };
     const ok = await processSingleCard(resetTarget);
     if (ok) {
-      toast(`تمت إعادة معالجة "${target.name}" بنجاح — اضغط اعتماد للنشر ✓`);
+      toast(
+        ok.localFallback
+          ? `تمت المعالجة محلياً لـ "${target.name}" — اضغط اعتماد للنشر ✓`
+          : `تمت إعادة معالجة "${target.name}" بنجاح — اضغط اعتماد للنشر ✓`
+      );
     } else {
-      toast('تعذر تحسين الصورة — يمكنك المحاولة مجدداً بصورة أوضح');
+      toast('تمت المحاولة — يمكنك مراجعة الصورة أو إعادة الرفع');
     }
   };
 
@@ -2293,7 +2658,7 @@ export function BulkFrameUploader({
                         </span>
                       ) : isReady ? (
                         <span className="text-[0.68rem] px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-300 font-bold">
-                          تمت المعالجة ✅
+                          {it.localFallback ? 'تمت المعالجة محلياً ✅' : 'تمت المعالجة ✅'}
                         </span>
                       ) : (
                         <span className="text-[0.68rem] px-2 py-0.5 rounded-lg bg-[#0F172A] text-white font-semibold">

@@ -801,53 +801,75 @@ async function generateSplitSheetWithFallback(
   safeMimeType: string,
   prompt: string
 ): Promise<{ splitImageBase64: string; mimeType: string; modelUsed: string }> {
-  const models: ('gemini-3.1-flash-lite-image' | 'gemini-2.5-flash-image')[] = [
-    'gemini-3.1-flash-lite-image',
-    'gemini-2.5-flash-image',
-  ];
+  const errors: string[] = [];
 
-  let lastError: unknown = null;
-  for (const model of models) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                data: cleanBase64,
-                mimeType: safeMimeType,
-              },
+  // 1) Primary model: gemini-2.5-flash-image (multimodal image editing + split-sheet generation)
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              data: cleanBase64,
+              mimeType: safeMimeType,
             },
-            { text: prompt },
-          ],
-        },
-        config: {
-          imageConfig: {
-            aspectRatio: '16:9',
           },
+          { text: prompt },
+        ],
+      },
+      config: {
+        imageConfig: {
+          aspectRatio: '16:9',
         },
-      });
+      },
+    });
 
-      const parts = response.candidates?.[0]?.content?.parts ?? [];
-      for (const part of parts) {
-        if (part.inlineData?.data) {
-          return {
-            splitImageBase64: part.inlineData.data,
-            mimeType: part.inlineData.mimeType || 'image/png',
-            modelUsed: model,
-          };
-        }
+    const parts = response.candidates?.[0]?.content?.parts ?? [];
+    for (const part of parts) {
+      if (part.inlineData?.data) {
+        return {
+          splitImageBase64: part.inlineData.data,
+          mimeType: part.inlineData.mimeType || 'image/png',
+          modelUsed: 'gemini-2.5-flash-image',
+        };
       }
-      lastError = new Error(`لم يُرجع النموذج (${model}) صورة الاستوديو المزدوجة`);
-    } catch (err) {
-      lastError = err;
     }
+    errors.push('gemini-2.5-flash-image: لم يُرجع صورة في الاستجابة');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`gemini-2.5-flash-image: ${msg}`);
   }
 
-  throw lastError instanceof Error
-    ? lastError
-    : new Error('تعذر توليد لوحة الاستوديو (16:9) عبر النماذج الاحتياطية');
+  // 2) Automatic fallback: imagen-3.0-generate-002
+  try {
+    const imagenRes = await ai.models.generateImages({
+      model: 'imagen-3.0-generate-002',
+      prompt,
+      config: {
+        numberOfImages: 1,
+        aspectRatio: '16:9',
+      },
+    });
+    const imgObj = imagenRes?.generatedImages?.[0]?.image;
+    if (imgObj?.imageBytes) {
+      return {
+        splitImageBase64: imgObj.imageBytes,
+        mimeType: imgObj.mimeType || 'image/png',
+        modelUsed: 'imagen-3.0-generate-002',
+      };
+    }
+    errors.push('imagen-3.0-generate-002: لم يُرجع صورة في الاستجابة');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`imagen-3.0-generate-002: ${msg}`);
+  }
+
+  const finalError = new Error(
+    errors.filter(Boolean).join(' | ') || 'تعذر توليد لوحة الاستوديو (16:9) عبر نماذج الذكاء الاصطناعي'
+  );
+  (finalError as Error & { statusCode?: number }).statusCode = 502;
+  throw finalError;
 }
 
 export function createEyewearServerApp() {
@@ -1118,7 +1140,7 @@ export function createEyewearServerApp() {
   });
 
   // 4. Protected Single-Call 16:9 Split Sheet (Auth + Credit Guard + Shared Cache + Model Fallback)
-  app.post('/api/eyewear/split-sheet', async (req: Request, res: Response) => {
+  const handleSplitSheetRequest = async (req: Request, res: Response) => {
     try {
       const ctx = await authenticateRequest(req, { requireCredits: true, allowPreviewWithoutAuth: true });
       const body = (req.body || {}) as SplitSheetRequestBody;
@@ -1202,24 +1224,38 @@ export function createEyewearServerApp() {
       });
 
       const generated = await generateSplitSheetWithFallback(ai, cleanBase64, safeMimeType, prompt);
+      if (!generated?.splitImageBase64) {
+        res.status(502).json({
+          error: 'لم يُرجع نموذج الذكاء الاصطناعي صورة لوحة الاستوديو',
+        });
+        return;
+      }
+
       await deductAiCredit(ctx, 1);
 
       res.json({
+        ok: true,
         splitImageBase64: generated.splitImageBase64,
-        mimeType: generated.mimeType,
+        mimeType: generated.mimeType || 'image/png',
         modelUsed: generated.modelUsed,
         cacheHit: false,
       });
     } catch (err) {
-      const code = (err as Error & { statusCode?: number }).statusCode;
+      const rawCode = (err as Error & { statusCode?: number }).statusCode;
       const message =
         err instanceof Error ? err.message : 'تعذر الاتصال بخدمة توليد صور الاستوديو';
       const status =
-        code ||
-        (message.includes('GEMINI_API_KEY') || message.includes('Settings > Secrets') ? 503 : 500);
+        rawCode && rawCode >= 400
+          ? rawCode
+          : message.includes('GEMINI_API_KEY') || message.includes('Settings > Secrets')
+          ? 503
+          : 500;
       res.status(status).json({ error: message });
     }
-  });
+  };
+
+  app.post('/api/eyewear/split-sheet', handleSplitSheetRequest);
+  app.post('/api/eyewear/generate-studio-sheet', handleSplitSheetRequest);
 
   // 5. Gemini Batch API Bulk Processing Endpoint (50-item batch limit + 50% batch discount default vs Pro/Premium Turbo)
   app.post('/api/eyewear/batch-split-sheet', async (req: Request, res: Response) => {

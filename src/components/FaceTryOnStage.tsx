@@ -948,8 +948,8 @@ export function FaceTryOnStage({
   };
 
   // High-Res Screenshot Composite Builder (works seamlessly in both Live Camera & Photo mode)
-  const captureTryOnScreenshot = async () => {
-    if (shotBusy) return;
+  const captureTryOnComposite = async (openPreview = true): Promise<{ url: string; blob: Blob } | null> => {
+    if (shotBusy) return null;
     setShotBusy(true);
     setFlashActive(true);
     setTimeout(() => setFlashActive(false), 160);
@@ -992,14 +992,17 @@ export function FaceTryOnStage({
         const blob = await new Promise<Blob | null>((resolve) => out.toBlob((b) => resolve(b), 'image/png', 0.96));
         if (blob) {
           const url = URL.createObjectURL(blob);
-          setCapturedShot((prev) => {
-            if (prev) URL.revokeObjectURL(prev.url);
-            return { url, blob };
-          });
-          setShotToast(null);
+          const shot = { url, blob };
+          if (openPreview) {
+            setCapturedShot((prev) => {
+              if (prev) URL.revokeObjectURL(prev.url);
+              return shot;
+            });
+            setShotToast(null);
+          }
+          return shot;
         }
-        setShotBusy(false);
-        return;
+        return null;
       } else if (mode === 'photo' && photoSrc) {
         const baseImg = new Image();
         baseImg.crossOrigin = 'anonymous';
@@ -1019,8 +1022,7 @@ export function FaceTryOnStage({
         tScale = manualTransform.scale;
         tRot = manualTransform.rotDeg;
       } else {
-        setShotBusy(false);
-        return;
+        return null;
       }
 
       const capturedWebgl = mainIs3D ? ar3dRef.current?.renderAndCapture() : null;
@@ -1171,21 +1173,31 @@ export function FaceTryOnStage({
       const blob = await new Promise<Blob | null>((resolve) => out.toBlob((b) => resolve(b), 'image/png', 0.96));
       if (blob) {
         const url = URL.createObjectURL(blob);
-        setCapturedShot((prev) => {
-          if (prev) URL.revokeObjectURL(prev.url);
-          return { url, blob };
-        });
-        setShotToast(null);
+        const shot = { url, blob };
+        if (openPreview) {
+          setCapturedShot((prev) => {
+            if (prev) URL.revokeObjectURL(prev.url);
+            return shot;
+          });
+          setShotToast(null);
+        }
+        return shot;
       }
+      return null;
     } finally {
       setShotBusy(false);
     }
   };
 
-  const handleSaveScreenshot = () => {
-    if (!capturedShot) return;
+  const captureTryOnScreenshot = async () => {
+    await captureTryOnComposite(true);
+  };
+
+  const handleSaveScreenshot = (shotArg?: { url: string; blob: Blob }) => {
+    const targetShot = shotArg || capturedShot;
+    if (!targetShot) return;
     const a = document.createElement('a');
-    a.href = capturedShot.url;
+    a.href = targetShot.url;
     a.download = `optiverse-${product.code || 'tryon'}.png`;
     document.body.appendChild(a);
     a.click();
@@ -1193,26 +1205,63 @@ export function FaceTryOnStage({
     setShotToast('تم حفظ الصورة في جهازك ✓');
   };
 
-  const handleShareScreenshot = async () => {
-    if (!capturedShot) return;
+  const buildShareTextAndUrl = () => {
+    const pageUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const text = `شوف نظارة "${product.name}" عليّ بالكاميرا 3D — ما رأيك؟ 👓${pageUrl ? `\n${pageUrl}` : ''}`;
+    return { text, pageUrl };
+  };
+
+  const shareShotWithFriends = async (shotArg?: { url: string; blob: Blob }) => {
+    const targetShot = shotArg || capturedShot;
+    if (!targetShot) return;
+    const { text, pageUrl } = buildShareTextAndUrl();
     try {
-      const file = new File([capturedShot.blob], `optiverse-${product.code || 'tryon'}.png`, {
+      const file = new File([targetShot.blob], `optiverse-${product.code || 'tryon'}.png`, {
         type: 'image/png',
       });
       if (typeof navigator !== 'undefined' && navigator.canShare?.({ files: [file] })) {
         await navigator.share({
           files: [file],
           title: product.name,
-          text: `ما رأيك بنظارة "${product.name}"؟`,
+          text,
         });
         setShotToast('تمت المشاركة مع أصدقائك ✓');
         return;
       }
-    } catch {
-      // Fall through to save fallback
+      if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+        await navigator.share({
+          title: product.name,
+          text,
+          ...(pageUrl ? { url: pageUrl } : {}),
+        });
+        setShotToast('تمت المشاركة مع أصدقائك ✓');
+        return;
+      }
+    } catch (err) {
+      if ((err as { name?: string })?.name === 'AbortError') {
+        return;
+      }
     }
-    handleSaveScreenshot();
-    setShotToast('تم تنزيل الصورة لتشاركها فوراً عبر تطبيقك المفضل ✓');
+    // Fallback when native Web Share API is unavailable: keep user in camera and open preview + WhatsApp share
+    setCapturedShot((prev) => {
+      if (prev && prev.url !== targetShot.url) URL.revokeObjectURL(prev.url);
+      return targetShot;
+    });
+    setShotToast('الصورة جاهزة! اضغط على واتساب أو حفظ للمشاركة مع أصدقائك 📤');
+  };
+
+  const handleQuickShareFromCamera = async () => {
+    const shot = await captureTryOnComposite(false);
+    if (!shot) return;
+    setCapturedShot((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return shot;
+    });
+    await shareShotWithFriends(shot);
+  };
+
+  const handleShareScreenshot = async () => {
+    await shareShotWithFriends();
   };
 
   const showSplit = Boolean(splitMode && compareProduct && compareProduct.id !== product.id);
@@ -1618,16 +1667,25 @@ export function FaceTryOnStage({
       </div>
 
       {/* Bottom Clean Dock: Sits cleanly BELOW the camera viewport so it never blocks the face */}
-      <div className="shrink-0 w-full z-30 pt-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] px-3 bg-gradient-to-t from-black via-black/95 to-black/80 border-t border-white/10 flex flex-col items-center gap-2">
-        {/* Circular Screenshot Shutter Button + Direct Order CTA */}
+      <div className="shrink-0 w-full z-30 pt-2.5 pb-[max(1.25rem,env(safe-area-inset-bottom))] px-3 bg-gradient-to-t from-black via-black/95 to-black/80 border-t border-white/10 flex flex-col items-center gap-2.5">
+        {/* Circular Screenshot Shutter Button + Share with Friends + Direct Order CTA */}
         {(camStatus === 'streaming' || (mode === 'photo' && photoSrc)) && (
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
+            <button
+              type="button"
+              disabled={shotBusy}
+              onClick={handleQuickShareFromCamera}
+              className="h-11 px-3.5 rounded-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-extrabold text-xs sm:text-sm shadow-xl flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition active:scale-95"
+            >
+              <span>مشاركة مع الأصدقاء 📤</span>
+            </button>
+
             <button
               type="button"
               disabled={shotBusy}
               onClick={captureTryOnScreenshot}
               aria-label="التقاط صورة"
-              className="w-14 h-14 sm:w-16 sm:h-16 rounded-full border-[3.5px] border-white bg-white/20 backdrop-blur-md flex items-center justify-center shadow-2xl active:scale-95 transition-transform cursor-pointer"
+              className="w-14 h-14 sm:w-16 sm:h-16 rounded-full border-[3.5px] border-white bg-white/20 backdrop-blur-md flex items-center justify-center shadow-2xl active:scale-95 transition-transform cursor-pointer shrink-0"
             >
               <span className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-white flex items-center justify-center text-slate-900">
                 <I n="camera" s={20} />
@@ -1641,7 +1699,7 @@ export function FaceTryOnStage({
                   onOrderProduct(product.id);
                   closeFullscreen();
                 }}
-                className="h-11 px-4 rounded-full bg-[#D97706] hover:bg-[#B45309] text-white font-extrabold text-xs sm:text-sm shadow-xl flex items-center gap-1.5 cursor-pointer"
+                className="h-11 px-3.5 sm:px-4 rounded-full bg-[#D97706] hover:bg-[#B45309] text-white font-extrabold text-xs sm:text-sm shadow-xl flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition active:scale-95"
               >
                 <I n="bag" s={15} /> اطلب هذه النظارة
               </button>
@@ -1709,13 +1767,22 @@ export function FaceTryOnStage({
               </button>
             )}
 
-            <div className="grid grid-cols-2 gap-2.5">
-              <button type="button" onClick={handleSaveScreenshot} className="btn btn-g !py-2.5">
-                <I n="dl" s={16} /> حفظ الصورة
+            <div className="grid grid-cols-3 gap-2">
+              <button type="button" onClick={() => handleSaveScreenshot()} className="btn btn-g !py-2.5 text-xs">
+                <I n="dl" s={15} /> حفظ الصورة
               </button>
-              <button type="button" onClick={handleShareScreenshot} className="btn btn-g !py-2.5">
-                <I n="share" s={16} /> مشاركة فورية
+              <button type="button" onClick={handleShareScreenshot} className="btn btn-g !py-2.5 text-xs">
+                <I n="share" s={15} /> مشاركة فورية
               </button>
+              <a
+                href={`https://wa.me/?text=${encodeURIComponent(buildShareTextAndUrl().text)}`}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => handleSaveScreenshot()}
+                className="btn bg-emerald-600 hover:bg-emerald-700 text-white !py-2.5 text-xs font-extrabold"
+              >
+                <I n="msg" s={15} /> واتساب
+              </a>
             </div>
 
             <div className="grid grid-cols-2 gap-2.5 items-center">

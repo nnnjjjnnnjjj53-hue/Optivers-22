@@ -352,7 +352,10 @@ export async function authenticateRequest(
         }
         isDemoAdminStore = isDemoAdminStore || Boolean(shopRow.is_demo_admin_store);
 
-        if (!isSuperAdmin && !isDemoAdminStore && options.requireCredits) {
+        const rawLimit = Number(shopRow.ai_credits_limit ?? 25);
+        const hasUnlimitedPackage = Number.isFinite(rawLimit) && rawLimit >= 99999;
+
+        if (!isSuperAdmin && !isDemoAdminStore && !hasUnlimitedPackage && options.requireCredits) {
           const st = String(shopRow.status || 'trial');
           const trialExpired =
             st === 'trial' &&
@@ -368,9 +371,9 @@ export async function authenticateRequest(
           }
 
           const totalAllowed =
-            Number(shopRow.ai_credits_limit ?? 25) + Number(shopRow.topup_credits ?? 0);
+            (Number.isFinite(rawLimit) ? rawLimit : 25) + Number(shopRow.topup_credits ?? 0);
           const used = Number(shopRow.ai_credits_used ?? 0);
-          remainingCredits = Math.max(0, totalAllowed - used);
+          remainingCredits = Math.max(0, totalAllowed - (Number.isFinite(used) ? used : 0));
 
           if (remainingCredits <= 0) {
             const err = new Error(
@@ -381,9 +384,12 @@ export async function authenticateRequest(
           }
         } else {
           const totalAllowed =
-            Number(shopRow.ai_credits_limit ?? 250) + Number(shopRow.topup_credits ?? 0);
+            (Number.isFinite(rawLimit) ? rawLimit : 250) + Number(shopRow.topup_credits ?? 0);
           const used = Number(shopRow.ai_credits_used ?? 0);
-          remainingCredits = isSuperAdmin || isDemoAdminStore ? 999_999 : Math.max(0, totalAllowed - used);
+          remainingCredits =
+            isSuperAdmin || isDemoAdminStore || hasUnlimitedPackage
+              ? 999_999
+              : Math.max(0, totalAllowed - (Number.isFinite(used) ? used : 0));
         }
       }
     }
@@ -494,15 +500,16 @@ export async function authenticateRequest(
 }
 
 async function deductAiCredit(ctx: AuthContext, amount = 1): Promise<void> {
-  if (ctx.isAdmin || ctx.isDemoAdminStore || amount <= 0) return;
+  if (ctx.isAdmin || ctx.isDemoAdminStore || ctx.remainingCredits >= 99999 || amount <= 0) return;
 
   const supabaseAdmin = getSupabaseAdminClient();
   if (supabaseAdmin && ctx.shopId) {
     const { data: row } = await supabaseAdmin
       .from('shops')
-      .select('ai_credits_used')
+      .select('ai_credits_used, ai_credits_limit')
       .eq('id', ctx.shopId)
       .maybeSingle();
+    if (Number(row?.ai_credits_limit ?? 0) >= 99999) return;
     const curUsed = Number(row?.ai_credits_used ?? 0);
     await supabaseAdmin
       .from('shops')

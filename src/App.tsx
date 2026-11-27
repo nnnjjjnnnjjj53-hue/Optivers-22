@@ -11,16 +11,93 @@ import { OptiVerseProvider, useOptiVerse } from './services/optiverseStore';
 function AdminFloatingReturnBar() {
   const { session, route, navigate } = useOptiVerse();
   const path = (route || '/').split('?')[0];
+  const [collapsed, setCollapsed] = React.useState(false);
+  const [offset, setOffset] = React.useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const dragRef = React.useRef<{
+    active: boolean;
+    moved: boolean;
+    startX: number;
+    startY: number;
+    baseX: number;
+    baseY: number;
+  }>({ active: false, moved: false, startX: 0, startY: 0, baseX: 0, baseY: 0 });
+
   if (!session || (session.role !== 'super_admin' && session.role !== 'admin')) return null;
   if (path.startsWith('/admin')) return null;
 
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest('button[data-no-drag="true"]')) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = {
+      active: true,
+      moved: false,
+      startX: e.clientX,
+      startY: e.clientY,
+      baseX: offset.x,
+      baseY: offset.y,
+    };
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current.active) return;
+    const dx = e.clientX - dragRef.current.startX;
+    const dy = e.clientY - dragRef.current.startY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+      dragRef.current.moved = true;
+    }
+    setOffset({
+      x: dragRef.current.baseX + dx,
+      y: dragRef.current.baseY + dy,
+    });
+  };
+
+  const handlePointerUp = () => {
+    dragRef.current.active = false;
+  };
+
   return (
-    <button
-      onClick={() => navigate('/admin')}
-      className="fixed bottom-20 start-4 z-[99] px-3.5 py-2 rounded-full bg-slate-900/90 hover:bg-slate-900 text-amber-300 border border-amber-400/40 text-xs font-extrabold shadow-2xl flex items-center gap-1.5 backdrop-blur-md cursor-pointer transition hover:scale-[1.03]"
+    <div
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+      style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0)` }}
+      className="fixed top-16 left-4 z-[80] touch-none select-none flex items-center gap-1 rounded-full bg-slate-900/92 text-amber-300 border border-amber-400/40 shadow-2xl backdrop-blur-md p-1 transition-shadow"
     >
-      <span>العودة للإدارة العليا ↩</span>
-    </button>
+      {collapsed ? (
+        <button
+          type="button"
+          data-no-drag="true"
+          onClick={() => setCollapsed(false)}
+          title="إظهار زر الإدارة العليا"
+          className="px-2.5 py-1 rounded-full hover:bg-slate-800 text-xs font-extrabold cursor-pointer flex items-center gap-1"
+        >
+          <span>↩ الإدارة</span>
+        </button>
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={() => {
+              if (!dragRef.current.moved) navigate('/admin');
+            }}
+            className="px-2.5 py-1 rounded-full hover:bg-slate-800 text-xs font-extrabold cursor-pointer flex items-center gap-1.5"
+          >
+            <span>العودة للإدارة العليا ↩</span>
+          </button>
+          <button
+            type="button"
+            data-no-drag="true"
+            onClick={() => setCollapsed(true)}
+            aria-label="طي شريط الإدارة"
+            title="طي"
+            className="w-6 h-6 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 text-[0.7rem] font-bold flex items-center justify-center cursor-pointer"
+          >
+            −
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 

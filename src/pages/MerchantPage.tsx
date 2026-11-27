@@ -772,9 +772,13 @@ export function MerchantPage() {
 
   const planCaps = getShopPlanCapabilities(activeShop, platformSettings);
   const maxProducts = getShopMaxProducts(activeShop, platformSettings);
-  const creditsCap = (activeShop.aiCreditsLimit || planCaps.monthlyAiCredits || 110) + (activeShop.topupCredits || 0);
-  const creditsUsed = activeShop.aiCreditsUsed || 0;
-  const creditsRemaining = Math.max(0, creditsCap - creditsUsed);
+  const aiLimitNum = Number(activeShop.aiCreditsLimit ?? planCaps.monthlyAiCredits ?? 110) || 110;
+  const creditsCap = aiLimitNum + (Number(activeShop.topupCredits ?? 0) || 0);
+  const creditsUsed = Number(activeShop.aiCreditsUsed ?? 0) || 0;
+  const creditsRemaining =
+    activeShop.isDemoAdminStore || aiLimitNum >= 99999
+      ? 999999
+      : Math.max(0, creditsCap - creditsUsed);
 
   // CRM Customers & Flexible 3-Tier Recalls (Review -> Maintenance -> Exam)
   const reviewHours = Math.max(1, Number(activeShop.reminderReviewHours ?? 24));

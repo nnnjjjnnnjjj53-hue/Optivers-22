@@ -100,15 +100,16 @@ export function getShopPlanCapabilities(shop: Shop, settings: PlatformSettings):
     settings.plans.find((p) => p.tierKey === shop.planTier || p.name === shop.plan) ||
     settings.plans[0] ||
     PLANS0[0];
-  if (shop.isDemoAdminStore) {
+  const explicitLimit = Number(shop.aiCreditsLimit ?? 0);
+  if (shop.isDemoAdminStore || explicitLimit >= 99999) {
     return {
       ...matchedPlan,
-      tierKey: 'premium',
-      maxProducts: 1000,
-      monthlyAiCredits: 999999,
-      turboUploadEnabled: true,
-      cameraPdRulerEnabled: true,
-      featuredBoostEnabled: true,
+      tierKey: shop.isDemoAdminStore ? 'premium' : matchedPlan.tierKey,
+      maxProducts: shop.isDemoAdminStore ? 1000 : matchedPlan.maxProducts,
+      monthlyAiCredits: Math.max(999999, explicitLimit || 0),
+      turboUploadEnabled: shop.isDemoAdminStore ? true : matchedPlan.turboUploadEnabled,
+      cameraPdRulerEnabled: shop.isDemoAdminStore ? true : matchedPlan.cameraPdRulerEnabled,
+      featuredBoostEnabled: shop.isDemoAdminStore ? true : matchedPlan.featuredBoostEnabled,
     };
   }
   if (shop.status === 'trial') {
@@ -697,9 +698,18 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     isFeatured: Boolean(r.is_featured),
     recall6mEnabled: r.recall_6m_enabled !== false,
     recall12mEnabled: r.recall_12m_enabled !== false,
-    aiCreditsLimit: typeof r.ai_credits_limit === 'number' ? r.ai_credits_limit : 110,
-    aiCreditsUsed: typeof r.ai_credits_used === 'number' ? r.ai_credits_used : 0,
-    topupCredits: typeof r.topup_credits === 'number' ? r.topup_credits : 0,
+    aiCreditsLimit:
+      r.ai_credits_limit !== null && r.ai_credits_limit !== undefined && Number.isFinite(Number(r.ai_credits_limit))
+        ? Number(r.ai_credits_limit)
+        : 110,
+    aiCreditsUsed:
+      r.ai_credits_used !== null && r.ai_credits_used !== undefined && Number.isFinite(Number(r.ai_credits_used))
+        ? Number(r.ai_credits_used)
+        : 0,
+    topupCredits:
+      r.topup_credits !== null && r.topup_credits !== undefined && Number.isFinite(Number(r.topup_credits))
+        ? Number(r.topup_credits)
+        : 0,
     isDemoAdminStore: Boolean(r.is_demo_admin_store),
     planTier: r.plan_tier || 'basic',
     billingCycle: r.billing_cycle || 'monthly',
@@ -3023,8 +3033,12 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         aiCreditsLimit: 999999,
       };
       setShops((prev) => [demoShop!, ...prev]);
-    } else if (!demoShop.isDemoAdminStore) {
-      await updateShop(demoShop.id, { isDemoAdminStore: true, onboardingCompleted: true });
+    } else if (!demoShop.isDemoAdminStore || Number(demoShop.aiCreditsLimit ?? 0) < 99999) {
+      await updateShop(demoShop.id, {
+        isDemoAdminStore: true,
+        onboardingCompleted: true,
+        aiCreditsLimit: 999999,
+      });
     }
 
     setActiveShopSlug(demoShop.slug);

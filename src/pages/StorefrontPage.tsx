@@ -633,7 +633,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
         </div>
       )}
 
-      <div className="max-w-5xl mx-auto px-4 sm:px-5 pt-2">
+      <div className="max-w-5xl mx-auto px-4 sm:px-5 pt-2 pb-28">
         <div className="flex items-center justify-between py-4 gap-2">
           <div className="flex items-center gap-3 min-w-0">
             <span
@@ -853,7 +853,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
         )}
 
         {tab === 'shop' && detailProduct && (
-          <div className="mb-6">
+          <div className="mb-6 pb-28">
             <ProductDetailsView
               product={detailProduct}
               relatedProducts={products.filter((p) => p.id !== detailProduct.id)}

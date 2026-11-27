@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
-import { getShopMaxProducts, getShopPlanCapabilities, useOptiVerse } from '../services/optiverseStore';
+import { getShopMaxProducts, getShopPlanCapabilities, isAdminRole, useOptiVerse } from '../services/optiverseStore';
 import {
   EyewearFrameMode,
   EyewearSubMode,
@@ -477,9 +477,19 @@ export function BulkFrameUploader({
     [products, activeShop.id]
   );
   const canSingleQuickUpload = planCaps.tierKey === 'pro' || planCaps.tierKey === 'premium';
-  const creditsCap = (activeShop.aiCreditsLimit || planCaps.monthlyAiCredits || 110) + (activeShop.topupCredits || 0);
-  const creditsUsed = activeShop.aiCreditsUsed || 0;
-  const remainingCredits = activeShop.isDemoAdminStore ? 999999 : Math.max(0, creditsCap - creditsUsed);
+  const isAdmin = isAdminRole(session?.role);
+  const aiCreditsLimit = Number(activeShop.aiCreditsLimit ?? planCaps.monthlyAiCredits ?? 110);
+  const aiCreditsUsed = Number(activeShop.aiCreditsUsed ?? 0);
+  const topupCredits = Number(activeShop.topupCredits ?? 0);
+  const safeAiCreditsLimit = Number.isFinite(aiCreditsLimit) ? aiCreditsLimit : 110;
+  const safeAiCreditsUsed = Number.isFinite(aiCreditsUsed) ? aiCreditsUsed : 0;
+  const safeTopupCredits = Number.isFinite(topupCredits) ? topupCredits : 0;
+  const isUnlimitedCredits =
+    isAdmin || Boolean(activeShop.isDemoAdminStore) || safeAiCreditsLimit >= 99999;
+  const creditsCap = (safeAiCreditsLimit || Number(planCaps.monthlyAiCredits || 110)) + safeTopupCredits;
+  const remainingCredits = isUnlimitedCredits
+    ? 999999
+    : Math.max(0, creditsCap - safeAiCreditsUsed);
   const [outOfCreditsModal, setOutOfCreditsModal] = useState<'credits' | 'capacity' | null>(null);
 
   // Step 1: 5 Streamlined 1-Tap Category Cards + New Collection Mode
@@ -1042,7 +1052,7 @@ export function BulkFrameUploader({
     } catch (err) {
       if (signal?.aborted) return null;
       const msg = err instanceof Error ? err.message : 'تعذر تحسين الصورة';
-      if (/رصيد|credit|quota|402/i.test(msg)) {
+      if (!isUnlimitedCredits && /رصيد|credit|quota|402/i.test(msg)) {
         setOutOfCreditsModal('credits');
       }
       setItems((prev) =>
@@ -1142,12 +1152,12 @@ export function BulkFrameUploader({
         return;
       }
     }
-    if (!activeShop.isDemoAdminStore && remainingCredits <= 0) {
+    if (!isUnlimitedCredits && remainingCredits <= 0) {
       setOutOfCreditsModal('credits');
       return;
     }
     const remainingCapacity = Math.max(0, maxProducts - activeShopProductsCount);
-    if (!activeShop.isDemoAdminStore && plannedPairsCount > remainingCapacity) {
+    if (!isAdmin && !activeShop.isDemoAdminStore && safeAiCreditsLimit < 99999 && plannedPairsCount > remainingCapacity) {
       const msg = `متاح في باقتك حتى ${maxProducts} نظارة (المستخدم حالياً ${activeShopProductsCount}). متاح لإضافة ${remainingCapacity} نظارة فقط — قم بشحن باقة إضافية أو ترقية الباقة.`;
       setValidationAlert(msg);
       setOutOfCreditsModal('capacity');
@@ -1636,7 +1646,7 @@ export function BulkFrameUploader({
   const handleRetryCard = async (localId: string) => {
     const target = itemsRef.current.find((x) => x.localId === localId);
     if (!target) return;
-    if (!activeShop.isDemoAdminStore && remainingCredits <= 0) {
+    if (!isUnlimitedCredits && remainingCredits <= 0) {
       setOutOfCreditsModal('credits');
       return;
     }

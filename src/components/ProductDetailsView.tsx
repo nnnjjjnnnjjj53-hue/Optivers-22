@@ -55,16 +55,8 @@ export function ProductDetailsView({
   onGoCheckout,
   autoFocusReview = false,
 }: ProductDetailsViewProps) {
-  const { reviews, addProductReview, platformSettings, shops, setModal, toast } = useOptiVerse();
-  const rxEnabled = Boolean(
-    platformSettings.enableLensesSystem ?? platformSettings.enablePrescriptionLenses
-  );
+  const { reviews, addProductReview, shops, toast } = useOptiVerse();
   const productShop = shops.find((s) => s.id === product.shopId) || shops[0];
-  const shopSlug = productShop?.slug || '';
-  const shareVoteLink =
-    typeof window !== 'undefined'
-      ? `${window.location.origin}/s/${shopSlug}/f/${product.id}?poll=1`
-      : `https://optiverse.app/s/${shopSlug}/f/${product.id}?poll=1`;
 
   const colors =
     product.frameColors && product.frameColors.length > 0
@@ -543,60 +535,30 @@ export function ProductDetailsView({
             </div>
           </div>
 
-          {/* Action Buttons */}
+          {/* Action Buttons: Clean 2-Group Layout */}
           <div className="space-y-2.5 pt-2">
-            <button
-              type="button"
-              onClick={() => onTryOn(selectedColor, selectedSize)}
-              className="w-full py-3.5 px-4 rounded-xl bg-[#0284C7] hover:bg-[#0369A1] text-white font-extrabold text-sm flex items-center justify-center gap-2 transition cursor-pointer whitespace-nowrap shadow-sm"
-            >
-              <I n="camera" s={18} />
-              <span>
-                جرّب على وجهك <span dir="ltr" className="inline-block">(AI + 3D)</span>
-              </span>
-            </button>
+            {/* Group 1: Live 3D Camera (Primary) + Try on Photo */}
+            <div className="grid grid-cols-12 gap-2">
+              <button
+                type="button"
+                onClick={() => onTryOn(selectedColor, selectedSize)}
+                className="col-span-7 py-3.5 px-3 rounded-xl bg-[#0284C7] hover:bg-[#0369A1] text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm"
+              >
+                <I n="camera" s={17} />
+                <span>جرّب على وجهك الآن (كاميرا 3D) 👓</span>
+              </button>
 
-            <div className={rxEnabled ? 'grid grid-cols-3 gap-2' : 'grid grid-cols-2 gap-2'}>
               <button
                 type="button"
                 onClick={() => setActiveCanvasPanel((curPanel) => (curPanel === 'tryon' ? null : 'tryon'))}
-                className="py-2.5 px-2.5 rounded-xl bg-[#F8F9FA] hover:bg-slate-200 border border-[#E2E8F0] text-[#0F172A] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                className="col-span-5 py-3.5 px-2.5 rounded-xl bg-[#F8F9FA] hover:bg-slate-200 border border-[#E2E8F0] text-[#0F172A] font-extrabold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer"
               >
-                <I n="upload" s={14} />
-                <span>التجربة على صورتك</span>
+                <span>جرّب على صورتك 📷</span>
               </button>
-
-              <button
-                type="button"
-                onClick={() => setModal({ t: 'vote', p: product, link: shareVoteLink })}
-                className="py-2.5 px-2.5 rounded-xl bg-[#F8F9FA] hover:bg-slate-200 border border-[#E2E8F0] text-[#0F172A] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-              >
-                <I n="share" s={14} />
-                <span>مشاركة للأصدقاء</span>
-              </button>
-
-              {rxEnabled && (
-                <button
-                  type="button"
-                  onClick={() => setActiveCanvasPanel((curPanel) => (curPanel === 'rx' ? null : 'rx'))}
-                  className="py-2.5 px-2.5 rounded-xl bg-[#F8F9FA] hover:bg-slate-200 border border-[#E2E8F0] text-[#0F172A] font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-                >
-                  <I n="receipt" s={14} />
-                  <span>كشف النظر {initialRxUrl ? '✓' : ''}</span>
-                </button>
-              )}
             </div>
 
+            {/* Group 2: WhatsApp Order + Add to Cart */}
             <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => onAddToCart(selectedColor, selectedSize)}
-                className="py-3 px-3 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap"
-              >
-                <I n="bag" s={15} />
-                <span>إضافة إلى السلة</span>
-              </button>
-
               <button
                 type="button"
                 onClick={() => onGoCheckout(selectedColor, selectedSize)}
@@ -604,6 +566,15 @@ export function ProductDetailsView({
               >
                 <I n="msg" s={15} />
                 <span>اطلب الآن عبر واتساب</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onAddToCart(selectedColor, selectedSize)}
+                className="py-3 px-3 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+              >
+                <I n="bag" s={15} />
+                <span>إضافة للسلة</span>
               </button>
             </div>
           </div>

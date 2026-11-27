@@ -930,7 +930,7 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
       )}
 
       {showDebugBadge && active && (
-        <div className="absolute top-16 start-3 z-20 flex flex-col items-start gap-1.5" dir="ltr">
+        <div className="absolute top-16 start-3 z-20 flex flex-col items-start gap-1.5" dir="rtl">
           <button
             type="button"
             onClick={() => setDebugOpen((o) => !o)}
@@ -943,12 +943,12 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
               }
             />
             <span>
-              {debugStats.faceDetected ? 'Face detected' : 'No face — move closer, improve lighting'}
+              {debugStats.faceDetected ? 'تم اكتشاف الوجه ✓' : 'وجّه الكاميرا لوجهك في إضاءة واضحة 👓'}
             </span>
           </button>
 
           {debugOpen && (
-            <div className="px-2.5 py-2 rounded-lg bg-slate-950/88 border border-white/15 text-[0.68rem] font-mono text-slate-200 space-y-0.5 shadow-lg">
+            <div dir="ltr" className="px-2.5 py-2 rounded-lg bg-slate-950/88 border border-white/15 text-[0.68rem] font-mono text-slate-200 space-y-0.5 shadow-lg">
               <div>renderer: {debugStats.backend}</div>
               <div>delegate: {debugStats.delegate}</div>
               <div>

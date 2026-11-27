@@ -1309,6 +1309,9 @@ export function FaceTryOnStage({
                 }}
               />
             </label>
+            <p className="text-[0.7rem] text-slate-600 text-center leading-5 pt-0.5">
+              🔒 خصوصيتك محمية: الكاميرا تعمل لحظياً على جهازك فقط ولا يتم التقاط أو حفظ أي صور.
+            </p>
           </div>
         )}
 
@@ -1706,6 +1709,10 @@ export function FaceTryOnStage({
             )}
           </div>
         )}
+
+        <p className="text-[0.68rem] text-white/75 text-center leading-4 px-2">
+          🔒 خصوصيتك محمية: الكاميرا تعمل لحظياً على جهازك فقط ولا يتم التقاط أو حفظ أي صور.
+        </p>
 
         {/* Simple Horizontal Strip to Switch Between Available Glasses */}
         <div className="w-full max-w-2xl flex items-center gap-2.5 overflow-x-auto noscroll px-1 pb-0.5">

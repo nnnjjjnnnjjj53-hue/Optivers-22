@@ -1016,6 +1016,13 @@ export function createEyewearServerApp() {
                 '4. Frame silhouette shape (frame_shape): choose one of round, oval, square, cat_eye, aviator.',
                 '5. Whether the frame has a multi-color or patterned texture (is_patterned=true for tortoiseshell, havana, leopard, marbled, two-tone, mix-color acetate; false for single solid color or uniform metal).',
                 '6. Frame color family (color_family): choose one of black, brown_tortoise, clear, metal, other.',
+                '7. Automatic frame classification mode (auto_frame_mode): choose strictly one of prescription, sunglasses, clip_on, kids, metal:',
+                '   - kids: compact pediatric/children proportions or child styling/sizing (e.g. lens width <= 46mm).',
+                '   - clip_on: frame visibly wearing a magnetic sun clip-on visor attachment over an optical rim.',
+                '   - sunglasses: dark, tinted, gradient, or mirrored sun lenses (not clear optical lenses).',
+                '   - metal: thin metal wire, half-rim (nylor), or rimless frame with clear optical lenses.',
+                '   - prescription: standard acetate/plastic optical frame with clear lenses.',
+                '8. Lens tint state (lens_tint): choose strictly clear (transparent/empty optical lenses) or tinted (dark, colored, gradient, or mirrored sunglasses/clip-on lenses).',
                 'Extract three integer millimeter values if clearly legible: lens_width_mm (35..70), bridge_width_mm (10..30), temple_length_mm (110..165).',
                 'If sizing numbers are absent, set found=false and return null for unknown numbers. Never invent numbers.',
               ].join('\n'),
@@ -1042,9 +1049,25 @@ export function createEyewearServerApp() {
                 type: Type.STRING,
                 enum: ['black', 'brown_tortoise', 'clear', 'metal', 'other'],
               },
+              auto_frame_mode: {
+                type: Type.STRING,
+                enum: ['prescription', 'sunglasses', 'clip_on', 'kids', 'metal'],
+              },
+              lens_tint: {
+                type: Type.STRING,
+                enum: ['clear', 'tinted'],
+              },
               raw_text: { type: Type.STRING, nullable: true },
             },
-            required: ['found', 'is_crystal_frame', 'frame_shape', 'is_patterned', 'color_family'],
+            required: [
+              'found',
+              'is_crystal_frame',
+              'frame_shape',
+              'is_patterned',
+              'color_family',
+              'auto_frame_mode',
+              'lens_tint',
+            ],
           },
         },
       });
@@ -1066,6 +1089,7 @@ export function createEyewearServerApp() {
           : null;
       const allowedShapes = new Set(['round', 'oval', 'square', 'cat_eye', 'aviator']);
       const allowedColors = new Set(['black', 'brown_tortoise', 'clear', 'metal', 'other']);
+      const allowedTints = new Set(['clear', 'tinted']);
       const frameShape =
         typeof parsed.frame_shape === 'string' && allowedShapes.has(parsed.frame_shape)
           ? parsed.frame_shape
@@ -1076,6 +1100,17 @@ export function createEyewearServerApp() {
           : parsed.is_crystal_frame
           ? 'clear'
           : 'other';
+      const autoFrameMode: EyewearFrameMode =
+        typeof parsed.auto_frame_mode === 'string' &&
+        ALLOWED_FRAME_MODES.has(parsed.auto_frame_mode as EyewearFrameMode)
+          ? (parsed.auto_frame_mode as EyewearFrameMode)
+          : 'prescription';
+      const lensTint: 'clear' | 'tinted' =
+        typeof parsed.lens_tint === 'string' && allowedTints.has(parsed.lens_tint)
+          ? (parsed.lens_tint as 'clear' | 'tinted')
+          : autoFrameMode === 'sunglasses' || autoFrameMode === 'clip_on'
+          ? 'tinted'
+          : 'clear';
 
       res.json({
         ok: true,
@@ -1089,6 +1124,8 @@ export function createEyewearServerApp() {
         frame_shape: frameShape,
         is_patterned: Boolean(parsed.is_patterned),
         color_family: colorFamily,
+        auto_frame_mode: autoFrameMode,
+        lens_tint: lensTint,
         raw_text: typeof parsed.raw_text === 'string' ? parsed.raw_text.slice(0, 64) : null,
       });
     } catch (err) {

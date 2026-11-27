@@ -58,6 +58,8 @@ export interface ExtractedOpticalDimensionsResult {
   frameShape?: FrameShapeTag;
   isPatterned: boolean;
   colorFamily: FrameColorFamily;
+  autoFrameMode?: EyewearFrameMode;
+  lensTint?: 'clear' | 'tinted';
   rawText: string | null;
 }
 
@@ -269,6 +271,80 @@ export async function computeFrameColorVariance(
 }
 
 /**
+ * Local fallback heuristic to detect whether eyewear lenses are clear optical glass
+ * or dark/tinted sunglasses when server AI classification is unavailable.
+ */
+export async function estimateLensTintLocally(file: Blob): Promise<'clear' | 'tinted'> {
+  let bm: ImageBitmap | null = null;
+  let canvas: HTMLCanvasElement | null = null;
+  try {
+    if (typeof createImageBitmap !== 'function') return 'clear';
+    bm = await createImageBitmap(file);
+    canvas = document.createElement('canvas');
+    canvas.width = 48;
+    canvas.height = 36;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return 'clear';
+    ctx.drawImage(bm, 0, 0, 48, 36);
+    const px = ctx.getImageData(0, 0, 48, 36).data;
+
+    // Sample corner background luminance
+    let bgLum = 0;
+    let bgCount = 0;
+    for (const [cx, cy] of [
+      [2, 2],
+      [45, 2],
+      [2, 33],
+      [45, 33],
+    ]) {
+      const i = (cy * 48 + cx) * 4;
+      bgLum += 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+      bgCount++;
+    }
+    const meanBg = bgLum / Math.max(1, bgCount);
+
+    // Sample left & right lens interior centers
+    const sampleRegion = (x0: number, x1: number, y0: number, y1: number) => {
+      let sum = 0;
+      let count = 0;
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const i = (y * 48 + x) * 4;
+          if (px[i + 3] < 120) continue;
+          sum += 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+          count++;
+        }
+      }
+      return count > 0 ? sum / count : meanBg;
+    };
+
+    const leftCenter = sampleRegion(11, 19, 13, 23);
+    const rightCenter = sampleRegion(28, 36, 13, 23);
+    const lensAvg = (leftCenter + rightCenter) * 0.5;
+
+    // If both lens centers are markedly darker than the background, treat as tinted
+    if (lensAvg < 118 && meanBg - lensAvg > 58) {
+      return 'tinted';
+    }
+    return 'clear';
+  } catch {
+    return 'clear';
+  } finally {
+    if (bm) {
+      try {
+        bm.close();
+      } catch {
+        // ignore
+      }
+    }
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  }
+}
+
+/**
  * Downscales any phone photo to max 1024px JPEG before sending to the server
  * and immediately disposes the temporary canvas/bitmap so RAM stays O(1).
  */
@@ -383,6 +459,8 @@ export async function extractOpticalDimensionsViaServer(
       frame_shape?: FrameShapeTag;
       is_patterned?: boolean;
       color_family?: FrameColorFamily;
+      auto_frame_mode?: EyewearFrameMode;
+      lens_tint?: 'clear' | 'tinted';
       raw_text?: string | null;
     };
 
@@ -398,6 +476,8 @@ export async function extractOpticalDimensionsViaServer(
         frameShape: undefined,
         isPatterned: false,
         colorFamily: 'other',
+        autoFrameMode: undefined,
+        lensTint: undefined,
         rawText: null,
       };
     }
@@ -414,6 +494,8 @@ export async function extractOpticalDimensionsViaServer(
       frameShape: payload.frame_shape,
       isPatterned: Boolean(payload.is_patterned),
       colorFamily: payload.color_family || (payload.is_crystal_frame ? 'clear' : 'other'),
+      autoFrameMode: payload.auto_frame_mode,
+      lensTint: payload.lens_tint,
       rawText: typeof payload.raw_text === 'string' ? payload.raw_text : null,
     };
   } catch (err) {
@@ -429,6 +511,8 @@ export async function extractOpticalDimensionsViaServer(
       frameShape: undefined,
       isPatterned: false,
       colorFamily: 'other',
+      autoFrameMode: undefined,
+      lensTint: undefined,
       rawText: null,
     };
   }

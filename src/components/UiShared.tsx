@@ -418,11 +418,12 @@ export function Shell({
     setDockVisible(true);
   };
 
+  const allowFourDock = primaryDockIds?.length === 4 && items.length <= 4;
   const primaryIds = primaryDockIds?.length ? primaryDockIds : items.slice(0, 3).map((x) => x[0]);
   const primaryDockItems = primaryIds
     .map((id) => items.find((it) => it[0] === id))
     .filter((x): x is ShellNavItem => Boolean(x))
-    .slice(0, 3);
+    .slice(0, allowFourDock ? 4 : 3);
   const primarySet = new Set(primaryDockItems.map((x) => x[0]));
   const secondaryDockItems = items.filter((it) => !primarySet.has(it[0]));
   const secondaryBadges = secondaryDockItems.reduce((sum, it) => sum + (it[3] || 0), 0);
@@ -512,14 +513,14 @@ export function Shell({
             {primaryDockItems.map((it) => {
               const isAct = active === it[0];
               const badge = it[3] || 0;
-              const shortLabel = it[0] === 'crm' ? 'العملاء' : it[1];
+              const shortLabel = !allowFourDock && it[0] === 'crm' ? 'العملاء' : it[1];
               return (
                 <button
                   key={it[0]}
                   type="button"
                   onClick={() => selectTab(it[0])}
                   className={
-                    'relative h-full flex flex-col items-center justify-center gap-0.5 text-[0.7rem] font-bold cursor-pointer transition ' +
+                    'relative h-full flex flex-col items-center justify-center gap-0.5 text-[0.65rem] sm:text-[0.7rem] font-bold cursor-pointer transition ' +
                     (isAct ? 'text-[#0284C7]' : 'text-slate-600 hover:text-[#0F172A]')
                   }
                 >
@@ -537,25 +538,27 @@ export function Shell({
               );
             })}
 
-            <button
-              type="button"
-              onClick={() => setDrawerOpen(true)}
-              className={
-                'relative h-full flex flex-col items-center justify-center gap-0.5 text-[0.7rem] font-bold cursor-pointer transition ' +
-                (!primarySet.has(active) ? 'text-[#0284C7]' : 'text-slate-600 hover:text-[#0F172A]')
-              }
-            >
-              <div className="relative">
-                <I n="menu" s={20} />
-                {secondaryBadges > 0 && (
-                  <span className="absolute -top-1.5 -end-2.5 min-w-[16px] h-4 px-1 rounded-full bg-[#D97706] text-white text-[0.6rem] font-extrabold flex items-center justify-center tabular-nums">
-                    {secondaryBadges}
-                  </span>
-                )}
-              </div>
-              <span>المزيد</span>
-              {!primarySet.has(active) && <span className="absolute top-0 inset-x-4 h-0.5 rounded-full bg-[#0284C7]" />}
-            </button>
+            {secondaryDockItems.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setDrawerOpen(true)}
+                className={
+                  'relative h-full flex flex-col items-center justify-center gap-0.5 text-[0.7rem] font-bold cursor-pointer transition ' +
+                  (!primarySet.has(active) ? 'text-[#0284C7]' : 'text-slate-600 hover:text-[#0F172A]')
+                }
+              >
+                <div className="relative">
+                  <I n="menu" s={20} />
+                  {secondaryBadges > 0 && (
+                    <span className="absolute -top-1.5 -end-2.5 min-w-[16px] h-4 px-1 rounded-full bg-[#D97706] text-white text-[0.6rem] font-extrabold flex items-center justify-center tabular-nums">
+                      {secondaryBadges}
+                    </span>
+                  )}
+                </div>
+                <span>المزيد</span>
+                {!primarySet.has(active) && <span className="absolute top-0 inset-x-4 h-0.5 rounded-full bg-[#0284C7]" />}
+              </button>
+            )}
           </nav>
 
           {/* Clean Slide-Up Bottom Sheet Drawer for Secondary Sections (Portaled to body) */}

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { DEFAULT_SHOP_ID, EGYPT_GOVERNORATES, SALES0, STORE_THEMES } from '../data/seed';
+import { DEFAULT_SHOP_ID, EGYPT_GOVERNORATES, STORE_THEMES } from '../data/seed';
 import { isSupabaseConfigured } from '../lib/supabase';
 import {
   getShopDaysLeft,
@@ -19,11 +19,9 @@ import { VisualPhotographyGuideModal } from '../components/VisualPhotographyGuid
 import { resolveAngled45Url, resolveStoreFrontUrl } from '../utils/bulkFrameProcessor';
 import { formatOpticalDimensions, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
 import {
-  Bars,
   D,
   Egp,
   Head,
-  LineChart,
   Modal,
   Pr,
   QR,
@@ -32,7 +30,6 @@ import {
   ShellNavItem,
   Stat,
   Switch,
-  dlCsv,
   fmt,
   qBadge,
   waNum,
@@ -40,177 +37,15 @@ import {
 
 const MERCHANT_PAGE_SIZE = 24;
 
-const CAT_META = {
-  lens: { empty: 'لا توجد أنواع عدسات بعد' },
-  brand: { empty: 'لا توجد شركات بعد' },
-  extra: { empty: 'لا توجد إضافات بعد' },
-};
+type MerchantSection = 'home' | 'prods' | 'crm' | 'store';
 
-function Reports() {
-  const { inq, activeShop, toast } = useOptiVerse();
-  const shopInq = inq.filter((q) => q.shopId === activeShop.id);
-  const conf = shopInq.filter((q) => q.status === 'confirmed');
-  const demoRows = activeShop.id === DEFAULT_SHOP_ID ? SALES0 : [];
-  const rows = [
-    ...demoRows,
-    ...conf.map((q) => ({ lens: q.lensName, brand: q.brandName, price: q.final || q.price })),
-  ];
-  const tally = (k: 'lens' | 'brand') =>
-    Object.entries(
-      rows.reduce((a: Record<string, number>, r) => {
-        a[r[k]] = (a[r[k]] || 0) + 1;
-        return a;
-      }, {})
-    ).sort((a, b) => b[1] - a[1]);
-  const lensR = tally('lens');
-  const brandR = tally('brand');
-  const rev = rows.reduce((s, r) => s + r.price, 0);
-  const stTxt = { new: 'جديد', confirmed: 'تم التأكيد', alt: 'عدسة بديلة' };
-
-  const expInq = () => {
-    dlCsv('الطلبات.csv', [
-      ['الرقم', 'العميل', 'الموبايل', 'النظارة', 'العدسة', 'الشركة', 'الإضافات', 'السعر', 'الحالة', 'الوقت'],
-      ...shopInq.map((q) => [
-        q.id,
-        q.cust,
-        q.phone,
-        q.frameName,
-        q.lensName,
-        q.brandName,
-        q.extrasTxt,
-        q.final || q.price,
-        stTxt[q.status] || q.status,
-        q.time,
-      ]),
-    ]);
-    toast('تم تصدير الطلبات ✓');
-  };
-
-  const expSales = () => {
-    dlCsv('المبيعات.csv', [['العدسة', 'الشركة', 'السعر'], ...rows.map((r) => [r.lens, r.brand, r.price])]);
-    toast('تم تصدير المبيعات ✓');
-  };
-
-  return (
-    <>
-      <Head t="التقارير والمبيعات" sub={`أداء ${activeShop.name} — آخر 30 يوم`}>
-        <button className="btn btn-g" onClick={expInq}>
-          <I n="dl" s={16} /> تصدير الطلبات
-        </button>
-        <button className="btn btn-p" onClick={expSales}>
-          <I n="dl" s={16} /> تصدير المبيعات
-        </button>
-      </Head>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-        <Stat icon="dollar" label="إيراد الشهر" value={fmt(rev) + ' ج.م'} />
-        <Stat icon="check" label="طلبات مؤكدة" value={rows.length} />
-        <Stat icon="trend" label="متوسط قيمة الطلب" value={fmt(Math.round(rev / Math.max(1, rows.length))) + ' ج.م'} />
-        <Stat icon="receipt" label="طلبات جديدة" value={shopInq.filter((q) => q.status === 'new').length} />
-      </div>
-      <div className="grid lg:grid-cols-2 gap-4">
-        <div className="glass rounded-2xl p-5">
-          <h3 className="font-bold mb-1">أكثر الفئات مبيعاً</h3>
-          <p className="text-xs opacity-60 mb-3">
-            الأول: <b className="tx-acc">{lensR[0]?.[0] || 'لا توجد بيانات بعد'}</b>
-          </p>
-          {lensR.length ? <Bars rows={lensR} /> : <div className="text-xs opacity-60 py-6 text-center">ستظهر البيانات بعد أول طلب مؤكد</div>}
-        </div>
-        <div className="glass rounded-2xl p-5">
-          <h3 className="font-bold mb-1">أكثر الشركات مبيعاً</h3>
-          <p className="text-xs opacity-60 mb-3">
-            الأولى: <b className="tx-acc">{brandR[0]?.[0] || 'لا توجد بيانات بعد'}</b>
-          </p>
-          {brandR.length ? <Bars rows={brandR} /> : <div className="text-xs opacity-60 py-6 text-center">ستظهر البيانات بعد أول طلب مؤكد</div>}
-        </div>
-      </div>
-    </>
-  );
-}
-
-function CatCard({
-  kind,
-  title,
-  sub,
-  addLabel,
-  list,
-}: {
-  kind: 'lens' | 'brand' | 'extra';
-  title: string;
-  sub: string;
-  addLabel: string;
-  list: any[];
-}) {
-  const { setModal, toast, setLensTypes, setBrands, setExtras, syncCatalogItem, activeShop } = useOptiVerse();
-  const setter = kind === 'lens' ? setLensTypes : kind === 'brand' ? setBrands : setExtras;
-
-  const toggle = async (x: any) => {
-    const on = x.on !== false;
-    const updated = { ...x, shopId: activeShop.id, on: !on };
-    setter((a: any[]) =>
-      a.map((y) => (y.id === x.id && (y.shopId || DEFAULT_SHOP_ID) === activeShop.id ? updated : y))
-    );
-    await syncCatalogItem(kind, activeShop.id, 'upsert', updated);
-    toast(on ? `تم إخفاء "${x.name}" من واجهة العميل ✓` : `تم إظهار "${x.name}" في متجر العميل ✓`);
-  };
-
-  return (
-    <div className="glass rounded-2xl p-5">
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <div>
-          <h3 className="font-bold">{title}</h3>
-          <p className="text-xs opacity-60">{sub}</p>
-        </div>
-        <button className="btn btn-p btn-sm shrink-0" onClick={() => setModal({ t: 'catitem', kind })}>
-          <I n="plus" s={14} /> {addLabel.replace('+ ', '')}
-        </button>
-      </div>
-      {!list.length && <div className="text-center text-sm opacity-60 py-6">{CAT_META[kind].empty}</div>}
-      {list.map((x) => {
-        const on = x.on !== false;
-        return (
-          <div key={x.id} className="flex items-center gap-2 py-2.5 border-b border-slate-100">
-            <div className={'flex-1 min-w-0 ' + (on ? '' : 'opacity-45')}>
-              <div className="font-bold text-sm flex items-center gap-1.5 flex-wrap">
-                {x.name}
-                {!on && <span className="badge b-warn">مخفي</span>}
-              </div>
-              {x.en && (
-                <div className="text-xs opacity-50" dir="ltr" style={{ textAlign: 'start' }}>
-                  {x.en}
-                </div>
-              )}
-            </div>
-            <b className={'tx-acc text-sm whitespace-nowrap ' + (on ? '' : 'opacity-45')}>
-              {kind === 'brand' && x.price > 0 ? '+' : ''}
-              <Pr x={D(x)} />
-            </b>
-            <Switch on={on} onChange={() => toggle(x)} />
-            <button
-              className="btn btn-g btn-sm !px-2 font-extrabold"
-              title="خصم"
-              onClick={() => setModal({ t: 'disc', kind, item: x })}
-            >
-              %
-            </button>
-            <button
-              className="btn btn-g btn-sm !p-2"
-              title="تعديل"
-              onClick={() => setModal({ t: 'catitem', kind, item: x })}
-            >
-              <I n="edit" s={14} />
-            </button>
-            <button
-              className="btn btn-d btn-sm !p-2"
-              title="حذف"
-              onClick={() => setModal({ t: 'catdel', kind, item: x })}
-            >
-              <I n="trash" s={14} />
-            </button>
-          </div>
-        );
-      })}
-    </div>
-  );
+function normalizeMerchantSection(raw?: string): MerchantSection {
+  if (raw === 'prods' || raw === 'inventory') return 'prods';
+  if (raw === 'crm' || raw === 'inq') return 'crm';
+  if (raw === 'store' || raw === 'sub' || raw === 'delivery' || raw === 'lens' || raw === 'lens_teaser') {
+    return 'store';
+  }
+  return 'home';
 }
 
 export function MerchantPage() {
@@ -240,9 +75,6 @@ export function MerchantPage() {
     toast,
     setModal,
     navigate,
-    lensTypes,
-    brands,
-    extras,
     getAccessToken,
     uploadAssetToStorage,
   } = useOptiVerse();
@@ -292,8 +124,11 @@ export function MerchantPage() {
     }
   })();
 
-  const [sec, setSec] = useState(() => initialMerchantState.sec || 'home');
+  const [sec, setSec] = useState<MerchantSection>(() => normalizeMerchantSection(initialMerchantState.sec));
   const [code, setCode] = useState('');
+  const [prodSearch, setProdSearch] = useState('');
+  const [crmView, setCrmView] = useState<'all' | 'orders' | 'customers'>('all');
+  const [showAdvancedStoreSettings, setShowAdvancedStoreSettings] = useState(false);
   const [aiLogoBusy, setAiLogoBusy] = useState(false);
   const [visibleProdsCount, setVisibleProdsCount] = useState(MERCHANT_PAGE_SIZE);
   const [photoGuideModalOpen, setPhotoGuideModalOpen] = useState(false);
@@ -756,13 +591,9 @@ export function MerchantPage() {
   // Strictly scoped to activeShop.id!
   const shopProducts = products.filter((p) => p.shopId === activeShop.id && !p.isDeleted);
   const shopInq = inq.filter((q) => q.shopId === activeShop.id);
-  const shopLenses = lensTypes.filter((l) => (l.shopId || DEFAULT_SHOP_ID) === activeShop.id);
-  const shopBrands = brands.filter((b) => (b.shopId || DEFAULT_SHOP_ID) === activeShop.id);
-  const shopExtras = extras.filter((e) => (e.shopId || DEFAULT_SHOP_ID) === activeShop.id);
   const newCount = shopInq.filter((q) => q.status === 'new').length;
   const trialDaysLeft = getShopDaysLeft(activeShop);
   const expiredOrPaused = isShopExpiredOrPaused(activeShop);
-  const isDefaultDemoShop = activeShop.id === DEFAULT_SHOP_ID;
 
   const rxEnabled = Boolean(
     platformSettings.enableLensesSystem ?? platformSettings.enablePrescriptionLenses
@@ -798,12 +629,6 @@ export function MerchantPage() {
   });
   const dueRecallCount = dueCrmList.filter((c) => c.dueReview || c.due6 || c.due12).length;
 
-  const confirmedShopSales = shopInq
-    .filter((q) => q.status === 'confirmed')
-    .reduce((sum, q) => sum + (q.final || q.price), 0);
-  const monthlyShopRevenue = confirmedShopSales;
-  const totalTryOns = shopInq.length;
-
   const delByCode = async () => {
     const res = await softDeleteProductByCode(activeShop.id, code);
     if (!res.ok) {
@@ -816,33 +641,15 @@ export function MerchantPage() {
 
   // Smart Inventory Calculations
   const getProdStock = (p: Product) => (typeof p.stock === 'number' ? Math.max(0, Math.floor(p.stock)) : 1);
-  const totalInventoryModels = shopProducts.length;
   const totalInventoryPieces = shopProducts.reduce((sum, p) => sum + getProdStock(p), 0);
   const lowStockProducts = shopProducts.filter((p) => getProdStock(p) === 1);
   const outOfStockProducts = shopProducts.filter((p) => getProdStock(p) === 0);
-  const totalInventoryValue = shopProducts.reduce((sum, p) => {
-    const unitPrice = p.salePrice && p.salePrice > 0 && p.salePrice < p.price ? p.salePrice : p.price;
-    return sum + unitPrice * getProdStock(p);
-  }, 0);
 
   const items: ShellNavItem[] = [
     ['home', 'الرئيسية', 'home'],
-    ['prods', 'منتجاتي', 'box'],
-    ['inventory', 'إدارة المخزن الذكي 📦', 'box', outOfStockProducts.length],
-    ['crm', 'قاعدة العملاء', 'bell', dueRecallCount],
-    ...(rxEnabled
-      ? ([
-          ['inq', 'الكشوفات الطبية والاستفسارات', 'receipt', newCount],
-          ['lens', 'إدارة أسعار العدسات والشركات', 'dollar'],
-        ] as ShellNavItem[])
-      : ([['lens_teaser', 'العدسات الطبية — قريباً ✨', 'eye']] as ShellNavItem[])),
-    ...(deliveryEnabled ? ([['delivery', 'إعدادات التوصيل', 'truck']] as ShellNavItem[]) : []),
-    ...(suppliersEnabled ? ([['suppliers', 'الموردون المعتمدون ⭐', 'crown']] as ShellNavItem[]) : []),
-    ['stats', 'الإحصائيات', 'chart'],
-    ['rep', 'التقارير والمبيعات', 'trend'],
-    ['about', 'حول OptiVerse', 'info'],
-    ['store', 'بيانات المحل والسمات واللوجو', 'store'],
-    ['sub', 'الاشتراك والباقات', 'crown'],
+    ['prods', 'النظارات والمخزن', 'box', outOfStockProducts.length],
+    ['crm', 'العملاء والطلبات', 'receipt', newCount + dueRecallCount],
+    ['store', 'إعدادات المحل', 'store'],
   ];
 
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://optiverse.app';
@@ -910,23 +717,6 @@ export function MerchantPage() {
       toast('تعذر تصدير صورة QR');
     }
   };
-
-  // Strictly real radar metrics computed from actual store inquiries/try-ons & confirmed purchases
-  const radar: [string, number, number][] = shopProducts
-    .map((p) => {
-      const trials = shopInq.filter((q) => q.frameName === p.name).length;
-      const bought = shopInq.filter((q) => q.frameName === p.name && q.status === 'confirmed').length;
-      return [p.name, trials, bought] as [string, number, number];
-    })
-    .filter((r) => r[1] > 0 || r[2] > 0)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
-  const totalRadarTrials = radar.reduce((sum, r) => sum + r[1], 0);
-  const mostTriedFrame = radar[0];
-  const lowestConvFrame =
-    radar.length > 0
-      ? [...radar].sort((a, b) => a[2] / Math.max(1, a[1]) - b[2] / Math.max(1, b[1]))[0]
-      : null;
 
   const adminRenewMsg = encodeURIComponent(
     `مرحباً إدارة OptiVerse، أرغب في تجديد اشتراك متجر "${activeShop.name}" (${activeShop.slug}) عبر InstaPay / فودافون كاش.`
@@ -1026,28 +816,13 @@ export function MerchantPage() {
     <Shell
       items={items}
       active={sec}
-      setActive={setSec}
+      setActive={(next) => setSec(normalizeMerchantSection(next))}
       title={activeShop.name}
       sub="لوحة تحكم التاجر"
       highlight="store"
       mobileMode="dock"
-      primaryDockIds={['home', 'prods', 'crm']}
+      primaryDockIds={['home', 'prods', 'crm', 'store']}
       onSignOut={signOut}
-      drawerExtra={(closeDrawer) => (
-        <div className="pt-2 border-t border-slate-100 mt-2 space-y-1">
-          <button
-            type="button"
-            onClick={() => {
-              closeDrawer();
-              setPhotoGuideModalOpen(true);
-            }}
-            className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-bold text-[#0284C7] bg-sky-50/80 hover:bg-sky-100 border border-sky-200 transition text-start cursor-pointer shadow-xs"
-          >
-            <I n="camera" s={18} />
-            <span className="truncate">دليل التصوير المصور 📷</span>
-          </button>
-        </div>
-      )}
       headerAction={
         <div className="flex items-center gap-2 flex-wrap">
           <PWAInstallButton />
@@ -1065,9 +840,9 @@ export function MerchantPage() {
         isOpen={photoGuideModalOpen}
         onClose={() => setPhotoGuideModalOpen(false)}
       />
+
       {sec === 'home' && (
         <>
-          {/* 14-Day Free Trial Countdown / Expired Renewal Banner (ONLY on Home tab) */}
           {expiredOrPaused ? (
             <div className="mb-4 rounded-2xl p-4 bg-rose-50 border border-rose-200 flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -1123,199 +898,142 @@ export function MerchantPage() {
             </div>
           ) : null}
 
-          <Head t={`أهلاً بك، ${activeShop.name} 👋`} sub="ملخص نشاط متجرك اليوم" />
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-            <Stat
-              icon="eye"
-              label="تجارب العملاء المسجلة"
-              value={<span dir="ltr">{totalTryOns}</span>}
-              sub={<span className="text-slate-500">إجمالي التفاعلات والطلبات</span>}
-            />
-            <Stat
-              icon="bell"
-              tone="b-warn"
-              label="تذكيرات العملاء المستحقة"
-              value={<span dir="ltr">{dueRecallCount}</span>}
-              sub={<span className="text-slate-500">متابعة 6 و12 شهر</span>}
-              onClick={() => setSec('crm')}
-            />
+          <Head t={`أهلاً بك، ${activeShop.name} 👋`} sub="ملخص نشاط متجرك وإدارة النظارات والطلبات" />
+
+          {/* Big Quick Actions */}
+          <div className="grid sm:grid-cols-2 gap-3 mb-5">
+            <button
+              type="button"
+              onClick={copy}
+              className="w-full rounded-2xl py-4 px-5 bg-[#0F172A] hover:bg-slate-800 text-white font-extrabold text-sm sm:text-base flex items-center justify-center gap-2.5 shadow-sm cursor-pointer transition active:scale-[0.99]"
+            >
+              <I n="copy" s={20} />
+              <span>نسخ رابط المتجر</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSec('prods');
+                setNewCollectionSignal((s) => s + 1);
+              }}
+              className="w-full rounded-2xl py-4 px-5 bg-[#D97706] hover:bg-[#B45309] text-white font-extrabold text-sm sm:text-base flex items-center justify-center gap-2.5 shadow-sm cursor-pointer transition active:scale-[0.99]"
+            >
+              <I n="plus" s={20} />
+              <span>+ إضافة نظارة</span>
+            </button>
+          </div>
+
+          {/* 3 Clear Numeric Metric Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
             <Stat
               icon="box"
-              label="النظارات المنشورة"
+              label="عدد النظارات"
               value={
                 <span dir="ltr" className="inline-block">
                   {shopProducts.length} / {maxProducts}
                 </span>
               }
+              sub={<span className="text-slate-500">إجمالي القطع بالمخزن: {fmt(totalInventoryPieces)}</span>}
               onClick={() => setSec('prods')}
             />
-            <Stat icon="dollar" label="مبيعات الشهر" value={<Egp v={monthlyShopRevenue} />} />
+            <Stat
+              icon="bell"
+              tone={dueRecallCount > 0 ? 'b-warn' : undefined}
+              label="العملاء"
+              value={<span dir="ltr">{fmt(shopCrm.length)}</span>}
+              sub={
+                <span className="text-slate-500">
+                  {dueRecallCount > 0 ? `${dueRecallCount} مستحق للتذكير الآن` : 'سجل العملاء والتذكيرات'}
+                </span>
+              }
+              onClick={() => setSec('crm')}
+            />
+            <Stat
+              icon="receipt"
+              tone={newCount > 0 ? 'b-info' : undefined}
+              label="الطلبات"
+              value={<span dir="ltr">{fmt(shopInq.length)}</span>}
+              sub={
+                <span className="text-slate-500">
+                  {newCount > 0 ? `${newCount} طلبات جديدة بانتظار المراجعة` : 'طلبات الواتساب والكشوفات'}
+                </span>
+              }
+              onClick={() => setSec('crm')}
+            />
           </div>
 
-          <div className="glass rounded-2xl p-5 mb-5">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="w-9 h-9 rounded-xl b-acc flex items-center justify-center">
-                <I n="spark" s={18} />
-              </span>
-              <h3 className="font-bold text-[#0F172A]">رادار التحليلات الذكية</h3>
-            </div>
-            <p className="text-xs text-slate-500 mb-4">أكثر النظارات تجربةً وطلبًا من عملائك</p>
-
-            {totalRadarTrials < 5 ? (
-              <div className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-6 text-center text-sm text-slate-600 leading-7">
-                ستظهر توصيات الأداء الذكية تلقائياً بعد بدء تجربة العملاء لنظاراتك
-              </div>
-            ) : (
-              <>
-                <div className="grid md:grid-cols-2 gap-3 mb-4">
-                  {lowestConvFrame && (
-                    <div className="rounded-xl p-3.5 bg-rose-50 border border-rose-200 text-sm leading-7 text-rose-900">
-                      <b className="text-rose-700">⚠ الأقل تحويلاً:</b> «{lowestConvFrame[0]}» تم تجربتها{' '}
-                      <span dir="ltr" className="font-bold">
-                        {lowestConvFrame[1]}
-                      </span>{' '}
-                      مرة بمبيعات{' '}
-                      <span dir="ltr" className="font-bold">
-                        {lowestConvFrame[2]}
-                      </span>{' '}
-                      (<span dir="ltr">{((lowestConvFrame[2] / Math.max(1, lowestConvFrame[1])) * 100).toFixed(1)}%</span>
-                      ). راجع السعر أو أضف عرضاً ترويجياً.
-                    </div>
-                  )}
-                  {mostTriedFrame && (
-                    <div className="rounded-xl p-3.5 bg-sky-50 border border-sky-200 text-sm leading-7 text-sky-950">
-                      <b className="text-[#0284C7]">🔥 الأكثر تفاعلاً:</b> «{mostTriedFrame[0]}» في الصدارة بـ{' '}
-                      <span dir="ltr" className="font-bold">
-                        {mostTriedFrame[1]}
-                      </span>{' '}
-                      تجربة وطلب مؤكد{' '}
-                      <span dir="ltr" className="font-bold">
-                        ({mostTriedFrame[2]})
-                      </span>
-                      .
-                    </div>
-                  )}
+          {dueCrmList.length > 0 && (
+            <div className="glass rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-3 gap-2">
+                <div>
+                  <h3 className="font-bold text-[#0F172A]">متابعة العملاء المستحقة</h3>
+                  <p className="text-xs text-slate-500">
+                    تنبيهات الواتساب السريعة ({dueRecallCount} عملاء مستحقون الآن)
+                  </p>
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm min-w-[460px]">
-                    <thead className="text-xs text-slate-500">
-                      <tr className="border-b border-[#E2E8F0]">
-                        <th className="p-2 text-start">الإطار</th>
-                        <th className="p-2">تجارب</th>
-                        <th className="p-2">مشتريات</th>
-                        <th className="p-2 text-start">التحويل</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {radar.map((r) => {
-                        const c = (r[2] / Math.max(1, r[1])) * 100;
-                        return (
-                          <tr key={r[0]} className="border-b border-slate-100 tabular-nums">
-                            <td className="p-2 font-bold text-[#0F172A]">{r[0]}</td>
-                            <td className="p-2 text-center" dir="ltr">
-                              {r[1]}
-                            </td>
-                            <td className="p-2 text-center" dir="ltr">
-                              {r[2]}
-                            </td>
-                            <td className="p-2">
-                              <div className="flex items-center gap-2">
-                                <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
-                                  <div
-                                    className="h-full rounded-full"
-                                    style={{
-                                      width: Math.min(c * 3, 100) + '%',
-                                      background: c < 5 ? '#e11d48' : '#059669',
-                                    }}
-                                  />
-                                </div>
-                                <span
-                                  dir="ltr"
-                                  className={'text-xs font-bold ' + (c < 5 ? 'text-rose-600' : 'text-[#059669]')}
-                                >
-                                  {c.toFixed(1)}%
-                                </span>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-          </div>
-
-          <div className="glass rounded-2xl p-5">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h3 className="font-bold text-[#0F172A]">
-                  متابعة العملاء (تقييم + صيانة {maintMonths} ش + فحص {examMonths} ش)
-                </h3>
-                <p className="text-xs text-slate-500">
-                  تنبيهات المتابعة من 3 مراحل عبر واتساب ({reminderMode === 'auto' ? 'تلقائي' : 'يدوي'})
-                </p>
+                <button type="button" className="btn btn-g btn-sm" onClick={() => setSec('crm')}>
+                  عرض الكل ({shopCrm.length})
+                </button>
               </div>
-              <button type="button" className="btn btn-g btn-sm" onClick={() => setSec('crm')}>
-                إدارة قاعدة العملاء ({shopCrm.length})
-              </button>
-            </div>
-            {dueCrmList.slice(0, 3).map((c) => {
-              const recallKind: 'review' | '6m' | '12m' = c.due12 ? '12m' : c.due6 ? '6m' : 'review';
-              const reviewUrl = `${origin}/s/${activeShop.slug}${c.productId ? `/f/${c.productId}` : ''}?review=1`;
-              const msg = encodeURIComponent(
-                recallKind === 'review'
-                  ? `أهلاً ${c.customerName} 👋 نورتنا في ${activeShop.name}! نتمنى نظارتك (${c.productName}) تكون عجبتك. شاركنا تقييمك السريع هنا:\n${reviewUrl}`
-                  : `أهلاً ${c.customerName} 👋 ${activeShop.name} بيفكّرك بموعد صيانة ومراجعة نظارتك (${c.productName}). تحب تشرفنا في المحل؟`
-              );
-              return (
-                <div key={c.id} className="flex flex-wrap items-center gap-3 p-3 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] mb-2">
-                  <span className="w-9 h-9 rounded-full bg-[#0F172A] text-white font-extrabold flex items-center justify-center">
-                    {c.customerName[0]}
-                  </span>
-                  <div className="flex-1 min-w-[150px]">
-                    <div className="font-bold text-sm text-[#0F172A]">{c.customerName}</div>
-                    <div className="text-xs text-slate-500">
-                      {c.productName} · منذ {c.daysSince} يوم
-                      {typeof c.pricePaid === 'number' && c.pricePaid > 0 ? ` · ${fmt(c.pricePaid)} ج.م` : ''}
-                    </div>
-                  </div>
-                  <a
-                    className="btn btn-p btn-sm"
-                    href={`https://wa.me/${waNum(c.phone)}?text=${msg}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    onClick={() => markCrmRecallSent(c.id, recallKind)}
+              {dueCrmList.slice(0, 3).map((c) => {
+                const recallKind: 'review' | '6m' | '12m' = c.due12 ? '12m' : c.due6 ? '6m' : 'review';
+                const reviewUrl = `${origin}/s/${activeShop.slug}${c.productId ? `/f/${c.productId}` : ''}?review=1`;
+                const msg = encodeURIComponent(
+                  recallKind === 'review'
+                    ? `أهلاً ${c.customerName} 👋 نورتنا في ${activeShop.name}! نتمنى نظارتك (${c.productName}) تكون عجبتك. شاركنا تقييمك السريع هنا:\n${reviewUrl}`
+                    : `أهلاً ${c.customerName} 👋 ${activeShop.name} بيفكّرك بموعد صيانة ومراجعة نظارتك (${c.productName}). تحب تشرفنا في المحل؟`
+                );
+                return (
+                  <div
+                    key={c.id}
+                    className="flex flex-wrap items-center gap-3 p-3 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] mb-2 last:mb-0"
                   >
-                    <I n="msg" s={14} />{' '}
-                    {recallKind === 'review' ? 'طلب تقييم ⭐' : recallKind === '12m' ? 'فحص نظر 💬' : 'تذكير صيانة 💬'}
-                  </a>
-                </div>
-              );
-            })}
-          </div>
+                    <span className="w-9 h-9 rounded-full bg-[#0F172A] text-white font-extrabold flex items-center justify-center shrink-0">
+                      {c.customerName[0]}
+                    </span>
+                    <div className="flex-1 min-w-[150px]">
+                      <div className="font-bold text-sm text-[#0F172A]">{c.customerName}</div>
+                      <div className="text-xs text-slate-500">
+                        {c.productName} · منذ {c.daysSince} يوم
+                        {typeof c.pricePaid === 'number' && c.pricePaid > 0 ? ` · ${fmt(c.pricePaid)} ج.م` : ''}
+                      </div>
+                    </div>
+                    <a
+                      className="btn btn-p btn-sm"
+                      href={`https://wa.me/${waNum(c.phone)}?text=${msg}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={() => markCrmRecallSent(c.id, recallKind)}
+                    >
+                      <I n="msg" s={14} />{' '}
+                      {recallKind === 'review' ? 'طلب تقييم ⭐' : recallKind === '12m' ? 'فحص نظر 💬' : 'تذكير صيانة 💬'}
+                    </a>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </>
       )}
 
       {sec === 'prods' && (
         <Head
-          t="منتجاتي"
+          t="النظارات والمخزن"
           sub={
             <>
               <span dir="ltr" className="inline-block font-bold text-[#0F172A]">
                 {shopProducts.length} / {maxProducts}
               </span>{' '}
-              نظارة متاحة في الكتالوج
+              نظارة في الكتالوج · إجمالي القطع بالمخزن: <b dir="ltr">{fmt(totalInventoryPieces)}</b>
             </>
           }
         >
           <button
             type="button"
-            onClick={() => setSec('inventory')}
-            className="btn btn-g btn-sm whitespace-nowrap shrink-0 font-bold"
+            onClick={() => setSupplierReportOpen(true)}
+            className="btn btn-g btn-sm whitespace-nowrap shrink-0 font-extrabold"
           >
-            إدارة المخزن الذكي 📦
+            <I n="dl" s={14} /> تصدير كشف النواقص ({outOfStockProducts.length})
           </button>
           <button
             type="button"
@@ -1325,11 +1043,12 @@ export function MerchantPage() {
             }}
             className="btn btn-sm !bg-[#D97706] hover:!bg-[#B45309] !text-white font-extrabold whitespace-nowrap shrink-0 shadow-sm"
           >
-            إضافة كوليكشن جديد ✨
+            + إضافة نظارة / كوليكشن ✨
           </button>
         </Head>
       )}
 
+      {/* Keep BulkFrameUploader mounted across tabs so background AI/cutout batches never interrupt */}
       <div className={sec === 'prods' ? 'block' : 'hidden'}>
         <BulkFrameUploader
           externalNewCollectionSignal={newCollectionSignal}
@@ -1339,384 +1058,284 @@ export function MerchantPage() {
 
       {sec === 'prods' && (
         <>
-          <div className="glass rounded-2xl p-4 mb-4 flex flex-wrap items-center gap-3">
-            <div className="flex-1 min-w-[200px]">
-              <div className="font-bold text-sm">حذف نظارة بالكود (بعد البيع)</div>
-              <div className="text-xs opacity-60">اكتب كود النظارة اللي خرجت من المحل وهتتمسح من المتجر فوراً</div>
-            </div>
-            <input
-              className="inp !w-40 font-mono"
-              dir="ltr"
-              placeholder="FR-1001"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') delByCode();
-              }}
-            />
-            <button className="btn btn-d" onClick={delByCode}>
-              <I n="trash" s={15} /> حذف بالكود
-            </button>
-          </div>
-
-          <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
-            {shopProducts.slice(0, visibleProdsCount).map((p) => {
-              const published = p.isPublished !== false;
-              return (
-                <div
-                  key={p.id}
-                  className={
-                    'glass rounded-2xl p-4 transition flex flex-col gap-3 ' +
-                    (!published ? 'opacity-70' : '')
-                  }
-                >
-                  <div
-                    className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] cursor-pointer relative overflow-hidden p-2"
-                    onClick={() => setModal({ t: 'editprod', p })}
-                  >
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="relative aspect-[4/3] rounded-lg bg-white border border-slate-200/80 flex items-center justify-center p-1.5 overflow-hidden">
-                        <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-slate-900/80 text-white text-[0.55rem] font-bold">
-                          بالوش
-                        </span>
-                        <MiniGlasses
-                          type={p.type}
-                          frame={p.frame}
-                          lens={p.lens}
-                          w={105}
-                          imageUrl={resolveStoreFrontUrl(p)}
-                        />
-                      </div>
-                      <div className="relative aspect-[4/3] rounded-lg bg-white border border-slate-200/80 flex items-center justify-center p-1.5 overflow-hidden">
-                        <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-slate-700/80 text-white text-[0.55rem] font-bold">
-                          بالجنب
-                        </span>
-                        {resolveAngled45Url(p) ? (
-                          <img
-                            src={resolveAngled45Url(p)}
-                            alt={`زاوية جانبية ${p.name}`}
-                            loading="lazy"
-                            className="max-h-full max-w-full object-contain"
-                          />
-                        ) : (
-                          <MiniGlasses
-                            type={p.type}
-                            frame={p.frame}
-                            lens={p.lens}
-                            w={105}
-                            imageUrl={resolveStoreFrontUrl(p)}
-                          />
-                        )}
-                      </div>
-                    </div>
-                    {!published && (
-                      <span className="absolute top-2 end-2 z-20 badge b-warn">مخفية</span>
-                    )}
-                  </div>
-
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="font-bold text-[#0F172A] truncate">{p.name}</div>
-                      <div className="text-xs text-slate-500 font-mono mt-0.5 truncate" dir="ltr" style={{ textAlign: 'start' }}>
-                        {p.modelCode || p.code}
-                      </div>
-                    </div>
-                    <div className="font-extrabold text-[#D97706] shrink-0">
-                      <Pr x={D(p)} />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 mt-auto">
-                    <button
-                      type="button"
-                      className="btn btn-g btn-sm flex-1"
-                      onClick={() => setModal({ t: 'editprod', p })}
-                    >
-                      <I n="edit" s={13} /> تعديل
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-tryon btn-sm flex-1"
-                      onClick={() => navigate(`/s/${activeShop.slug}/f/${p.id}?preview=1`)}
-                    >
-                      <I n="eye" s={13} /> معاينة
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-d btn-sm !px-2.5 shrink-0"
-                      title="حذف"
-                      aria-label="حذف"
-                      onClick={() => setModal({ t: 'delprod', p })}
-                    >
-                      <I n="trash" s={13} />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {shopProducts.length > MERCHANT_PAGE_SIZE && (
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-white border border-[#E2E8F0] px-4 py-3 text-xs">
-              <span className="opacity-75">
-                عرض <b>{Math.min(visibleProdsCount, shopProducts.length)}</b> من <b>{shopProducts.length}</b> نظارة
-              </span>
-              <div className="flex items-center gap-2">
-                {visibleProdsCount > MERCHANT_PAGE_SIZE && (
-                  <button
-                    type="button"
-                    className="btn btn-g btn-sm"
-                    onClick={() => setVisibleProdsCount(MERCHANT_PAGE_SIZE)}
-                  >
-                    العودة لأول {MERCHANT_PAGE_SIZE}
-                  </button>
-                )}
-                {shopProducts.length > visibleProdsCount && (
-                  <button
-                    type="button"
-                    className="btn btn-p btn-sm"
-                    onClick={() => setVisibleProdsCount((c) => c + MERCHANT_PAGE_SIZE)}
-                  >
-                    عرض المزيد (+{Math.min(MERCHANT_PAGE_SIZE, shopProducts.length - visibleProdsCount)})
-                  </button>
-                )}
+          {/* Quick Search + Inventory Filter + Delete by Code + Customer Stock Toggles */}
+          <div className="glass rounded-2xl p-4 mb-4 space-y-3">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="relative flex-1 min-w-[220px]">
+                <input
+                  type="search"
+                  value={prodSearch}
+                  onChange={(e) => {
+                    setProdSearch(e.target.value);
+                    setVisibleProdsCount(MERCHANT_PAGE_SIZE);
+                  }}
+                  placeholder="بحث سريع باسم النظارة أو الكود..."
+                  className="inp !ps-9"
+                />
+                <span className="absolute start-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                  <I n="search" s={16} />
+                </span>
               </div>
-            </div>
-          )}
-        </>
-      )}
 
-      {sec === 'inventory' && (
-        <>
-          <Head
-            t="إدارة المخزن الذكي 📦"
-            sub={`متابعة الرصيد الفوري، خصم المبيعات التلقائي، وكشف النواقص المصور لـ ${activeShop.name}`}
-          >
-            <button
-              type="button"
-              onClick={() => {
-                setSec('prods');
-                setNewCollectionSignal((s) => s + 1);
-              }}
-              className="btn btn-sm !bg-amber-50 hover:!bg-amber-100 !text-amber-950 border border-amber-300 font-extrabold whitespace-nowrap"
-            >
-              إضافة كوليكشن جديد ✨
-            </button>
-            <button
-              type="button"
-              onClick={() => setSupplierReportOpen(true)}
-              className="btn btn-p btn-sm whitespace-nowrap font-extrabold"
-            >
-              تصدير كشف النواقص المصور للموردين 📋 ({outOfStockProducts.length})
-            </button>
-          </Head>
-
-          {/* Top 5 Smart Inventory Metric Cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
-            <Stat
-              icon="box"
-              label="إجمالي الموديلات"
-              value={<span dir="ltr">{fmt(totalInventoryModels)}</span>}
-              onClick={() => setInvFilter('all')}
-            />
-            <Stat
-              icon="check"
-              tone="b-ok"
-              label="إجمالي القطع بالمخزن"
-              value={<span dir="ltr">{fmt(totalInventoryPieces)}</span>}
-              onClick={() => setInvFilter('in_stock')}
-            />
-            <Stat
-              icon="bell"
-              tone="b-warn"
-              label="أوشك على النفاد (1)"
-              value={<span dir="ltr">{fmt(lowStockProducts.length)}</span>}
-              onClick={() => setInvFilter('low')}
-            />
-            <Stat
-              icon="trash"
-              tone="b-bad"
-              label="نواقص / منتهي (0)"
-              value={<span dir="ltr">{fmt(outOfStockProducts.length)}</span>}
-              onClick={() => setInvFilter('out')}
-            />
-            <Stat
-              icon="dollar"
-              label="إجمالي قيمة المخزون"
-              value={<Egp v={totalInventoryValue} />}
-            />
-          </div>
-
-          {/* Storefront Stock Visibility Settings */}
-          <div className="glass rounded-2xl p-4 mb-4 flex flex-wrap items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-6">
-              <div className="flex items-center gap-3">
-                <Switch
-                  on={Boolean(activeShop.showStockCountToCustomer)}
-                  onChange={async (v) => {
-                    await updateShop(activeShop.id, { showStockCountToCustomer: v });
-                    toast(v ? 'تم تفعيل عداد القطعة الأخيرة للعملاء ✓' : 'تم إخفاء عداد المخزون عن العملاء ✓');
+              <div className="flex items-center gap-1.5">
+                <input
+                  className="inp !w-36 font-mono text-xs"
+                  dir="ltr"
+                  placeholder="حذف بكود FR-1001"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') delByCode();
                   }}
                 />
-                <div>
-                  <div className="text-xs sm:text-sm font-extrabold text-[#0F172A]">
-                    إظهار عداد القطع المتبقية للعميل
-                  </div>
-                  <div className="text-[0.7rem] text-slate-500">
-                    يعرض شارة «متبقي قطعة واحدة فقط!» لتحفيز الشراء السريع
-                  </div>
-                </div>
+                <button type="button" className="btn btn-d btn-sm whitespace-nowrap" onClick={delByCode}>
+                  <I n="trash" s={14} /> حذف
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-slate-100">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {(
+                  [
+                    { id: 'all', label: `الكل (${shopProducts.length})` },
+                    { id: 'in_stock', label: `متوفر (${shopProducts.filter((p) => getProdStock(p) > 0).length})` },
+                    { id: 'low', label: `أوشك على النفاد (${lowStockProducts.length})` },
+                    { id: 'out', label: `نواقص (${outOfStockProducts.length})` },
+                  ] as const
+                ).map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => {
+                      setInvFilter(f.id);
+                      setVisibleProdsCount(MERCHANT_PAGE_SIZE);
+                    }}
+                    className={
+                      'px-3 py-1.5 rounded-xl text-xs font-extrabold border transition cursor-pointer ' +
+                      (invFilter === f.id
+                        ? 'bg-[#0F172A] text-white border-[#0F172A] shadow-sm'
+                        : 'bg-white text-slate-700 border-[#E2E8F0] hover:border-[#0284C7]')
+                    }
+                  >
+                    {f.label}
+                  </button>
+                ))}
               </div>
 
-              <div className="flex items-center gap-3">
-                <Switch
-                  on={Boolean(activeShop.hideOutOfStockToCustomer)}
-                  onChange={async (v) => {
-                    await updateShop(activeShop.id, { hideOutOfStockToCustomer: v });
-                    toast(v ? 'سيتم إخفاء الإطارات المنتهية تلقائياً من المتجر ✓' : 'الإطارات المنتهية تظهر للعملاء ✓');
-                  }}
-                />
-                <div>
-                  <div className="text-xs sm:text-sm font-extrabold text-[#0F172A]">
-                    إخفاء النظارات المنتهية تلقائياً من المتجر
-                  </div>
-                  <div className="text-[0.7rem] text-slate-500">
-                    يخفي أي موديل رصيده 0 من واجهة العملاء مع بقائه في كشف النواقص
-                  </div>
-                </div>
+              <div className="flex flex-wrap items-center gap-4 text-xs">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Switch
+                    on={Boolean(activeShop.showStockCountToCustomer)}
+                    onChange={async (v) => {
+                      await updateShop(activeShop.id, { showStockCountToCustomer: v });
+                      toast(v ? 'تم تفعيل عداد القطعة الأخيرة للعملاء ✓' : 'تم إخفاء عداد المخزون عن العملاء ✓');
+                    }}
+                  />
+                  <span className="font-bold text-[#0F172A]">إظهار «متبقي قطعة»</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Switch
+                    on={Boolean(activeShop.hideOutOfStockToCustomer)}
+                    onChange={async (v) => {
+                      await updateShop(activeShop.id, { hideOutOfStockToCustomer: v });
+                      toast(v ? 'سيتم إخفاء الإطارات المنتهية تلقائياً ✓' : 'الإطارات المنتهية تظهر للعملاء ✓');
+                    }}
+                  />
+                  <span className="font-bold text-[#0F172A]">إخفاء المنتهي تلقائياً</span>
+                </label>
               </div>
             </div>
           </div>
 
-          {/* Inventory Filter Tabs */}
-          <div className="flex flex-wrap items-center gap-2 mb-4">
-            {(
-              [
-                { id: 'all', label: `الكل (${shopProducts.length})` },
-                { id: 'in_stock', label: `متوفر (${shopProducts.filter((p) => getProdStock(p) > 0).length})` },
-                { id: 'low', label: `أوشك على النفاد (1) (${lowStockProducts.length})` },
-                { id: 'out', label: `نواقص / منتهي (0) (${outOfStockProducts.length})` },
-              ] as const
-            ).map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                onClick={() => setInvFilter(f.id)}
-                className={
-                  'px-3.5 py-2 rounded-xl text-xs font-extrabold border transition cursor-pointer ' +
-                  (invFilter === f.id
-                    ? 'bg-[#0F172A] text-white border-[#0F172A] shadow-sm'
-                    : 'bg-white text-slate-700 border-[#E2E8F0] hover:border-[#0284C7]')
-                }
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Inventory Product List with Live + / - Counter Adjustments */}
           {(() => {
-            const filteredInv = shopProducts.filter((p) => {
+            const qTerm = prodSearch.trim().toLowerCase();
+            const filteredProds = shopProducts.filter((p) => {
               const st = getProdStock(p);
-              if (invFilter === 'in_stock') return st > 0;
-              if (invFilter === 'low') return st === 1;
-              if (invFilter === 'out') return st === 0;
+              if (invFilter === 'in_stock' && st <= 0) return false;
+              if (invFilter === 'low' && st !== 1) return false;
+              if (invFilter === 'out' && st !== 0) return false;
+              if (qTerm) {
+                const hay = `${p.name} ${p.code} ${p.modelCode || ''}`.toLowerCase();
+                if (!hay.includes(qTerm)) return false;
+              }
               return true;
             });
 
-            if (!filteredInv.length) {
+            if (!filteredProds.length) {
               return (
                 <div className="glass rounded-2xl p-10 text-center text-sm text-slate-500">
-                  لا توجد نظارات مطابقة لهذا التصنيف في المخزن حالياً
+                  لا توجد نظارات مطابقة للبحث أو فلتر المخزن حالياً
                 </div>
               );
             }
 
             return (
-              <div className="space-y-2.5">
-                {filteredInv.map((p) => {
-                  const st = getProdStock(p);
-                  const dimsText = formatOpticalDimensions(resolveProductOpticalDimensions(p));
-                  const unitPrice = p.salePrice && p.salePrice > 0 && p.salePrice < p.price ? p.salePrice : p.price;
-
-                  return (
-                    <div
-                      key={p.id}
-                      className="glass rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3"
-                    >
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <div className="w-20 h-14 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] flex items-center justify-center p-1 shrink-0 overflow-hidden">
-                          <MiniGlasses
-                            type={p.type}
-                            frame={p.frame}
-                            lens={p.lens}
-                            w={72}
-                            imageUrl={resolveStoreFrontUrl(p)}
-                          />
+              <>
+                <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {filteredProds.slice(0, visibleProdsCount).map((p) => {
+                    const published = p.isPublished !== false;
+                    const st = getProdStock(p);
+                    return (
+                      <div
+                        key={p.id}
+                        className={
+                          'glass rounded-2xl p-4 transition flex flex-col gap-3 ' +
+                          (!published ? 'opacity-70' : '')
+                        }
+                      >
+                        <div
+                          className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] cursor-pointer relative overflow-hidden p-2"
+                          onClick={() => setModal({ t: 'editprod', p })}
+                        >
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="relative aspect-[4/3] rounded-lg bg-white border border-slate-200/80 flex items-center justify-center p-1.5 overflow-hidden">
+                              <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-slate-900/80 text-white text-[0.55rem] font-bold">
+                                بالوش
+                              </span>
+                              <MiniGlasses
+                                type={p.type}
+                                frame={p.frame}
+                                lens={p.lens}
+                                w={105}
+                                imageUrl={resolveStoreFrontUrl(p)}
+                              />
+                            </div>
+                            <div className="relative aspect-[4/3] rounded-lg bg-white border border-slate-200/80 flex items-center justify-center p-1.5 overflow-hidden">
+                              <span className="absolute top-1 start-1 z-10 px-1.5 py-0.5 rounded bg-slate-700/80 text-white text-[0.55rem] font-bold">
+                                بالجنب
+                              </span>
+                              {resolveAngled45Url(p) ? (
+                                <img
+                                  src={resolveAngled45Url(p)}
+                                  alt={`زاوية جانبية ${p.name}`}
+                                  loading="lazy"
+                                  className="max-h-full max-w-full object-contain"
+                                />
+                              ) : (
+                                <MiniGlasses
+                                  type={p.type}
+                                  frame={p.frame}
+                                  lens={p.lens}
+                                  w={105}
+                                  imageUrl={resolveStoreFrontUrl(p)}
+                                />
+                              )}
+                            </div>
+                          </div>
+                          {!published && (
+                            <span className="absolute top-2 end-2 z-20 badge b-warn">مخفية</span>
+                          )}
                         </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-extrabold text-sm text-[#0F172A] truncate">{p.name}</span>
+
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="font-bold text-[#0F172A] truncate">{p.name}</div>
+                            <div className="text-xs text-slate-500 font-mono mt-0.5 truncate" dir="ltr" style={{ textAlign: 'start' }}>
+                              {p.modelCode || p.code}
+                            </div>
+                          </div>
+                          <div className="font-extrabold text-[#D97706] shrink-0">
+                            <Pr x={D(p)} />
+                          </div>
+                        </div>
+
+                        {/* Inline Stock Control Bar */}
+                        <div className="flex items-center justify-between gap-2 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] px-2.5 py-1.5">
+                          <div className="flex items-center gap-1.5">
                             {st === 0 ? (
                               <span className="badge b-bad text-[0.65rem]">منتهي (0)</span>
                             ) : st === 1 ? (
-                              <span className="badge b-warn text-[0.65rem]">قطعة أخيرة (1)</span>
+                              <span className="badge b-warn text-[0.65rem]">أوشك على النفاد (1)</span>
                             ) : (
                               <span className="badge b-ok text-[0.65rem]">متوفر ({st})</span>
                             )}
                           </div>
-                          <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5 flex-wrap" dir="ltr">
-                            <span className="font-mono font-bold text-slate-700">{p.modelCode || p.code}</span>
-                            <span>·</span>
-                            <span className="font-mono">{dimsText} mm</span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              disabled={st <= 0}
+                              onClick={() => void updateProductStock(p.id, -1)}
+                              aria-label="إنقاص المخزون"
+                              className="w-7 h-7 rounded-lg bg-white hover:bg-rose-50 text-slate-900 hover:text-rose-700 border border-slate-200 font-extrabold text-sm flex items-center justify-center cursor-pointer disabled:opacity-40"
+                            >
+                              -
+                            </button>
+                            <span dir="ltr" className="min-w-[24px] text-center font-mono font-extrabold text-xs tabular-nums">
+                              {st}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => void updateProductStock(p.id, 1)}
+                              aria-label="زيادة المخزون"
+                              className="w-7 h-7 rounded-lg bg-[#0F172A] hover:bg-slate-800 text-white font-extrabold text-sm flex items-center justify-center cursor-pointer"
+                            >
+                              +
+                            </button>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="flex items-center gap-3 shrink-0">
-                        <div className="text-end">
-                          <div className="text-[0.68rem] text-slate-500">سعر القطعة</div>
-                          <div className="font-extrabold text-sm text-[#D97706]">
-                            <Egp v={unitPrice} />
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-1.5 bg-[#F8F9FA] border border-[#E2E8F0] rounded-xl p-1">
+                        <div className="flex items-center gap-1.5 mt-auto">
                           <button
                             type="button"
-                            disabled={st <= 0}
-                            onClick={() => void updateProductStock(p.id, -1)}
-                            aria-label="إنقاص المخزون"
-                            className="w-8 h-8 rounded-lg bg-white hover:bg-rose-50 text-slate-900 hover:text-rose-700 border border-slate-200 font-extrabold text-base flex items-center justify-center cursor-pointer disabled:opacity-40"
+                            className="btn btn-g btn-sm flex-1"
+                            onClick={() => setModal({ t: 'editprod', p })}
                           >
-                            -
+                            <I n="edit" s={13} /> تعديل
                           </button>
-                          <span
-                            dir="ltr"
-                            className={
-                              'min-w-[32px] text-center font-mono font-extrabold text-sm tabular-nums ' +
-                              (st === 0 ? 'text-rose-600' : st === 1 ? 'text-amber-600' : 'text-[#0F172A]')
-                            }
-                          >
-                            {st}
-                          </span>
                           <button
                             type="button"
-                            onClick={() => void updateProductStock(p.id, 1)}
-                            aria-label="زيادة المخزون"
-                            className="w-8 h-8 rounded-lg bg-[#0F172A] hover:bg-slate-800 text-white font-extrabold text-base flex items-center justify-center cursor-pointer"
+                            className="btn btn-tryon btn-sm flex-1"
+                            onClick={() => navigate(`/s/${activeShop.slug}/f/${p.id}?preview=1`)}
                           >
-                            +
+                            <I n="eye" s={13} /> معاينة
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-d btn-sm !px-2.5 shrink-0"
+                            title="حذف"
+                            aria-label="حذف"
+                            onClick={() => setModal({ t: 'delprod', p })}
+                          >
+                            <I n="trash" s={13} />
                           </button>
                         </div>
                       </div>
+                    );
+                  })}
+                </div>
+
+                {filteredProds.length > MERCHANT_PAGE_SIZE && (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-white border border-[#E2E8F0] px-4 py-3 text-xs">
+                    <span className="opacity-75">
+                      عرض <b>{Math.min(visibleProdsCount, filteredProds.length)}</b> من <b>{filteredProds.length}</b> نظارة
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {visibleProdsCount > MERCHANT_PAGE_SIZE && (
+                        <button
+                          type="button"
+                          className="btn btn-g btn-sm"
+                          onClick={() => setVisibleProdsCount(MERCHANT_PAGE_SIZE)}
+                        >
+                          العودة لأول {MERCHANT_PAGE_SIZE}
+                        </button>
+                      )}
+                      {filteredProds.length > visibleProdsCount && (
+                        <button
+                          type="button"
+                          className="btn btn-p btn-sm"
+                          onClick={() => setVisibleProdsCount((c) => c + MERCHANT_PAGE_SIZE)}
+                        >
+                          عرض المزيد (+{Math.min(MERCHANT_PAGE_SIZE, filteredProds.length - visibleProdsCount)})
+                        </button>
+                      )}
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                )}
+              </>
             );
           })()}
 
-          {/* Visual Supplier Depleted Sheet Modal */}
           {supplierReportOpen && (
             <Modal
               title={`كشف النواقص المصور للموردين 📋 (${outOfStockProducts.length})`}
@@ -1876,538 +1495,407 @@ export function MerchantPage() {
       {sec === 'crm' && (
         <>
           <Head
-            t="قاعدة عملاء المحل وتذكيرات المتابعة (CRM)"
-            sub="سجل المشتريات والتقييمات وتذكيرات الواتساب المرنة من 3 مستويات"
+            t="العملاء والطلبات"
+            sub={`طلبات الواتساب والكشوفات الطبية (${shopInq.length}) · قاعدة العملاء (${shopCrm.length})`}
           />
 
-          {/* Flexible 3-Tier Reminders Configuration */}
-          <div className="glass rounded-2xl p-5 mb-5 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="font-extrabold text-sm text-[#0F172A]">إعدادات نظام المتابعة المرن (3 مستويات)</h3>
-                <p className="text-xs text-slate-500">
-                  تقييم بعد الشراء ({reviewHours}س) · صيانة وتنظيف ({maintMonths} شهور) · فحص النظر ({examMonths} شهر)
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="badge b-warn">{dueRecallCount} عملاء مستحقون للتذكير الآن</span>
-                <div className="inline-flex rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-1">
-                  <button
-                    type="button"
-                    onClick={() => updateShop(activeShop.id, { reminderMode: 'auto' })}
-                    className={
-                      'px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer transition ' +
-                      (reminderMode === 'auto' ? 'bg-[#0F172A] text-white' : 'text-slate-600')
-                    }
-                  >
-                    تلقائي
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => updateShop(activeShop.id, { reminderMode: 'manual' })}
-                    className={
-                      'px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer transition ' +
-                      (reminderMode === 'manual' ? 'bg-[#0F172A] text-white' : 'text-slate-600')
-                    }
-                  >
-                    يدوي
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid sm:grid-cols-3 gap-3">
-              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3">
-                <label className="text-xs font-bold text-[#0F172A] block mb-1">
-                  1. تقييم النظارة بعد الشراء (ساعات)
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={720}
-                  className="inp text-xs"
-                  dir="ltr"
-                  value={reviewHours}
-                  onChange={(e) =>
-                    updateShop(activeShop.id, { reminderReviewHours: Math.max(1, Number(e.target.value) || 24) })
-                  }
-                />
-              </div>
-
-              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <label className="text-xs font-bold text-[#0F172A]">2. صيانة الشنبر (شهور)</label>
-                  <Switch
-                    on={activeShop.recall6mEnabled ?? true}
-                    onChange={(v) => updateShop(activeShop.id, { recall6mEnabled: v })}
-                  />
-                </div>
-                <input
-                  type="number"
-                  min={1}
-                  max={24}
-                  className="inp text-xs"
-                  dir="ltr"
-                  value={maintMonths}
-                  onChange={(e) =>
-                    updateShop(activeShop.id, {
-                      reminderMaintenanceMonths: Math.max(1, Number(e.target.value) || 4),
-                    })
-                  }
-                />
-              </div>
-
-              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <label className="text-xs font-bold text-[#0F172A]">3. فحص النظر (شهور)</label>
-                  <Switch
-                    on={activeShop.recall12mEnabled ?? true}
-                    onChange={(v) => updateShop(activeShop.id, { recall12mEnabled: v })}
-                  />
-                </div>
-                <input
-                  type="number"
-                  min={1}
-                  max={36}
-                  className="inp text-xs"
-                  dir="ltr"
-                  value={examMonths}
-                  onChange={(e) =>
-                    updateShop(activeShop.id, {
-                      reminderExamMonths: Math.max(1, Number(e.target.value) || 12),
-                    })
-                  }
-                />
-              </div>
-            </div>
-          </div>
-
-          <form onSubmit={handleAddCrm} className="glass rounded-2xl p-5 mb-5 space-y-3">
-            <h3 className="font-bold text-sm text-[#0F172A]">إضافة عميل جديد</h3>
-            <div className="grid sm:grid-cols-2 lg:grid-cols-6 gap-2.5">
-              <input
-                className="inp text-xs"
-                placeholder="اسم العميل *"
-                value={crmName}
-                onChange={(e) => setCrmName(e.target.value)}
-                required
-              />
-              <input
-                className="inp text-xs"
-                dir="ltr"
-                placeholder="رقم الموبايل *"
-                value={crmPhone}
-                onChange={(e) => setCrmPhone(e.target.value)}
-                required
-              />
-              <input
-                className="inp text-xs"
-                placeholder="الموديل / النظارة"
-                value={crmProdName}
-                onChange={(e) => setCrmProdName(e.target.value)}
-              />
-              <input
-                className="inp text-xs"
-                dir="ltr"
-                placeholder="PD (اختياري)"
-                value={crmPd}
-                onChange={(e) => setCrmPd(e.target.value)}
-              />
-              <input
-                className="inp text-xs"
-                type="number"
-                dir="ltr"
-                placeholder="المبلغ المدفوع (ج.م)"
-                value={crmPrice}
-                onChange={(e) => setCrmPrice(e.target.value)}
-              />
-              <div className="flex gap-2">
-                <input
-                  className="inp text-xs flex-1"
-                  placeholder="ملاحظات..."
-                  value={crmNotes}
-                  onChange={(e) => setCrmNotes(e.target.value)}
-                />
-                <button type="submit" className="btn btn-p btn-sm shrink-0">
-                  إضافة
-                </button>
-              </div>
-            </div>
-          </form>
-
-          <div className="space-y-3">
-            {dueCrmList.map((c) => {
-              const reviewUrl = `${origin}/s/${activeShop.slug}${c.productId ? `/f/${c.productId}` : ''}?review=1`;
-              const reviewMsg = encodeURIComponent(
-                `أهلاً ${c.customerName} 👋 شكراً لزيارتك ${activeShop.name}. نتمنى نظارتك (${c.productName}) تكون عند حسن ظنك! يسعدنا تقييمك السريع هنا:\n${reviewUrl}`
-              );
-              const maintMsg = encodeURIComponent(
-                `أهلاً ${c.customerName} 👋 معكم ${activeShop.name}. مرّ ${maintMonths} أشهر على نظارتك (${c.productName}) — يشرفنا زيارتك للصيانة والضبط والتنظيف المجاني.`
-              );
-              const examMsg = encodeURIComponent(
-                `أهلاً ${c.customerName} 👋 معكم ${activeShop.name}. حان موعد المراجعة الدورية لفحص النظر بعد ${examMonths} شهراً منذ استلام (${c.productName}) — يسعدنا استقبالك لاستعراض أحدث الموديلات.`
-              );
-              const formattedDate = new Date(c.orderDate).toLocaleDateString('ar-EG');
-
-              return (
-                <div key={c.id} className="glass rounded-2xl p-4 space-y-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <b className="text-sm text-[#0F172A]">{c.customerName}</b>
-                        <span className="font-mono text-xs text-slate-500" dir="ltr">
-                          {c.phone}
-                        </span>
-                        <span className="badge b-info text-[0.65rem]">{formattedDate}</span>
-                        {c.dueReview && <span className="badge b-warn text-[0.65rem]">مستحق طلب تقييم</span>}
-                        {c.due6 && <span className="badge b-warn text-[0.65rem]">مستحق صيانة ({maintMonths}ش)</span>}
-                        {c.due12 && <span className="badge b-warn text-[0.65rem]">مستحق فحص ({examMonths}ش)</span>}
-                      </div>
-
-                      <div className="text-xs text-slate-700 flex flex-wrap items-center gap-2">
-                        <span>
-                          <b>الموديل:</b> {c.productName}
-                        </span>
-                        {c.lensSummary && (
-                          <span>
-                            · <b>العدسة:</b> {c.lensSummary}
-                          </span>
-                        )}
-                        {c.pd && <span className="font-mono">· PD {c.pd}</span>}
-                        {typeof c.pricePaid === 'number' && c.pricePaid > 0 && (
-                          <span className="font-extrabold text-[#D97706]">· المدفوع: {fmt(c.pricePaid)} ج.م</span>
-                        )}
-                      </div>
-
-                      {c.notes && <div className="text-xs text-slate-500">ملاحظات: {c.notes}</div>}
-
-                      {typeof c.rating === 'number' && c.rating > 0 && (
-                        <div className="mt-1 inline-flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-200 px-2.5 py-1 text-xs">
-                          <span className="text-amber-500 font-bold">{'★'.repeat(c.rating)}</span>
-                          {c.reviewComment && <span className="text-slate-700">«{c.reviewComment}»</span>}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {c.recallReviewSentAt && <span className="badge b-ok text-[0.65rem]">أُرسل تقييم ✓</span>}
-                      {c.recall6mSentAt && <span className="badge b-ok text-[0.65rem]">أُرسل صيانة ✓</span>}
-                      {c.recall12mSentAt && <span className="badge b-ok text-[0.65rem]">أُرسل فحص ✓</span>}
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
-                    <a
-                      href={`https://wa.me/${waNum(c.phone)}?text=${reviewMsg}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className={
-                        'btn btn-sm text-xs ' +
-                        (c.dueReview ? 'bg-[#D97706] hover:bg-[#B45309] text-white' : 'btn-g')
-                      }
-                      onClick={() => markCrmRecallSent(c.id, 'review')}
-                    >
-                      <I n="msg" s={13} /> طلب تقييم ⭐
-                    </a>
-                    <a
-                      href={`https://wa.me/${waNum(c.phone)}?text=${maintMsg}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className={'btn btn-sm text-xs ' + (c.due6 ? 'btn-p' : 'btn-g')}
-                      onClick={() => markCrmRecallSent(c.id, '6m')}
-                    >
-                      <I n="msg" s={13} /> تذكير صيانة ({maintMonths}ش)
-                    </a>
-                    <a
-                      href={`https://wa.me/${waNum(c.phone)}?text=${examMsg}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className={'btn btn-sm text-xs ' + (c.due12 ? 'btn-p' : 'btn-g')}
-                      onClick={() => markCrmRecallSent(c.id, '12m')}
-                    >
-                      <I n="msg" s={13} /> فحص نظر ({examMonths}ش)
-                    </a>
-                  </div>
-                </div>
-              );
-            })}
-            {!dueCrmList.length && (
-              <div className="glass rounded-2xl p-10 text-center text-sm text-slate-500">
-                لا يوجد عملاء مسجلون بعد — أضف أول عميل لبدء التذكيرات التلقائية
-              </div>
-            )}
-          </div>
-        </>
-      )}
-
-      {sec === 'inq' && rxEnabled && (
-        <>
-          <Head t="الكشوفات الطبية والاستفسارات" sub={`${newCount} طلبات جديدة بانتظار مراجعتك`} />
-          <div className="space-y-4">
-            {shopInq.map((q) => (
-              <div key={q.id} className="glass rounded-2xl p-4">
-                <div className="grid sm:grid-cols-[170px_1fr] gap-4">
-                  <ExamThumb q={q} onZoom={() => setModal({ t: 'zoom', q })} />
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                      <div>
-                        <div className="font-extrabold">
-                          {q.cust} <span className="text-xs font-normal opacity-60 font-mono">{q.id}</span>
-                        </div>
-                        <div className="text-xs opacity-60" dir="ltr" style={{ textAlign: 'start' }}>
-                          {q.phone} · {q.time}
-                        </div>
-                      </div>
-                      {qBadge(q.status)}
-                    </div>
-                    <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center gap-3 mb-2">
-                      <div className="grid-bg rounded-lg p-1.5 border border-[#E2E8F0]">
-                        <MiniGlasses type={q.type} frame={q.frame} lens={q.lens} w={78} />
-                      </div>
-                      <div className="flex-1 text-sm">
-                        <div className="font-bold text-[#0F172A]">{q.frameName}</div>
-                        <div className="text-xs text-slate-600">
-                          العدسة: {q.lensName}
-                          {q.brandName !== '—' && ` · ${q.brandName}`}
-                        </div>
-                        <div className="text-xs text-slate-600">الإضافات: {q.extrasTxt}</div>
-                      </div>
-                      <div className="text-end">
-                        <div className="text-[.7rem] text-slate-500">
-                          {q.status === 'confirmed' ? 'السعر النهائي' : 'السعر المبدئي'}
-                        </div>
-                        <b className="text-[#D97706]">
-                          <Egp v={q.final || q.price} />
-                        </b>
-                      </div>
-                    </div>
-                    {(q.notes || q.pd) && (
-                      <div className="text-xs text-slate-600 mb-2">
-                        {q.pd && <span className="badge b-info me-2">PD: {q.pd}</span>}
-                        {q.notes}
-                      </div>
-                    )}
-                    {q.alt && (
-                      <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mb-2">
-                        تم اقتراح «{q.alt}» بدل «{q.altFrom}» — بانتظار رد العميل
-                      </div>
-                    )}
-                    <div className="flex flex-wrap gap-2">
-                      <button className="btn btn-p btn-sm" onClick={() => setModal({ t: 'confirmq', q })}>
-                        <I n="check" s={14} /> تأكيد الملاءمة وإرسال السعر النهائي عبر واتساب
-                      </button>
-                      {q.status === 'confirmed' && (
-                        <select
-                          className="inp !w-auto !py-1.5 text-xs"
-                          value={q.stage || 'review'}
-                          onChange={async (e) => {
-                            const v = e.target.value as OrderStage;
-                            await updateInquiry(q.id, { stage: v });
-                            toast('تم تحديث حالة الطلب للعميل ✓');
-                          }}
-                        >
-                          {STAGES.map((x) => (
-                            <option key={x[0]} value={x[0]}>
-                              {x[1]}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                      {q.kind === 'rx' && (
-                        <button className="btn btn-g btn-sm" onClick={() => setModal({ t: 'altq', q })}>
-                          <I n="refresh" s={14} /> اقتراح عدسة بديلة
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
+          <div className="flex flex-wrap items-center gap-2 mb-5">
+            {(
+              [
+                ['all', `عرض الكل (${shopInq.length + shopCrm.length})`],
+                ['orders', `طلبات الواتساب والكشوفات (${shopInq.length})`],
+                ['customers', `قاعدة العملاء والتذكيرات (${shopCrm.length})`],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setCrmView(id)}
+                className={
+                  'px-3.5 py-2 rounded-xl text-xs font-extrabold border transition cursor-pointer ' +
+                  (crmView === id
+                    ? 'bg-[#0F172A] text-white border-[#0F172A] shadow-sm'
+                    : 'bg-white text-slate-700 border-[#E2E8F0] hover:border-[#0284C7]')
+                }
+              >
+                {label}
+              </button>
             ))}
-            {!shopInq.length && <div className="glass rounded-2xl p-10 text-center opacity-70">لا توجد استفسارات بعد</div>}
           </div>
-        </>
-      )}
 
-      {sec === 'lens' && rxEnabled && <MerchantLensMatrixManager />}
-
-      {sec === 'lens_teaser' && !rxEnabled && (
-        <>
-          <Head
-            t="العدسات الطبية — قريباً ✨"
-            sub="مصفوفة متكاملة لتسعير العدسات الطبية وربط الشركات المصنعة بمتجرك"
-          />
-          <div className="glass rounded-3xl p-6 sm:p-8 max-w-2xl space-y-4">
-            <div className="flex items-center gap-3">
-              <span className="w-12 h-12 rounded-2xl bg-sky-50 text-[#0284C7] border border-sky-200 flex items-center justify-center shrink-0">
-                <I n="eye" s={24} />
-              </span>
-              <div>
-                <div className="font-extrabold text-base sm:text-lg text-[#0F172A]">
-                  العدسات الطبية — قريباً ✨
-                </div>
-                <div className="text-xs text-slate-500">
-                  يتم تجهيز مصفوفة العدسات والرعاة المعتمدين على مستوى المنصة حالياً
-                </div>
+          {/* 1. WhatsApp Orders & Medical Prescriptions */}
+          {crmView !== 'customers' && (
+            <div className="mb-6 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-extrabold text-sm sm:text-base text-[#0F172A]">
+                  طلبات الواتساب والكشوفات الطبية ({shopInq.length})
+                </h3>
+                {newCount > 0 && <span className="badge b-warn">{newCount} جديدة بانتظار المراجعة</span>}
               </div>
-            </div>
-            <p className="text-sm text-slate-600 leading-7">
-              قريباً ستتمكن من تفعيل العدسات الجاهزة (Single Vision) وعدسات التصنيع (Progressive &amp; Bifocal) بدرجات ضغط 1.56 حتى 1.74 وبأسعار الشركات المعتمدة أو شركاتك الخاصة مع استلام الكشوفات الطبية مباشرة على واتساب.
-            </p>
-            <div className="rounded-2xl p-3.5 bg-[#F8F9FA] border border-[#E2E8F0] text-xs text-slate-600">
-              متجرك يعمل الآن بكامل طاقته لعرض الإطارات والتجربة الحية 1:1 على الوجه واستقبال طلبات الواتساب.
-            </div>
-          </div>
-        </>
-      )}
 
-      {sec === 'delivery' && deliveryEnabled && (
-        <>
-          <Head t="إعدادات التوصيل والشحن" sub="حدّد رسوم ومناطق التوصيل التي تظهر لعملائك في السلة ودليل المحلات" />
-          <div className="glass rounded-2xl p-5 max-w-xl space-y-4">
-            <div>
-              <label className="text-xs font-bold text-slate-700">رسوم التوصيل الافتراضية (ج.م)</label>
-              <input
-                type="number"
-                className="inp mt-1"
-                value={activeShop.deliveryFee ?? 60}
-                onChange={(e) => updateShop(activeShop.id, { deliveryFee: Math.max(0, +e.target.value) })}
-              />
-            </div>
-            <div>
-              <label className="text-xs font-bold text-slate-700">مناطق التغطية</label>
-              <input
-                className="inp mt-1"
-                placeholder="مثال: القاهرة والجيزة خلال 24 ساعة"
-                value={activeShop.deliveryAreas || ''}
-                onChange={(e) => updateShop(activeShop.id, { deliveryAreas: e.target.value })}
-              />
-            </div>
-            <button type="button" className="btn btn-p" onClick={() => toast('تم حفظ إعدادات التوصيل ✓')}>
-              حفظ إعدادات التوصيل
-            </button>
-          </div>
-        </>
-      )}
-
-      {sec === 'suppliers' && suppliersEnabled && (
-        <>
-          <Head t="الموردون المعتمدون بالمنصة ⭐" sub="تواصل مباشر مع كبار مستوردي الشنابر والعدسات بأسعار خاصة لتجار OptiVerse" />
-          <div className="grid md:grid-cols-2 gap-4">
-            {(platformSettings.sponsoredSuppliers || [])
-              .filter((s) => s.isActive)
-              .map((sup) => (
-                <div key={sup.id} className="glass rounded-2xl p-5 space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <h3 className="font-extrabold text-base text-[#0F172A]">{sup.name}</h3>
-                      <div className="text-xs text-slate-500 mt-0.5">{sup.specialty} · {sup.city}</div>
+              {shopInq.map((q) => (
+                <div key={q.id} className="glass rounded-2xl p-4">
+                  <div className="grid sm:grid-cols-[170px_1fr] gap-4">
+                    <ExamThumb q={q} onZoom={() => setModal({ t: 'zoom', q })} />
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                        <div>
+                          <div className="font-extrabold">
+                            {q.cust} <span className="text-xs font-normal opacity-60 font-mono">{q.id}</span>
+                          </div>
+                          <div className="text-xs opacity-60" dir="ltr" style={{ textAlign: 'start' }}>
+                            {q.phone} · {q.time}
+                          </div>
+                        </div>
+                        {qBadge(q.status)}
+                      </div>
+                      <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center gap-3 mb-2">
+                        <div className="grid-bg rounded-lg p-1.5 border border-[#E2E8F0]">
+                          <MiniGlasses type={q.type} frame={q.frame} lens={q.lens} w={78} />
+                        </div>
+                        <div className="flex-1 text-sm">
+                          <div className="font-bold text-[#0F172A]">{q.frameName}</div>
+                          <div className="text-xs text-slate-600">
+                            العدسة: {q.lensName}
+                            {q.brandName !== '—' && ` · ${q.brandName}`}
+                          </div>
+                          <div className="text-xs text-slate-600">الإضافات: {q.extrasTxt}</div>
+                        </div>
+                        <div className="text-end">
+                          <div className="text-[.7rem] text-slate-500">
+                            {q.status === 'confirmed' ? 'السعر النهائي' : 'السعر المبدئي'}
+                          </div>
+                          <b className="text-[#D97706]">
+                            <Egp v={q.final || q.price} />
+                          </b>
+                        </div>
+                      </div>
+                      {(q.notes || q.pd) && (
+                        <div className="text-xs text-slate-600 mb-2">
+                          {q.pd && <span className="badge b-info me-2">PD: {q.pd}</span>}
+                          {q.notes}
+                        </div>
+                      )}
+                      {q.alt && (
+                        <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mb-2">
+                          تم اقتراح «{q.alt}» بدل «{q.altFrom}» — بانتظار رد العميل
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        <button className="btn btn-p btn-sm" onClick={() => setModal({ t: 'confirmq', q })}>
+                          <I n="check" s={14} /> تأكيد الملاءمة وإرسال السعر النهائي عبر واتساب
+                        </button>
+                        {q.status === 'confirmed' && (
+                          <select
+                            className="inp !w-auto !py-1.5 text-xs"
+                            value={q.stage || 'review'}
+                            onChange={async (e) => {
+                              const v = e.target.value as OrderStage;
+                              await updateInquiry(q.id, { stage: v });
+                              toast('تم تحديث حالة الطلب للعميل ✓');
+                            }}
+                          >
+                            {STAGES.map((x) => (
+                              <option key={x[0]} value={x[0]}>
+                                {x[1]}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        {q.kind === 'rx' && rxEnabled && (
+                          <button className="btn btn-g btn-sm" onClick={() => setModal({ t: 'altq', q })}>
+                            <I n="refresh" s={14} /> اقتراح عدسة بديلة
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <span className="badge b-acc">مورد معتمد ⭐</span>
                   </div>
-                  <div className="rounded-xl p-3 bg-emerald-50 border border-emerald-200 text-xs font-bold text-[#059669]">
-                    {sup.offerText}
-                  </div>
-                  <a
-                    href={`https://wa.me/${waNum(sup.wa)}?text=${encodeURIComponent(
-                      `مرحباً ${sup.name}، أتواصل معكم بصفتي تاجر مشترك في OptiVerse (${activeShop.name}) بخصوص عرض الجملة.`
-                    )}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn btn-p w-full"
-                  >
-                    <I n="msg" s={16} /> تواصل على واتساب المورد
-                  </a>
                 </div>
               ))}
-          </div>
-        </>
-      )}
-
-      {sec === 'rep' && <Reports />}
-
-      {sec === 'stats' && (
-        <>
-          <Head t="الإحصائيات" sub="أداء متجرك آخر 30 يوم" />
-          {totalRadarTrials < 5 ? (
-            <div className="glass rounded-2xl p-8 text-center text-sm text-slate-600 leading-7">
-              ستظهر إحصائيات التجارب الأسبوعية والنظارات الأكثر تجربة تلقائياً بعد بدء تجربة العملاء لنظاراتك
+              {!shopInq.length && (
+                <div className="glass rounded-2xl p-8 text-center text-sm text-slate-500">
+                  لا توجد طلبات واتساب أو كشوفات طبية مرسلة بعد
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="grid lg:grid-cols-2 gap-4">
-              <div className="glass rounded-2xl p-5">
-                <h3 className="font-bold mb-3">التجارب الأسبوعية</h3>
-                <LineChart
-                  data={[0, 0, 0, 0, 0, 0, totalRadarTrials]}
-                  labels={['أسبوع 1', 'أسبوع 2', 'أسبوع 3', 'أسبوع 4', 'أسبوع 5', 'أسبوع 6', 'الأسبوع الحالي']}
-                  h={200}
-                  isCurrency={false}
-                  unit="تجربة"
-                  changeLabel="عن الأسبوع السابق"
-                />
+          )}
+
+          {/* 2. CRM Customers Database & 3-Tier Reminders */}
+          {crmView !== 'orders' && (
+            <div className="space-y-4">
+              <h3 className="font-extrabold text-sm sm:text-base text-[#0F172A]">
+                قاعدة العملاء وتذكيرات المتابعة ({shopCrm.length})
+              </h3>
+
+              <div className="glass rounded-2xl p-5 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h4 className="font-extrabold text-sm text-[#0F172A]">إعدادات نظام المتابعة (3 مستويات)</h4>
+                    <p className="text-xs text-slate-500">
+                      تقييم بعد الشراء ({reviewHours}س) · صيانة وتنظيف ({maintMonths} شهور) · فحص النظر ({examMonths} شهر)
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="badge b-warn">{dueRecallCount} مستحقون للتذكير</span>
+                    <div className="inline-flex rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-1">
+                      <button
+                        type="button"
+                        onClick={() => updateShop(activeShop.id, { reminderMode: 'auto' })}
+                        className={
+                          'px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer transition ' +
+                          (reminderMode === 'auto' ? 'bg-[#0F172A] text-white' : 'text-slate-600')
+                        }
+                      >
+                        تلقائي
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateShop(activeShop.id, { reminderMode: 'manual' })}
+                        className={
+                          'px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer transition ' +
+                          (reminderMode === 'manual' ? 'bg-[#0F172A] text-white' : 'text-slate-600')
+                        }
+                      >
+                        يدوي
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid sm:grid-cols-3 gap-3">
+                  <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3">
+                    <label className="text-xs font-bold text-[#0F172A] block mb-1">
+                      1. تقييم النظارة بعد الشراء (ساعات)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={720}
+                      className="inp text-xs"
+                      dir="ltr"
+                      value={reviewHours}
+                      onChange={(e) =>
+                        updateShop(activeShop.id, { reminderReviewHours: Math.max(1, Number(e.target.value) || 24) })
+                      }
+                    />
+                  </div>
+
+                  <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-xs font-bold text-[#0F172A]">2. صيانة الشنبر (شهور)</label>
+                      <Switch
+                        on={activeShop.recall6mEnabled ?? true}
+                        onChange={(v) => updateShop(activeShop.id, { recall6mEnabled: v })}
+                      />
+                    </div>
+                    <input
+                      type="number"
+                      min={1}
+                      max={24}
+                      className="inp text-xs"
+                      dir="ltr"
+                      value={maintMonths}
+                      onChange={(e) =>
+                        updateShop(activeShop.id, {
+                          reminderMaintenanceMonths: Math.max(1, Number(e.target.value) || 4),
+                        })
+                      }
+                    />
+                  </div>
+
+                  <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-xs font-bold text-[#0F172A]">3. فحص النظر (شهور)</label>
+                      <Switch
+                        on={activeShop.recall12mEnabled ?? true}
+                        onChange={(v) => updateShop(activeShop.id, { recall12mEnabled: v })}
+                      />
+                    </div>
+                    <input
+                      type="number"
+                      min={1}
+                      max={36}
+                      className="inp text-xs"
+                      dir="ltr"
+                      value={examMonths}
+                      onChange={(e) =>
+                        updateShop(activeShop.id, {
+                          reminderExamMonths: Math.max(1, Number(e.target.value) || 12),
+                        })
+                      }
+                    />
+                  </div>
+                </div>
               </div>
-              <div className="glass rounded-2xl p-5">
-                <h3 className="font-bold mb-4">النظارات الأكثر تجربة</h3>
-                <Bars rows={radar.map((r) => [r[0], r[1], ' تجربة'])} />
+
+              <form onSubmit={handleAddCrm} className="glass rounded-2xl p-5 space-y-3">
+                <h4 className="font-bold text-sm text-[#0F172A]">إضافة عميل جديد</h4>
+                <div className="grid sm:grid-cols-2 lg:grid-cols-6 gap-2.5">
+                  <input
+                    className="inp text-xs"
+                    placeholder="اسم العميل *"
+                    value={crmName}
+                    onChange={(e) => setCrmName(e.target.value)}
+                    required
+                  />
+                  <input
+                    className="inp text-xs"
+                    dir="ltr"
+                    placeholder="رقم الموبايل *"
+                    value={crmPhone}
+                    onChange={(e) => setCrmPhone(e.target.value)}
+                    required
+                  />
+                  <input
+                    className="inp text-xs"
+                    placeholder="الموديل / النظارة"
+                    value={crmProdName}
+                    onChange={(e) => setCrmProdName(e.target.value)}
+                  />
+                  <input
+                    className="inp text-xs"
+                    dir="ltr"
+                    placeholder="PD (اختياري)"
+                    value={crmPd}
+                    onChange={(e) => setCrmPd(e.target.value)}
+                  />
+                  <input
+                    className="inp text-xs"
+                    type="number"
+                    dir="ltr"
+                    placeholder="المبلغ المدفوع (ج.م)"
+                    value={crmPrice}
+                    onChange={(e) => setCrmPrice(e.target.value)}
+                  />
+                  <div className="flex gap-2">
+                    <input
+                      className="inp text-xs flex-1"
+                      placeholder="ملاحظات..."
+                      value={crmNotes}
+                      onChange={(e) => setCrmNotes(e.target.value)}
+                    />
+                    <button type="submit" className="btn btn-p btn-sm shrink-0">
+                      إضافة
+                    </button>
+                  </div>
+                </div>
+              </form>
+
+              <div className="space-y-3">
+                {dueCrmList.map((c) => {
+                  const reviewUrl = `${origin}/s/${activeShop.slug}${c.productId ? `/f/${c.productId}` : ''}?review=1`;
+                  const reviewMsg = encodeURIComponent(
+                    `أهلاً ${c.customerName} 👋 شكراً لزيارتك ${activeShop.name}. نتمنى نظارتك (${c.productName}) تكون عند حسن ظنك! يسعدنا تقييمك السريع هنا:\n${reviewUrl}`
+                  );
+                  const maintMsg = encodeURIComponent(
+                    `أهلاً ${c.customerName} 👋 معكم ${activeShop.name}. مرّ ${maintMonths} أشهر على نظارتك (${c.productName}) — يشرفنا زيارتك للصيانة والضبط والتنظيف المجاني.`
+                  );
+                  const examMsg = encodeURIComponent(
+                    `أهلاً ${c.customerName} 👋 معكم ${activeShop.name}. حان موعد المراجعة الدورية لفحص النظر بعد ${examMonths} شهراً منذ استلام (${c.productName}) — يسعدنا استقبالك لاستعراض أحدث الموديلات.`
+                  );
+                  const formattedDate = new Date(c.orderDate).toLocaleDateString('ar-EG');
+
+                  return (
+                    <div key={c.id} className="glass rounded-2xl p-4 space-y-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <b className="text-sm text-[#0F172A]">{c.customerName}</b>
+                            <span className="font-mono text-xs text-slate-500" dir="ltr">
+                              {c.phone}
+                            </span>
+                            <span className="badge b-info text-[0.65rem]">{formattedDate}</span>
+                            {c.dueReview && <span className="badge b-warn text-[0.65rem]">مستحق طلب تقييم</span>}
+                            {c.due6 && <span className="badge b-warn text-[0.65rem]">مستحق صيانة ({maintMonths}ش)</span>}
+                            {c.due12 && <span className="badge b-warn text-[0.65rem]">مستحق فحص ({examMonths}ش)</span>}
+                          </div>
+
+                          <div className="text-xs text-slate-700 flex flex-wrap items-center gap-2">
+                            <span>
+                              <b>الموديل:</b> {c.productName}
+                            </span>
+                            {c.lensSummary && (
+                              <span>
+                                · <b>العدسة:</b> {c.lensSummary}
+                              </span>
+                            )}
+                            {c.pd && <span className="font-mono">· PD {c.pd}</span>}
+                            {typeof c.pricePaid === 'number' && c.pricePaid > 0 && (
+                              <span className="font-extrabold text-[#D97706]">· المدفوع: {fmt(c.pricePaid)} ج.م</span>
+                            )}
+                          </div>
+
+                          {c.notes && <div className="text-xs text-slate-500">ملاحظات: {c.notes}</div>}
+
+                          {typeof c.rating === 'number' && c.rating > 0 && (
+                            <div className="mt-1 inline-flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-200 px-2.5 py-1 text-xs">
+                              <span className="text-amber-500 font-bold">{'★'.repeat(c.rating)}</span>
+                              {c.reviewComment && <span className="text-slate-700">«{c.reviewComment}»</span>}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {c.recallReviewSentAt && <span className="badge b-ok text-[0.65rem]">أُرسل تقييم ✓</span>}
+                          {c.recall6mSentAt && <span className="badge b-ok text-[0.65rem]">أُرسل صيانة ✓</span>}
+                          {c.recall12mSentAt && <span className="badge b-ok text-[0.65rem]">أُرسل فحص ✓</span>}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                        <a
+                          href={`https://wa.me/${waNum(c.phone)}?text=${reviewMsg}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={
+                            'btn btn-sm text-xs ' +
+                            (c.dueReview ? 'bg-[#D97706] hover:bg-[#B45309] text-white' : 'btn-g')
+                          }
+                          onClick={() => markCrmRecallSent(c.id, 'review')}
+                        >
+                          <I n="msg" s={13} /> طلب تقييم ⭐
+                        </a>
+                        <a
+                          href={`https://wa.me/${waNum(c.phone)}?text=${maintMsg}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={'btn btn-sm text-xs ' + (c.due6 ? 'btn-p' : 'btn-g')}
+                          onClick={() => markCrmRecallSent(c.id, '6m')}
+                        >
+                          <I n="msg" s={13} /> تذكير صيانة ({maintMonths}ش)
+                        </a>
+                        <a
+                          href={`https://wa.me/${waNum(c.phone)}?text=${examMsg}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={'btn btn-sm text-xs ' + (c.due12 ? 'btn-p' : 'btn-g')}
+                          onClick={() => markCrmRecallSent(c.id, '12m')}
+                        >
+                          <I n="msg" s={13} /> فحص نظر ({examMonths}ش)
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!dueCrmList.length && (
+                  <div className="glass rounded-2xl p-8 text-center text-sm text-slate-500">
+                    لا يوجد عملاء مسجلون بعد — أضف أول عميل لبدء التذكيرات التلقائية
+                  </div>
+                )}
               </div>
             </div>
           )}
         </>
       )}
 
-      {sec === 'about' && (
-        <>
-          <Head
-            t={
-              <>
-                حول <span dir="ltr">OptiVerse</span>
-              </>
-            }
-            sub="كل ما تحتاج معرفته عن المنصة"
-          />
-          <div className="glass rounded-2xl p-6 mb-5 leading-8 text-sm opacity-90">
-            <p className="mb-3">
-              <span dir="ltr" className="inline-block font-bold">
-                OptiVerse
-              </span>{' '}
-              منصة <span dir="ltr" className="inline-block">SaaS</span> تمنح محلات النظارات متجراً تفاعلياً برابط
-              خاص. ترفع صور نظاراتك لتُعزل وتنتج صور كتالوج استوديو احترافية وتجربة{' '}
-              <span dir="ltr" className="inline-block font-bold">
-                AI + 3D
-              </span>{' '}
-              بمقياس{' '}
-              <span dir="ltr" className="inline-block font-bold">
-                1:1 mm
-              </span>{' '}
-              على وجه العميل، مع دليل محلات معتمد وقاعدة عملاء وتذكيرات دورية.
-            </p>
-            <div className="grid sm:grid-cols-3 gap-3 mt-4">
-              {[
-                ['camera', 'تجربة حية 1:1 mm', 'تتبّع نقاط الوجه بدقة وقياس PD'],
-                ['spark', 'ذكاء اصطناعي', 'عزل صور ستوديو + تجميع ألوان مجاني + قراءة المقاسات'],
-                ['msg', 'طلب مباشر', 'استلام الطلبات مباشرة على واتساب المحل بدون عمولات'],
-              ].map((x) => (
-                <div key={x[0]} className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex gap-3">
-                  <span className="text-[#0284C7]">
-                    <I n={x[0]} s={22} />
-                  </span>
-                  <div>
-                    <b className="text-[#0F172A]">{x[1]}</b>
-                    <div className="text-xs text-slate-600">{x[2]}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
-
       {sec === 'store' && (
         <>
           <Head
-            t="بيانات المحل والسمات واللوجو"
-            sub="إعداد متجر العملاء وتخصيص اللوجو والسمة الفاخرة ورابط المتجر ورمز QR"
+            t="إعدادات المحل"
+            sub="بيانات المحل، اللوجو، الواتساب، الباقة ورصيد المعالجة، ودليل التصوير المصور"
           />
 
+          {/* Photography Guide Button Card */}
           <div className="rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 mb-4 bg-gradient-to-r from-sky-50/80 via-white to-amber-50/60 border border-sky-200/90 shadow-xs">
             <div className="flex items-center gap-3">
               <span className="w-10 h-10 rounded-2xl bg-white text-[#0284C7] border border-sky-200 flex items-center justify-center text-xl shadow-xs shrink-0">
@@ -2434,7 +1922,72 @@ export function MerchantPage() {
             </button>
           </div>
 
-          <div className="grid lg:grid-cols-2 gap-4">
+          {/* Plan & AI Credits Summary Card */}
+          <div className="glass rounded-2xl p-5 mb-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="w-11 h-11 rounded-2xl bg-amber-50 text-[#D97706] border border-amber-200 flex items-center justify-center shrink-0">
+                  <I n="crown" s={22} />
+                </span>
+                <div>
+                  <div className="font-extrabold text-[#0F172A] text-base sm:text-lg flex items-center gap-2 flex-wrap">
+                    <span>الباقة الحالية: {activeShop.plan}</span>
+                    {activeShop.isFeatured && <span className="badge b-acc">متجر مميز ⭐</span>}
+                  </div>
+                  <div className="mt-1 flex items-center gap-2 flex-wrap">
+                    <span className="badge b-info text-xs font-extrabold">
+                      متبقي في اشتراكك: <span dir="ltr">{trialDaysLeft}</span> يوماً
+                    </span>
+                    <span className="text-xs text-slate-500">
+                      {activeShop.status === 'trial' ? 'فترة تجريبية مجانية' : 'اشتراك مفعل'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white btn-sm whitespace-nowrap shrink-0"
+                  onClick={() => addTopUpCredits(activeShop.id)}
+                >
+                  <I n="plus" s={14} /> +{platformSettings.topupPackFrames} نظارة إضافية بـ{' '}
+                  <span dir="ltr">{platformSettings.topupPackPrice}</span> ج.م
+                </button>
+                <a
+                  className="btn btn-p btn-sm whitespace-nowrap shrink-0"
+                  href={`https://wa.me/${import.meta.env.VITE_ADMIN_WA || '201000000000'}?text=${adminRenewMsg}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <I n="msg" s={14} /> ترقية / تجديد الاشتراك
+                </a>
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-3 gap-3 text-xs sm:text-sm">
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center justify-between">
+                <span className="text-slate-600 font-bold">سعة المتجر</span>
+                <b className="tabular-nums text-[#0F172A]" dir="ltr">
+                  {shopProducts.length} / {maxProducts}
+                </b>
+              </div>
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center justify-between">
+                <span className="text-slate-600 font-bold">رصيد معالجة AI</span>
+                <b className="tabular-nums text-[#0284C7]" dir="ltr">
+                  {creditsRemaining} / {creditsCap}
+                </b>
+              </div>
+              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center justify-between">
+                <span className="text-slate-600 font-bold">مسطرة PD بالكاميرا</span>
+                <span className={planCaps.cameraPdRulerEnabled ? 'badge b-ok' : 'badge b-warn'}>
+                  {planCaps.cameraPdRulerEnabled ? 'مفعّلة ✓' : 'في الاحترافية'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-4 mb-4">
             <div className="glass rounded-2xl p-5 min-w-0">
               <h3 className="font-bold text-[#0F172A] mb-3">رابط المتجر</h3>
               <div className="flex items-center gap-2 p-3 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] mb-3 min-w-0">
@@ -2466,7 +2019,7 @@ export function MerchantPage() {
             </div>
 
             <div className="glass rounded-2xl p-5 space-y-4">
-              <h3 className="font-bold text-[#0F172A]">تخصيص الواجهة واللوجو والبيانات</h3>
+              <h3 className="font-bold text-[#0F172A]">بيانات المحل واللوجو والواتساب</h3>
               <div className="grid sm:grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-slate-600">اسم المحل</label>
@@ -2739,79 +2292,82 @@ export function MerchantPage() {
               </div>
             </div>
           </div>
-        </>
-      )}
 
-      {sec === 'sub' && (
-        <>
-          <Head
-            t="الاشتراك والباقات"
-            sub="متابعة الباقة الحالية والمدة المتبقية وسعة النظارات ورصيد معالجة AI"
-          />
+          {(rxEnabled || deliveryEnabled || suppliersEnabled) && (
+            <div className="glass rounded-2xl p-4 space-y-4">
+              <button
+                type="button"
+                onClick={() => setShowAdvancedStoreSettings((v) => !v)}
+                className="w-full flex items-center justify-between gap-2 text-sm font-extrabold text-[#0F172A] cursor-pointer"
+              >
+                <span>إعدادات إضافية (أسعار العدسات والشركات والتوصيل)</span>
+                <span className="text-xs text-[#0284C7]">{showAdvancedStoreSettings ? 'إخفاء ▲' : 'عرض ▼'}</span>
+              </button>
 
-          <div className="glass rounded-2xl p-5 mb-4 space-y-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3 flex-wrap">
-                <span className="w-11 h-11 rounded-2xl bg-amber-50 text-[#D97706] border border-amber-200 flex items-center justify-center shrink-0">
-                  <I n="crown" s={22} />
-                </span>
-                <div>
-                  <div className="font-extrabold text-[#0F172A] text-base sm:text-lg flex items-center gap-2 flex-wrap">
-                    <span>الباقة الحالية: {activeShop.plan}</span>
-                    {activeShop.isFeatured && <span className="badge b-acc">متجر مميز ⭐</span>}
-                  </div>
-                  <div className="mt-1 flex items-center gap-2 flex-wrap">
-                    <span className="badge b-info text-xs font-extrabold">
-                      متبقي في اشتراكك: <span dir="ltr">{trialDaysLeft}</span> يوماً
-                    </span>
-                    <span className="text-xs text-slate-500">
-                      {activeShop.status === 'trial' ? 'فترة تجريبية مجانية' : 'اشتراك مفعل'}
-                    </span>
-                  </div>
+              {showAdvancedStoreSettings && (
+                <div className="space-y-4 pt-3 border-t border-slate-100">
+                  {deliveryEnabled && (
+                    <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-4 space-y-3">
+                      <h4 className="font-bold text-sm text-[#0F172A]">إعدادات التوصيل والشحن</h4>
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-bold text-slate-700">رسوم التوصيل (ج.م)</label>
+                          <input
+                            type="number"
+                            className="inp mt-1"
+                            value={activeShop.deliveryFee ?? 60}
+                            onChange={(e) => updateShop(activeShop.id, { deliveryFee: Math.max(0, +e.target.value) })}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-slate-700">مناطق التغطية</label>
+                          <input
+                            className="inp mt-1"
+                            placeholder="مثال: القاهرة والجيزة خلال 24 ساعة"
+                            value={activeShop.deliveryAreas || ''}
+                            onChange={(e) => updateShop(activeShop.id, { deliveryAreas: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {rxEnabled && <MerchantLensMatrixManager />}
+
+                  {suppliersEnabled && (platformSettings.sponsoredSuppliers || []).some((s) => s.isActive) && (
+                    <div className="grid md:grid-cols-2 gap-3">
+                      {(platformSettings.sponsoredSuppliers || [])
+                        .filter((s) => s.isActive)
+                        .map((sup) => (
+                          <div key={sup.id} className="rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-4 space-y-2.5">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <h4 className="font-extrabold text-sm text-[#0F172A]">{sup.name}</h4>
+                                <div className="text-xs text-slate-500">{sup.specialty} · {sup.city}</div>
+                              </div>
+                              <span className="badge b-acc">مورد معتمد ⭐</span>
+                            </div>
+                            <div className="rounded-xl p-2.5 bg-emerald-50 border border-emerald-200 text-xs font-bold text-[#059669]">
+                              {sup.offerText}
+                            </div>
+                            <a
+                              href={`https://wa.me/${waNum(sup.wa)}?text=${encodeURIComponent(
+                                `مرحباً ${sup.name}، أتواصل معكم بصفتي تاجر مشترك في OptiVerse (${activeShop.name}) بخصوص عرض الجملة.`
+                              )}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="btn btn-p btn-sm w-full"
+                            >
+                              <I n="msg" s={14} /> تواصل على واتساب المورد
+                            </a>
+                          </div>
+                        ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white btn-sm whitespace-nowrap shrink-0"
-                  onClick={() => addTopUpCredits(activeShop.id)}
-                >
-                  <I n="plus" s={14} /> +{platformSettings.topupPackFrames} نظارة إضافية بـ{' '}
-                  <span dir="ltr">{platformSettings.topupPackPrice}</span> ج.م
-                </button>
-                <a
-                  className="btn btn-p btn-sm whitespace-nowrap shrink-0"
-                  href={`https://wa.me/${import.meta.env.VITE_ADMIN_WA || '201000000000'}?text=${adminRenewMsg}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <I n="msg" s={14} /> ترقية / تجديد الاشتراك
-                </a>
-              </div>
+              )}
             </div>
-
-            <div className="grid sm:grid-cols-3 gap-3 text-xs sm:text-sm">
-              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3.5 flex items-center justify-between">
-                <span className="text-slate-600 font-bold">سعة المتجر</span>
-                <b className="tabular-nums text-[#0F172A]" dir="ltr">
-                  {shopProducts.length} / {maxProducts}
-                </b>
-              </div>
-              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3.5 flex items-center justify-between">
-                <span className="text-slate-600 font-bold">رصيد معالجة AI</span>
-                <b className="tabular-nums text-[#0284C7]" dir="ltr">
-                  {creditsRemaining} / {creditsCap}
-                </b>
-              </div>
-              <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3.5 flex items-center justify-between">
-                <span className="text-slate-600 font-bold">مسطرة PD بالكاميرا</span>
-                <span className={planCaps.cameraPdRulerEnabled ? 'badge b-ok' : 'badge b-warn'}>
-                  {planCaps.cameraPdRulerEnabled ? 'مفعّلة ✓' : 'في الاحترافية'}
-                </span>
-              </div>
-            </div>
-          </div>
+          )}
         </>
       )}
     </Shell>

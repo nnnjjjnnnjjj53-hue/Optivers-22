@@ -295,6 +295,111 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     }
   }, [cur?.id]);
 
+  // Dynamic Local SEO: title, meta description, OpenGraph, canonical URL, and Schema.org Optician JSON-LD
+  useEffect(() => {
+    if (!shop || typeof document === 'undefined') return;
+
+    const prevTitle = document.title;
+    const locationLabel = shop.governorate || shop.city || 'مصر';
+    const seoTitle = `${shop.name} | نظارات طبية وشمسية بتجربة 3D في ${locationLabel}`;
+    const seoDescription =
+      shop.tagline?.trim() ||
+      `تصفّح أحدث النظارات الطبية والشمسية في ${shop.name} (${locationLabel}) وجرّبها على وجهك مباشرة بالكاميرا 3D بمقياس 1:1 mm مع إرسال الكشف عبر واتساب.`;
+    const canonicalUrl =
+      typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '';
+
+    document.title = seoTitle;
+
+    const managedPrevious: { el: Element; attr: string; prevValue: string | null; created: boolean }[] = [];
+    const upsertMetaTag = (selector: string, createAttr: 'name' | 'property', key: string, content: string) => {
+      let el = document.head.querySelector(selector);
+      let created = false;
+      if (!el) {
+        el = document.createElement('meta');
+        el.setAttribute(createAttr, key);
+        document.head.appendChild(el);
+        created = true;
+      }
+      managedPrevious.push({ el, attr: 'content', prevValue: el.getAttribute('content'), created });
+      el.setAttribute('content', content);
+    };
+
+    upsertMetaTag('meta[name="description"]', 'name', 'description', seoDescription);
+    upsertMetaTag('meta[property="og:title"]', 'property', 'og:title', seoTitle);
+    upsertMetaTag('meta[property="og:description"]', 'property', 'og:description', seoDescription);
+    upsertMetaTag('meta[name="twitter:title"]', 'name', 'twitter:title', seoTitle);
+    upsertMetaTag('meta[name="twitter:description"]', 'name', 'twitter:description', seoDescription);
+    if (canonicalUrl) {
+      upsertMetaTag('meta[property="og:url"]', 'property', 'og:url', canonicalUrl);
+    }
+
+    let canonicalEl = document.head.querySelector('link[rel="canonical"]');
+    let canonicalCreated = false;
+    const prevCanonicalHref = canonicalEl?.getAttribute('href') ?? null;
+    if (canonicalUrl) {
+      if (!canonicalEl) {
+        canonicalEl = document.createElement('link');
+        canonicalEl.setAttribute('rel', 'canonical');
+        document.head.appendChild(canonicalEl);
+        canonicalCreated = true;
+      }
+      canonicalEl.setAttribute('href', canonicalUrl);
+    }
+
+    const jsonLdId = 'optiverse-store-jsonld';
+    let jsonLdScript = document.getElementById(jsonLdId) as HTMLScriptElement | null;
+    if (!jsonLdScript) {
+      jsonLdScript = document.createElement('script');
+      jsonLdScript.id = jsonLdId;
+      jsonLdScript.type = 'application/ld+json';
+      document.head.appendChild(jsonLdScript);
+    }
+
+    const opticianSchema: Record<string, unknown> = {
+      '@context': 'https://schema.org',
+      '@type': 'Optician',
+      name: shop.name,
+      description: seoDescription,
+      ...(canonicalUrl ? { url: canonicalUrl } : {}),
+      ...(shop.wa ? { telephone: shop.wa } : {}),
+      ...(isImageLogo && shop.logo ? { image: shop.logo, logo: shop.logo } : {}),
+      address: {
+        '@type': 'PostalAddress',
+        ...(shop.address ? { streetAddress: shop.address } : {}),
+        addressLocality: shop.city || locationLabel,
+        addressRegion: shop.governorate || shop.city || locationLabel,
+        addressCountry: 'EG',
+      },
+      ...(shop.mapsUrl && /^https?:\/\//i.test(shop.mapsUrl) ? { hasMap: shop.mapsUrl } : {}),
+    };
+    jsonLdScript.textContent = JSON.stringify(opticianSchema);
+
+    return () => {
+      document.title = prevTitle;
+      for (const item of managedPrevious) {
+        if (item.created) item.el.remove();
+        else if (item.prevValue !== null) item.el.setAttribute(item.attr, item.prevValue);
+      }
+      if (canonicalEl) {
+        if (canonicalCreated) canonicalEl.remove();
+        else if (prevCanonicalHref !== null) canonicalEl.setAttribute('href', prevCanonicalHref);
+      }
+      document.getElementById(jsonLdId)?.remove();
+    };
+  }, [
+    shop?.id,
+    shop?.name,
+    shop?.governorate,
+    shop?.city,
+    shop?.tagline,
+    shop?.address,
+    shop?.wa,
+    shop?.mapsUrl,
+    shop?.logo,
+    isImageLogo,
+    route,
+  ]);
+
   if (!shop) {
     return (
       <div dir="rtl" className="min-h-screen bg-[#F8F9FA] flex flex-col items-center justify-center p-6 text-center">
@@ -1925,10 +2030,15 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                       value={notes}
                       onChange={(e) => setNotes(e.target.value)}
                     />
-                    <div className="rounded-xl p-3 bg-amber-50 border border-amber-200 text-xs leading-6 text-amber-900">
-                      {effectiveIndexChoice === 'store_decide'
-                        ? 'سيراجع أخصائي البصريات كشفك لتحديد درجة الضغط والسعر النهائي الأنسب قبل أي دفع.'
-                        : 'صاحب المحل هيراجع الكشف ويأكد لك الملاءمة والسعر النهائي قبل أي دفع — السعر الظاهر مبدئي.'}
+                    <div className="rounded-xl p-3 bg-amber-50 border border-amber-200 text-xs leading-6 text-amber-900 space-y-1.5">
+                      <div>
+                        {effectiveIndexChoice === 'store_decide'
+                          ? 'سيراجع أخصائي البصريات كشفك لتحديد درجة الضغط والسعر النهائي الأنسب قبل أي دفع.'
+                          : 'صاحب المحل هيراجع الكشف ويأكد لك الملاءمة والسعر النهائي قبل أي دفع — السعر الظاهر مبدئي.'}
+                      </div>
+                      <div className="pt-1.5 border-t border-amber-200/80 font-bold text-amber-950">
+                        التجربة الافتراضية استرشادية لتوضيح الشكل والمقاس، ويتم اعتماد القياس الطبي النهائي بواسطة أخصائي البصريات في المحل.
+                      </div>
                     </div>
                     <button
                       type="button"
@@ -2147,6 +2257,9 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                       <Egp v={cartTotal} />
                     </span>
                   </div>
+                  <p className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-[0.72rem] leading-5 font-bold text-amber-950">
+                    التجربة الافتراضية استرشادية لتوضيح الشكل والمقاس، ويتم اعتماد القياس الطبي النهائي بواسطة أخصائي البصريات في المحل.
+                  </p>
                   <button
                     className="btn bg-[#D97706] hover:bg-[#B45309] text-white w-full !py-3 !text-base shadow-sm"
                     onClick={() => setModal({ t: 'checkout', total: cartTotal })}

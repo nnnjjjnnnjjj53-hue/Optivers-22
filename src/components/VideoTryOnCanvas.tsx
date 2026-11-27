@@ -55,6 +55,8 @@ interface VideoTryOnCanvasProps {
 }
 
 const ADULT_IPD_MM = 63;
+const KIDS_IPD_MM = 54;
+const IRIS_CALIBRATION_FACTOR = 0.92;
 
 /**
  * Pure OrthographicCamera pose computation in un-mirrored video pixel space:
@@ -114,14 +116,15 @@ export function computeOrthographicPose(
 
 /**
  * Automatic True-to-Scale Physical Sizing using MediaPipe iris landmarks (468, 473)
- * and standard 63mm adult IPD internally — zero customer input needed.
+ * with 63mm adult IPD or 54mm kids IPD and 0.92 perspective calibration factor.
  */
 export function computePhysicalIrisFit(
   landmarks: { x: number; y: number; z: number }[],
   videoW: number,
   videoH: number,
   frameWidthMm = 136,
-  fitScale = 1.0
+  fitScale = 1.0,
+  isKids = false
 ): PhysicalIrisFit {
   const hasIrises = landmarks.length > 473 && landmarks[468] && landmarks[473];
   const leftIris = hasIrises
@@ -141,8 +144,9 @@ export function computePhysicalIrisFit(
     18,
     Math.hypot((rightIris.x - leftIris.x) * videoW, (rightIris.y - leftIris.y) * videoH)
   );
-  const pixelsPerMm = Math.max(0.25, pixelIPD / ADULT_IPD_MM);
-  const targetWidthPx = frameWidthMm * pixelsPerMm * fitScale;
+  const referenceIpdMm = isKids ? KIDS_IPD_MM : ADULT_IPD_MM;
+  const pixelsPerMm = Math.max(0.25, pixelIPD / referenceIpdMm);
+  const targetWidthPx = frameWidthMm * pixelsPerMm * fitScale * IRIS_CALIBRATION_FACTOR;
 
   const l127 = landmarks[127] || { x: 0.28, y: 0.44, z: 0 };
   const l356 = landmarks[356] || { x: 0.72, y: 0.44, z: 0 };
@@ -369,7 +373,7 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
   const resolvedFitScale = fitScaleOverride ?? product.modelCalibration?.fitScale ?? 1.0;
   const resolvedEyeLineOffset = eyeLineOffsetOverride ?? product.modelCalibration?.eyeLineOffset ?? 0.04;
   const sizeMultiplier = FRAME_SIZE_SCALE[frameSize] ?? 1.0;
-  const kidsScaleMultiplier = product.frameType === 'kids' ? 0.9 : 1.0;
+  const isKidsFrame = product.frameType === 'kids';
 
   const latestPropsRef = useRef({
     active,
@@ -377,7 +381,7 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
     fitScale: resolvedFitScale,
     eyeLineOffset: resolvedEyeLineOffset,
     sizeMultiplier,
-    kidsScaleMultiplier,
+    isKidsFrame,
     onLandmarksFrame,
   });
   latestPropsRef.current = {
@@ -386,7 +390,7 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
     fitScale: resolvedFitScale,
     eyeLineOffset: resolvedEyeLineOffset,
     sizeMultiplier,
-    kidsScaleMultiplier,
+    isKidsFrame,
     onLandmarksFrame,
   };
 
@@ -739,7 +743,7 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
       frameWidthMm: activeFrameWidthMm,
       fitScale,
       sizeMultiplier: szMult,
-      kidsScaleMultiplier: kidsMult,
+      isKidsFrame: isKids,
       onLandmarksFrame: emitLm,
     } = latestPropsRef.current;
 
@@ -789,8 +793,8 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
           firstNoFaceAtRef.current = null;
 
           const pose = computeOrthographicPose(pts, w, h);
-          const physicalFit = computePhysicalIrisFit(pts, w, h, activeFrameWidthMm, fitScale);
-          const targetScale = physicalFit.targetWidthPx * szMult * kidsMult;
+          const physicalFit = computePhysicalIrisFit(pts, w, h, activeFrameWidthMm, fitScale, isKids);
+          const targetScale = physicalFit.targetWidthPx * szMult;
 
           if (!wasFaceVisibleRef.current) {
             t.glassesGroup.position.copy(pose.anchor);

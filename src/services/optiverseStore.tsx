@@ -1385,42 +1385,33 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         } else {
           const displayName =
             user.user_metadata?.full_name || user.user_metadata?.name || (email ? email.split('@')[0] : 'متجر جديد');
-          const trialEnd = new Date(Date.now() + 14 * 86400000).toISOString();
-          const { data: newShop } = await supabase
+          const { data: newShop, error: newShopErr } = await supabase
             .from('shops')
             .insert({
-              owner_id: user.id,
               owner_name: displayName,
               owner_email: email || null,
               name: `متجر ${displayName}`,
               city: 'القاهرة',
               slug: makeSlug(displayName),
               wa_phone: '01001234567',
-              plan_name: 'الأساسية',
-              plan_tier: 'basic',
-              price: 599,
-              ai_credits_limit: 25,
-              status: 'trial',
-              days_left: 14,
-              trial_ends_at: trialEnd,
-              expires_label: 'تجربة 14 يوماً',
             })
             .select('id, slug')
             .single();
-          if (newShop) {
-            shopId = newShop.id;
-            setActiveShopSlug(newShop.slug);
-            await seedCatalogForShop(newShop.id, true);
+          if (newShopErr || !newShop) {
+            throw new Error(newShopErr?.message || 'تعذّر إنشاء متجر التجربة التلقائي');
           }
+          shopId = newShop.id;
+          setActiveShopSlug(newShop.slug);
+          await seedCatalogForShop(newShop.id, true);
         }
       }
 
-      if (!roleRow) {
+      if (!roleRow && shopId) {
         await supabase.from('user_roles').upsert({
           user_id: user.id,
           email,
           role: 'merchant',
-          shop_id: shopId || null,
+          shop_id: shopId,
         });
       }
 
@@ -1509,11 +1500,10 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         createdAt: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
       };
       setAuditLogs((a) => [entry, ...a].slice(0, 100));
-      if (supabase && session) {
+      if (supabase && session?.userId) {
         await supabase.from('audit_logs').insert({
           actor_id: session.userId,
-          actor_role: session.role,
-          shop_id: shopId || null,
+          shop_id: shopId || session.shopId || null,
           action,
           details,
         });
@@ -1789,52 +1779,56 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         return { ok: true };
       }
 
-      const { data, error } = await supabase.auth.signUp({
+      const { data: authData, error } = await supabase.auth.signUp({
         email,
         password,
         options: { data: { full_name: cleanOwner } },
       });
-      if (error || !data.user) {
+      if (error || !authData.user) {
         return { ok: false, error: error?.message || 'تعذّر إنشاء الحساب' };
+      }
+
+      const { data: userRes, error: userErr } = await supabase.auth.getUser();
+      if (userErr || !userRes.user) {
+        return {
+          ok: false,
+          error: 'يرجى تأكيد بريدك الإلكتروني وتسجيل الدخول أولاً لإتمام إنشاء المتجر',
+        };
       }
 
       const { data: shopRow, error: shopErr } = await supabase
         .from('shops')
         .insert({
-          owner_id: data.user.id,
           owner_name: cleanOwner,
           owner_email: email.trim().toLowerCase(),
           name: shopName,
           city: city || 'القاهرة',
+          governorate: city || 'القاهرة',
           slug: finalSlug,
           wa_phone: wa || '01001234567',
-          plan_name: 'الأساسية',
-          plan_tier: 'basic',
-          price: 599,
-          ai_credits_limit: 25,
-          status: 'trial',
-          days_left: 14,
-          trial_ends_at: trialEndsAt,
-          expires_label: 'تجربة 14 يوماً',
         })
-        .select('*')
+        .select('id, slug')
         .single();
 
       if (shopErr || !shopRow) {
-        return { ok: false, error: shopErr?.message || 'تعذّر إنشاء المتجر' };
+        return { ok: false, error: shopErr?.message || 'تعذّر إنشاء المتجر. لم يتم إكمال التسجيل.' };
       }
 
-      await supabase.from('user_roles').upsert({
-        user_id: data.user.id,
+      const { error: roleErr } = await supabase.from('user_roles').upsert({
+        user_id: userRes.user.id,
         email: email.trim().toLowerCase(),
         role: 'merchant',
         shop_id: shopRow.id,
       });
 
+      if (roleErr) {
+        return { ok: false, error: roleErr.message || 'تعذّر ربط صلاحيات التاجر بالحساب' };
+      }
+
       await seedCatalogForShop(shopRow.id, true);
       setActiveShopSlug(finalSlug);
       setSession({
-        userId: data.user.id,
+        userId: userRes.user.id,
         email,
         role: 'merchant',
         shopId: shopRow.id,
@@ -1938,23 +1932,11 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             : {}),
           ...(patch.deliveryFee !== undefined ? { delivery_fee: patch.deliveryFee } : {}),
           ...(patch.deliveryAreas !== undefined ? { delivery_areas: patch.deliveryAreas } : {}),
-          ...(patch.isFeatured !== undefined ? { is_featured: patch.isFeatured } : {}),
           ...(patch.recall6mEnabled !== undefined ? { recall_6m_enabled: patch.recall6mEnabled } : {}),
           ...(patch.recall12mEnabled !== undefined ? { recall_12m_enabled: patch.recall12mEnabled } : {}),
-          ...(patch.aiCreditsLimit !== undefined ? { ai_credits_limit: patch.aiCreditsLimit } : {}),
-          ...(patch.aiCreditsUsed !== undefined ? { ai_credits_used: patch.aiCreditsUsed } : {}),
-          ...(patch.topupCredits !== undefined ? { topup_credits: patch.topupCredits } : {}),
-          ...(patch.planTier !== undefined ? { plan_tier: patch.planTier } : {}),
-          ...(patch.billingCycle !== undefined ? { billing_cycle: patch.billingCycle } : {}),
-          ...(patch.plan !== undefined ? { plan_name: patch.plan } : {}),
-          ...(patch.price !== undefined ? { price: patch.price } : {}),
           ...(patch.logo !== undefined ? { logo: patch.logo } : {}),
           ...(patch.color !== undefined ? { color: patch.color } : {}),
           ...(patch.wa !== undefined ? { wa_phone: patch.wa } : {}),
-          ...(patch.status !== undefined ? { status: patch.status } : {}),
-          ...(patch.days !== undefined ? { days_left: patch.days } : {}),
-          ...(patch.trialEndsAt !== undefined ? { trial_ends_at: patch.trialEndsAt } : {}),
-          ...(patch.exp !== undefined ? { expires_label: patch.exp } : {}),
         };
         if (Object.keys(payload).length > 0) {
           await supabase.from('shops').update(payload).eq('id', shopId);
@@ -2193,7 +2175,12 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       };
 
       if (supabase) {
-        const { data: shopRow } = await supabase
+        const { data: authUserRes, error: authErr } = await supabase.auth.getUser();
+        if (authErr || !authUserRes.user) {
+          throw new Error('يجب تسجيل الدخول أولاً لإنشاء متجر');
+        }
+
+        const { data: shopRow, error: shopErr } = await supabase
           .from('shops')
           .insert({
             owner_name: finalShop.ownerName,
@@ -2205,23 +2192,27 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             maps_url: finalShop.mapsUrl,
             onboarding_completed: true,
             enable_delivery_service: false,
-            is_featured: finalShop.isFeatured,
-            ai_credits_limit: finalShop.aiCreditsLimit,
-            plan_tier: finalShop.planTier,
             slug: finalShop.slug,
-            plan_name: finalShop.plan,
-            price: finalShop.price,
-            status: 'active',
-            days_left: 30,
-            expires_label: 'مفعل (شهر)',
             wa_phone: finalShop.wa,
             logo: finalShop.logo,
             color: finalShop.color,
           })
-          .select('*')
+          .select('id, slug')
           .single();
+
+        if (shopErr || !shopRow) {
+          throw new Error(shopErr?.message || 'تعذّر إنشاء المحل في قاعدة البيانات');
+        }
+
+        await supabase.from('user_roles').upsert({
+          user_id: authUserRes.user.id,
+          email: finalShop.ownerEmail || authUserRes.user.email || null,
+          role: 'merchant',
+          shop_id: shopRow.id,
+        });
+
         if (shopRow?.id) {
-          finalShop = { ...finalShop, id: shopRow.id };
+          finalShop = { ...finalShop, id: shopRow.id, slug: shopRow.slug || finalShop.slug };
         }
       }
 

@@ -37,6 +37,7 @@ export interface CutoutWorkerOptions {
   eyeLineOffset?: number;
   pureWhiteCatalog?: boolean;
   preferTransparentPng?: boolean;
+  skipNeuralModel?: boolean;
 }
 
 export interface CutoutWorkerOutput {
@@ -1172,6 +1173,7 @@ export async function processCutoutFrame(
         eyeLineOffset: options.eyeLineOffset ?? 0.04,
         angleType: 'front',
         maxSidePx: 1200,
+        skipNeuralModel: Boolean(options.skipNeuralModel),
         onStage,
       });
 
@@ -1232,6 +1234,7 @@ export async function processCutoutFrame(
         material: detectedMaterial,
         angleType: 'angled45',
         maxSidePx: 1200,
+        skipNeuralModel: Boolean(options.skipNeuralModel),
       });
       const sideCut = track(await decodeBlobToCanvas(sideRes.cutoutImage.blob, 1000));
       studioSideCanvas = track(renderStudio1200x900Front(sideCut, studioBgHex));

@@ -46,6 +46,7 @@ export interface ProcessGlassesImageOptions {
   eyeLineOffset?: number;
   angleType?: 'front' | 'angled45';
   maxSidePx?: number;
+  skipNeuralModel?: boolean;
   onStage?: (stageLabelAr: string) => void;
 }
 
@@ -1503,8 +1504,13 @@ export async function processGlassesImage(
     const rawRgba = get2dCtx(sourceCanvas).getImageData(0, 0, sw, sh).data;
     const outerBg = sampleOuterCornerMedianColor(rawRgba, sw, sh);
 
-    options.onStage?.('جاري عزل النظارة محلياً بالذكاء الاصطناعي...');
-    const nnMask = await runLocalU2NetMask(sourceCanvas);
+    let nnMask: { alphaMask: Uint8Array; backend: SegmentationBackend } | null = null;
+    if (!options.skipNeuralModel) {
+      options.onStage?.('جاري عزل النظارة محلياً بالذكاء الاصطناعي...');
+      nnMask = await runLocalU2NetMask(sourceCanvas);
+    } else {
+      options.onStage?.('جاري العزل الهندسي السريع عبر Canvas...');
+    }
     const backendUsed: SegmentationBackend = nnMask ? nnMask.backend : 'fallback';
     const initialMask = nnMask ? nnMask.alphaMask : buildFallbackForegroundMask(rawRgba, sw, sh, outerBg);
 

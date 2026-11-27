@@ -143,8 +143,11 @@ const MAX_BATCH_SIZE = 50;
 const MAX_AI_LOGO_GENERATIONS = 2;
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX_REQUESTS = 120;
+const VISUAL_MATCH_WINDOW_MS = 60 * 60 * 1000;
+const VISUAL_MATCH_MAX_REQUESTS = 10;
 
 const rateLimitStore = new Map<string, number[]>();
+const visualMatchRateStore = new Map<string, number[]>();
 const memorySharedCache = new Map<string, SharedCacheEntry>();
 const memoryDemoCredits = new Map<string, number>();
 const memoryLogoGenerations = new Map<string, number>();
@@ -211,6 +214,34 @@ function checkRateLimit(userKey: string): boolean {
   return true;
 }
 
+function getClientIpKey(req: Request): string {
+  const xff = req.headers['x-forwarded-for'];
+  const forwarded = Array.isArray(xff) ? xff[0] : typeof xff === 'string' ? xff.split(',')[0] : '';
+  const raw = (forwarded || req.ip || req.socket?.remoteAddress || 'unknown').trim();
+  return raw.slice(0, 80) || 'unknown';
+}
+
+function checkVisualMatchRateLimit(ipKey: string): { allowed: boolean; remaining: number; retryAfterSec: number } {
+  const now = Date.now();
+  if (visualMatchRateStore.size > 4000) {
+    for (const [k, list] of visualMatchRateStore.entries()) {
+      const fresh = list.filter((ts) => now - ts < VISUAL_MATCH_WINDOW_MS);
+      if (fresh.length === 0) visualMatchRateStore.delete(k);
+      else visualMatchRateStore.set(k, fresh);
+    }
+  }
+  const prev = (visualMatchRateStore.get(ipKey) || []).filter((ts) => now - ts < VISUAL_MATCH_WINDOW_MS);
+  if (prev.length >= VISUAL_MATCH_MAX_REQUESTS) {
+    visualMatchRateStore.set(ipKey, prev);
+    const oldest = prev[0] || now;
+    const retryAfterSec = Math.max(1, Math.ceil((VISUAL_MATCH_WINDOW_MS - (now - oldest)) / 1000));
+    return { allowed: false, remaining: 0, retryAfterSec };
+  }
+  prev.push(now);
+  visualMatchRateStore.set(ipKey, prev);
+  return { allowed: true, remaining: Math.max(0, VISUAL_MATCH_MAX_REQUESTS - prev.length), retryAfterSec: 0 };
+}
+
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || !apiKey.trim()) {
@@ -226,9 +257,21 @@ function getGeminiClient(): GoogleGenAI {
   });
 }
 
-async function authenticateRequest(
+export function isLocalPreviewMode(): boolean {
+  const onVercel = Boolean(process.env.VERCEL || process.env.VERCEL_ENV);
+  const hasSupabaseUrl = Boolean((process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim());
+  const hasServiceKey = Boolean((process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim());
+  return !onVercel && !hasSupabaseUrl && !hasServiceKey;
+}
+
+export async function authenticateRequest(
   req: Request,
-  options: { requireCredits?: boolean; requireTurbo?: boolean; skipAuthForPublicRead?: boolean } = {}
+  options: {
+    requireCredits?: boolean;
+    requireTurbo?: boolean;
+    skipAuthForPublicRead?: boolean;
+    allowPreviewWithoutAuth?: boolean;
+  } = {}
 ): Promise<AuthContext> {
   const authHeader = req.headers.authorization || '';
   const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
@@ -366,18 +409,36 @@ async function authenticateRequest(
     };
   }
 
-  // Production guard: when process.env.NODE_ENV === 'production' and SUPABASE_SERVICE_ROLE_KEY is missing,
-  // reject with HTTP 503 and never trust client headers (x-optiverse-admin-demo, x-optiverse-demo-role).
-  if (process.env.NODE_ENV === 'production') {
-    const err = new Error('الخدمة غير مهيأة للإنتاج — مفتاح SUPABASE_SERVICE_ROLE_KEY مفقود.');
-    (err as Error & { statusCode?: number }).statusCode = 503;
+  // Production / Configured-Supabase / Vercel guard:
+  // When not in local preview mode and SUPABASE_SERVICE_ROLE_KEY is missing, reject strictly and never trust client headers.
+  if (!isLocalPreviewMode()) {
+    const err = new Error('الخدمة غير مهيأة — يرجى التحقق من إعدادات المصادقة والبيئة.');
+    (err as Error & { statusCode?: number }).statusCode = process.env.NODE_ENV === 'production' ? 503 : 401;
     throw err;
   }
 
-  // Local / Preview fallback when SUPABASE_SERVICE_ROLE_KEY is not provisioned yet:
-  // Still require an authenticated merchant header or Bearer session and enforce rate limit & trial credits.
+  // Local / AI Studio Preview fallback when Supabase is not configured:
   const identityKey = bearerToken || demoShopHeader;
   if (!identityKey && !options.skipAuthForPublicRead) {
+    if (options.allowPreviewWithoutAuth) {
+      const previewRateKey = `preview:${req.ip || 'anon'}`;
+      if (!checkRateLimit(previewRateKey)) {
+        const err = new Error('تم تجاوز الحد المسموح من الطلبات — انتظر دقيقة ثم أعد المحاولة.');
+        (err as Error & { statusCode?: number }).statusCode = 429;
+        throw err;
+      }
+      return {
+        userId: 'preview-merchant',
+        email: 'merchant@preview.local',
+        role: 'merchant',
+        isAdmin: false,
+        isDemoAdminStore: true,
+        shopId: '11111111-1111-4111-8111-111111111101',
+        planTier: 'pro',
+        remainingCredits: 250,
+        supabaseMode: false,
+      };
+    }
     const err = new Error('يرجى تسجيل الدخول بحساب التاجر أولاً لاستخدام خدمات المعالجة.');
     (err as Error & { statusCode?: number }).statusCode = 401;
     throw err;
@@ -876,10 +937,10 @@ export function createEyewearServerApp() {
     }
   });
 
-  // 2. Zero-Cost OCR Dimension, Model Code & Crystal Frame Extraction (gemini-2.5-flash-lite)
+  // 2. Zero-Cost OCR Dimension, Model Code & Crystal Frame Extraction (gemini-3.5-flash-lite)
   app.post('/api/eyewear/extract-dimensions', async (req: Request, res: Response) => {
     try {
-      await authenticateRequest(req, { requireCredits: false });
+      await authenticateRequest(req, { requireCredits: false, allowPreviewWithoutAuth: true });
 
       const body = (req.body || {}) as ExtractDimensionsRequestBody;
       const rawBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64.trim() : '';
@@ -900,7 +961,7 @@ export function createEyewearServerApp() {
       const ai = getGeminiClient();
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-lite',
+        model: 'gemini-3.5-flash-lite',
         contents: {
           parts: [
             {
@@ -1007,7 +1068,7 @@ export function createEyewearServerApp() {
   // 3. Shared Catalog Cache Save (called by merchant browser after uploading WebP assets)
   app.post('/api/eyewear/cache-save', async (req: Request, res: Response) => {
     try {
-      await authenticateRequest(req, { requireCredits: false });
+      await authenticateRequest(req, { requireCredits: false, allowPreviewWithoutAuth: true });
       const body = (req.body || {}) as CacheSaveBody;
       const keepLensBranding = Boolean(body.keepLensBranding);
       const isPatterned = Boolean(body.isPatterned);
@@ -1052,7 +1113,7 @@ export function createEyewearServerApp() {
   // 4. Protected Single-Call 16:9 Split Sheet (Auth + Credit Guard + Shared Cache + Model Fallback)
   app.post('/api/eyewear/split-sheet', async (req: Request, res: Response) => {
     try {
-      const ctx = await authenticateRequest(req, { requireCredits: true });
+      const ctx = await authenticateRequest(req, { requireCredits: true, allowPreviewWithoutAuth: true });
       const body = (req.body || {}) as SplitSheetRequestBody;
       const keepLensBranding = Boolean(body.keepLensBranding);
       const isCrystalFrame = Boolean(body.isCrystalFrame);
@@ -1158,7 +1219,11 @@ export function createEyewearServerApp() {
     try {
       const body = (req.body || {}) as BatchSplitRequestBody;
       const turbo = Boolean(body.turbo);
-      const ctx = await authenticateRequest(req, { requireCredits: true, requireTurbo: turbo });
+      const ctx = await authenticateRequest(req, {
+        requireCredits: true,
+        requireTurbo: turbo,
+        allowPreviewWithoutAuth: true,
+      });
 
       const items = Array.isArray(body.items) ? body.items : [];
       if (!items.length) {
@@ -1277,7 +1342,7 @@ export function createEyewearServerApp() {
 
   app.get('/api/eyewear/batch-status/:jobId', async (req: Request, res: Response) => {
     try {
-      const ctx = await authenticateRequest(req, { requireCredits: false });
+      const ctx = await authenticateRequest(req, { requireCredits: false, allowPreviewWithoutAuth: true });
       const job = batchJobsStore.get(String(req.params.jobId || ''));
       if (!job || (job.userId !== ctx.userId && !ctx.isAdmin)) {
         res.status(404).json({ error: 'لم يتم العثور على الدفعة المطلوبة' });
@@ -1426,6 +1491,148 @@ export function createEyewearServerApp() {
     } catch (err) {
       const code = (err as Error & { statusCode?: number }).statusCode;
       const message = err instanceof Error ? err.message : 'تعذر تصميم اللوجو بالذكاء الاصطناعي';
+      const status =
+        code ||
+        (message.includes('GEMINI_API_KEY') || message.includes('Settings > Secrets') ? 503 : 500);
+      res.status(status).json({ error: message });
+    }
+  });
+
+  // 7. Guest-First Visual Eyewear Search (Strict 10 req/hour per IP, zero merchant credit deduction)
+  app.post('/api/eyewear/visual-match', async (req: Request, res: Response) => {
+    try {
+      const ipKey = getClientIpKey(req);
+      const rl = checkVisualMatchRateLimit(ipKey);
+      if (!rl.allowed) {
+        res.setHeader('Retry-After', String(rl.retryAfterSec));
+        res.status(429).json({
+          error: 'وصلت للحد الأقصى للبحث بالصورة (10 عمليات في الساعة). يرجى المحاولة بعد قليل.',
+          retryAfterSec: rl.retryAfterSec,
+        });
+        return;
+      }
+
+      const body = (req.body || {}) as { imageBase64?: unknown; mimeType?: unknown };
+      const rawBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64.trim() : '';
+      const rawMime = typeof body.mimeType === 'string' ? body.mimeType.trim() : 'image/jpeg';
+
+      if (!rawBase64) {
+        res.status(400).json({ error: 'يرجى اختيار صورة نظارة واضحة أولاً.' });
+        return;
+      }
+
+      const cleanBase64 = rawBase64.replace(/^data:[^;]+;base64,/, '');
+      if (!cleanBase64 || cleanBase64.length > 3_500_000) {
+        res.status(413).json({ error: 'حجم الصورة كبير جداً. يرجى اختيار صورة أصغر.' });
+        return;
+      }
+
+      const safeMimeType = ALLOWED_MIME_TYPES.has(rawMime) ? rawMime : 'image/jpeg';
+      const ai = getGeminiClient();
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.5-flash-lite',
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                data: cleanBase64,
+                mimeType: safeMimeType,
+              },
+            },
+            {
+              text: [
+                'Analyze this uploaded photo for eyewear visual search matching:',
+                '1. is_eyewear: true if the photo clearly depicts eyeglasses, sunglasses, optical frames, or a person wearing clearly visible glasses; false if it does not show eyewear.',
+                '2. frame_shape: choose closest silhouette from "round", "oval", "square", "cat_eye", "aviator".',
+                '3. color_family: choose primary frame color from "black", "brown_tortoise", "clear", "metal", "other".',
+                '4. category: "sun" if dark/tinted sunglasses, otherwise "med" for optical/clear-lens frames.',
+                '5. material: "metal" for wire/metal/rimless-metal frames, or "tr_plastic" for acetate/plastic frames.',
+                '6. style_summary_ar: concise friendly Arabic description (6-12 words) of the eyewear style, e.g., "نظارة أفياتور معدنية شمسية باللون الذهبي".',
+              ].join('\n'),
+            },
+          ],
+        },
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              is_eyewear: { type: Type.BOOLEAN },
+              frame_shape: {
+                type: Type.STRING,
+                enum: ['round', 'oval', 'square', 'cat_eye', 'aviator'],
+              },
+              color_family: {
+                type: Type.STRING,
+                enum: ['black', 'brown_tortoise', 'clear', 'metal', 'other'],
+              },
+              category: {
+                type: Type.STRING,
+                enum: ['sun', 'med'],
+              },
+              material: {
+                type: Type.STRING,
+                enum: ['metal', 'tr_plastic'],
+              },
+              style_summary_ar: { type: Type.STRING },
+            },
+            required: ['is_eyewear', 'frame_shape', 'color_family', 'category', 'material', 'style_summary_ar'],
+          },
+        },
+      });
+
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = JSON.parse(response.text || '{}') as Record<string, unknown>;
+      } catch {
+        parsed = {};
+      }
+
+      const isEyewear = Boolean(parsed.is_eyewear);
+      if (!isEyewear) {
+        res.json({
+          ok: true,
+          is_eyewear: false,
+          remaining: rl.remaining,
+          message: 'لم نتمكن من تمييز نظارة واضحة في هذه الصورة. من فضلك ارفع صورة نظارة أوضح وبإضاءة جيدة.',
+        });
+        return;
+      }
+
+      const allowedShapes = new Set(['round', 'oval', 'square', 'cat_eye', 'aviator']);
+      const allowedColors = new Set(['black', 'brown_tortoise', 'clear', 'metal', 'other']);
+      const frameShape =
+        typeof parsed.frame_shape === 'string' && allowedShapes.has(parsed.frame_shape)
+          ? parsed.frame_shape
+          : 'square';
+      const colorFamily =
+        typeof parsed.color_family === 'string' && allowedColors.has(parsed.color_family)
+          ? parsed.color_family
+          : 'other';
+      const category = parsed.category === 'sun' ? 'sun' : 'med';
+      const material = parsed.material === 'metal' ? 'metal' : 'tr_plastic';
+      const styleSummaryAr =
+        typeof parsed.style_summary_ar === 'string' && parsed.style_summary_ar.trim()
+          ? parsed.style_summary_ar.trim().slice(0, 120)
+          : 'نظارة عصرية أنيقة';
+
+      res.json({
+        ok: true,
+        is_eyewear: true,
+        remaining: rl.remaining,
+        analysis: {
+          is_eyewear: true,
+          frame_shape: frameShape,
+          color_family: colorFamily,
+          category,
+          material,
+          style_summary_ar: styleSummaryAr,
+        },
+      });
+    } catch (err) {
+      const code = (err as Error & { statusCode?: number }).statusCode;
+      const message = err instanceof Error ? err.message : 'تعذر تحليل الصورة حالياً — حاول مرة أخرى.';
       const status =
         code ||
         (message.includes('GEMINI_API_KEY') || message.includes('Settings > Secrets') ? 503 : 500);

@@ -68,7 +68,11 @@ import {
 } from '../src/data/opticalLensMatrix';
 import { getShopMaxProducts } from '../src/services/optiverseStore';
 import { analyzeRgbaFrameColorVariance } from '../src/utils/splitSheetApi';
-import { buildSharedCacheKeys } from '../api/index';
+import {
+  authenticateRequest,
+  buildSharedCacheKeys,
+  isLocalPreviewMode,
+} from '../api/index';
 
 function makeImage(w: number, h: number, bg: [number, number, number]): Uint8ClampedArray {
   const arr = new Uint8ClampedArray(w * h * 4);
@@ -992,7 +996,7 @@ console.log('=== OptiVerse Automated Technical Verification ===');
     'server.ts calls gemini-3.1-flash-lite-image with 16:9 aspectRatio and required telemetry User-Agent without responseMimeType on image call'
   );
   assert.ok(
-    serverSrc.includes('gemini-2.5-flash-lite') &&
+    serverSrc.includes('gemini-3.5-flash-lite') &&
       serverSrc.includes('shared_eyewear_cache') &&
       serverSrc.includes('authenticateRequest'),
     'server.ts enforces JWT/credit guard, free OCR model, and global shared catalog cache'
@@ -1388,6 +1392,85 @@ console.log('=== OptiVerse Automated Technical Verification ===');
   );
 
   console.log('✓ Test 16 passed: Complete Optical Lens Matrix, Sponsorship Priority, Variance Clamping & 4-Step Flow verified');
+}
+
+// =========================================================================
+// Test 17: Preview-Only Unauthenticated Eyewear Processing vs Strict Vercel/Supabase Auth
+// =========================================================================
+{
+  const prevEnv = {
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL,
+    SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+    VERCEL: process.env.VERCEL,
+    VERCEL_ENV: process.env.VERCEL_ENV,
+    NODE_ENV: process.env.NODE_ENV,
+  };
+
+  try {
+    // 1. Local / AI Studio Preview Mode (VITE_SUPABASE_URL unset & non-Vercel)
+    delete process.env.SUPABASE_URL;
+    delete process.env.VITE_SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    delete process.env.VERCEL;
+    delete process.env.VERCEL_ENV;
+    process.env.NODE_ENV = 'production'; // Simulates AI Studio Shared App preview server
+
+    assert.equal(isLocalPreviewMode(), true, 'Local/AI Studio preview mode detected when VITE_SUPABASE_URL unset');
+    const mockReq = { headers: {}, ip: '127.0.0.1' } as any;
+    const previewCtx = await authenticateRequest(mockReq, {
+      requireCredits: true,
+      allowPreviewWithoutAuth: true,
+    });
+    assert.equal(previewCtx.supabaseMode, false);
+    assert.equal(previewCtx.userId, 'preview-merchant', 'Eyewear processing runs in preview without login');
+
+    await assert.rejects(
+      () => authenticateRequest(mockReq, { requireCredits: false, allowPreviewWithoutAuth: false }),
+      (err: any) => err?.statusCode === 401,
+      'Non-eyewear endpoints still require login/session even in preview mode'
+    );
+
+    // 2. Vercel Production Mode (strictly blocks unauthenticated bypass)
+    process.env.VERCEL = '1';
+    assert.equal(isLocalPreviewMode(), false, 'Vercel runtime disables unauthenticated preview mode');
+    await assert.rejects(
+      () =>
+        authenticateRequest(
+          { headers: { 'x-optiverse-admin-demo': '1', 'x-optiverse-demo-shop': 's1' }, ip: '1.2.3.4' } as any,
+          { requireCredits: true, allowPreviewWithoutAuth: true }
+        ),
+      (err: any) => err?.statusCode === 503 || err?.statusCode === 401,
+      'Vercel runtime rejects unauthenticated or demo-header eyewear processing'
+    );
+
+    // 3. Supabase Connected Mode (VITE_SUPABASE_URL set -> strictly enforces auth, never trusts demo headers)
+    delete process.env.VERCEL;
+    process.env.VITE_SUPABASE_URL = 'https://demo-project.supabase.co';
+    assert.equal(isLocalPreviewMode(), false, 'Configured VITE_SUPABASE_URL disables unauthenticated preview mode');
+    await assert.rejects(
+      () =>
+        authenticateRequest(
+          { headers: { 'x-optiverse-admin-demo': '1' }, ip: '127.0.0.1' } as any,
+          { requireCredits: true, allowPreviewWithoutAuth: true }
+        ),
+      (err: any) => err?.statusCode === 503 || err?.statusCode === 401,
+      'Configured Supabase URL blocks unauthenticated eyewear processing'
+    );
+  } finally {
+    const restore = (k: keyof typeof prevEnv) => {
+      if (prevEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = prevEnv[k];
+    };
+    restore('SUPABASE_URL');
+    restore('VITE_SUPABASE_URL');
+    restore('SUPABASE_SERVICE_ROLE_KEY');
+    restore('VERCEL');
+    restore('VERCEL_ENV');
+    restore('NODE_ENV');
+  }
+
+  console.log('✓ Test 17 passed: Preview-only unauthenticated eyewear processing & strict Vercel/Supabase auth verified');
 }
 
 console.log('=== ALL TESTS PASSED ===');

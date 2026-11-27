@@ -343,7 +343,7 @@ export function base64ToBlob(base64: string, mimeType: string): Blob {
 
 /**
  * Step 1 Pre-Processing OCR: Reads printed optical sizing (e.g. 52□18-140),
- * brand/model code, and crystal/transparent acetate status using free-tier gemini-2.5-flash-lite.
+ * brand/model code, and crystal/transparent acetate status using free-tier gemini-3.5-flash-lite.
  */
 export async function extractOpticalDimensionsViaServer(
   file: Blob,

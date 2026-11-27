@@ -217,6 +217,7 @@ export function MerchantPage() {
   const {
     route,
     session,
+    setSession,
     authLoading,
     signInUnified,
     signInWithGoogle,
@@ -462,10 +463,27 @@ export function MerchantPage() {
           </div>
 
           {!isSupabaseConfigured && (
-            <div className="rounded-xl p-3 bg-sky-50 border border-sky-200 text-xs leading-6 text-[#0284C7]">
-              وضع المعاينة التفاعلية نشط. عند ربط <code className="font-mono font-bold">VITE_SUPABASE_URL</code> و{' '}
-              <code className="font-mono font-bold">VITE_SUPABASE_ANON_KEY</code> يتم التفعيل الكامل مع Supabase Auth
-              (Google · Apple · OTP).
+            <div className="rounded-xl p-3 bg-sky-50 border border-sky-200 text-xs leading-6 text-[#0284C7] space-y-2.5">
+              <div>
+                وضع المعاينة التفاعلية نشط. عند ربط <code className="font-mono font-bold">VITE_SUPABASE_URL</code> و{' '}
+                <code className="font-mono font-bold">VITE_SUPABASE_ANON_KEY</code> يتم التفعيل الكامل مع Supabase Auth
+                (Google · Apple · OTP).
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSession({
+                    userId: 'preview-merchant',
+                    email: activeShop.ownerEmail || 'preview@optiverse.local',
+                    role: 'merchant',
+                    shopId: activeShop.id,
+                  });
+                  toast('تم فتح لوحة التاجر ومعالجة الصور في وضع المعاينة ✨');
+                }}
+                className="w-full py-2 px-3 rounded-lg bg-[#0284C7] hover:bg-[#0369A1] text-white font-extrabold text-xs cursor-pointer transition shadow-xs"
+              >
+                دخول فوري لمعالجة الصور ولوحة التاجر (وضع المعاينة بدون تسجيل) ✨
+              </button>
             </div>
           )}
 

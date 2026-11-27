@@ -35,6 +35,8 @@ export interface CutoutWorkerOptions {
   opticalDimensions?: string;
   fitScale?: number;
   eyeLineOffset?: number;
+  pureWhiteCatalog?: boolean;
+  preferTransparentPng?: boolean;
 }
 
 export interface CutoutWorkerOutput {
@@ -128,8 +130,8 @@ export function detectChromaKeyColor(
   if (b >= 175 && b - Math.max(r, g) >= 85) {
     return { kind: 'blue', rgb: { r, g, b } };
   }
-  // Green (#00FF00)
-  if (g >= 175 && g - Math.max(r, b) >= 85) {
+  // Green (#00FF00 or slightly shaded studio green)
+  if (g >= 150 && g - Math.max(r, b) >= 55) {
     return { kind: 'green', rgb: { r, g, b } };
   }
   // Magenta (#FF00FF)
@@ -177,7 +179,8 @@ export function applyChromaKeyAndDespill(
     const d = rgbDistance(r, g, b, keyRgb.r, keyRgb.g, keyRgb.b);
 
     let alpha: number;
-    if (d < lowThresh) {
+    const greenExcess = g - Math.max(r, b);
+    if (d < lowThresh || (keyKind === 'green' && greenExcess >= 65 && g >= 110)) {
       alpha = 0;
     } else if (d > highThresh) {
       alpha = origA;
@@ -193,8 +196,9 @@ export function applyChromaKeyAndDespill(
       continue;
     }
 
-    // Smart edge despill on semi-transparent / key-tinged rim pixels
-    const nearEdge = alpha < 252 || d < highThresh * 1.45;
+    // Smart edge despill on semi-transparent / key-tinged rim pixels (strips green fringes on thin metallic rims)
+    const nearEdge =
+      alpha < 252 || d < highThresh * 1.65 || (keyKind === 'green' && greenExcess > 12);
     if (nearEdge) {
       if (keyKind === 'blue') {
         out[i + 2] = Math.min(b, Math.max(r, g));
@@ -831,12 +835,12 @@ async function decodeBlobToCanvas(blob: Blob, maxWidth = 1200): Promise<AnyCanva
 /**
  * Composites centered frame + soft ground contact ellipse shadow onto 1200x900 `#F8F9FA` white studio card.
  */
-function renderStudio1200x900Front(cutoutCanvas: AnyCanvas): AnyCanvas {
+function renderStudio1200x900Front(cutoutCanvas: AnyCanvas, bgHex = STUDIO_WHITE_HEX): AnyCanvas {
   const W = 1200;
   const H = 900;
   const out = createCanvasLocal(W, H);
   const ctx = getCtx2d(out);
-  ctx.fillStyle = STUDIO_WHITE_HEX;
+  ctx.fillStyle = bgHex;
   ctx.fillRect(0, 0, W, H);
 
   const maxDrawW = 920;
@@ -1003,12 +1007,12 @@ function renderStudio1200x900SidePerspective(
  * Centers the trimmed right-half AI 3/4 side studio shot (with its natural bottom contact shadow)
  * onto a clean 1200x900 `#F8F9FA` catalog card.
  */
-function renderStudio1200x900RightCatalog(trimmedRightCanvas: AnyCanvas): AnyCanvas {
+function renderStudio1200x900RightCatalog(trimmedRightCanvas: AnyCanvas, bgHex = STUDIO_WHITE_HEX): AnyCanvas {
   const W = 1200;
   const H = 900;
   const out = createCanvasLocal(W, H);
   const ctx = getCtx2d(out);
-  ctx.fillStyle = STUDIO_WHITE_HEX;
+  ctx.fillStyle = bgHex;
   ctx.fillRect(0, 0, W, H);
 
   const maxDrawW = 960;
@@ -1216,9 +1220,10 @@ export async function processCutoutFrame(
     );
     const ratioInfo = validateEyewearAspectRatio(cutoutCanvas.width, cutoutCanvas.height);
 
-    onStage?.('جاري إخراج صور الاستوديو #F8F9FA والزاوية 3/4...');
-    // Free local Front Catalog studio card (1200x900 #F8F9FA + soft elliptical contact shadow)
-    const studioFrontCanvas = track(renderStudio1200x900Front(cutoutCanvas));
+    const studioBgHex = options.pureWhiteCatalog ? '#FFFFFF' : STUDIO_WHITE_HEX;
+    onStage?.(`جاري إخراج صور الاستوديو ${studioBgHex} والزاوية 3/4...`);
+    // Free local Front Catalog studio card (1200x900 studio white + soft elliptical contact shadow)
+    const studioFrontCanvas = track(renderStudio1200x900Front(cutoutCanvas, studioBgHex));
 
     let studioSideCanvas: AnyCanvas;
     if (sideFile) {
@@ -1229,7 +1234,7 @@ export async function processCutoutFrame(
         maxSidePx: 1200,
       });
       const sideCut = track(await decodeBlobToCanvas(sideRes.cutoutImage.blob, 1000));
-      studioSideCanvas = track(renderStudio1200x900Front(sideCut));
+      studioSideCanvas = track(renderStudio1200x900Front(sideCut, studioBgHex));
     } else if (rightHalfCanvas) {
       const rightRgba = getCtx2d(rightHalfCanvas).getImageData(0, 0, rightHalfCanvas.width, rightHalfCanvas.height).data;
       const rightBounds = trimStudioWhitespaceBounds(rightRgba, rightHalfCanvas.width, rightHalfCanvas.height, 24);
@@ -1245,7 +1250,22 @@ export async function processCutoutFrame(
         rightBounds.width,
         rightBounds.height
       );
-      studioSideCanvas = track(renderStudio1200x900RightCatalog(trimmedRight));
+      if (options.pureWhiteCatalog) {
+        const trCtx = getCtx2d(trimmedRight);
+        const trImg = trCtx.getImageData(0, 0, trimmedRight.width, trimmedRight.height);
+        const trPx = trImg.data;
+        for (let p = 0; p < trimmedRight.width * trimmedRight.height; p++) {
+          const i = p * 4;
+          const r = trPx[i];
+          const g = trPx[i + 1];
+          const b = trPx[i + 2];
+          if (r >= 242 && g >= 242 && b >= 242 && Math.max(r, g, b) - Math.min(r, g, b) <= 12) {
+            trPx[i + 3] = 0;
+          }
+        }
+        trCtx.putImageData(trImg, 0, 0);
+      }
+      studioSideCanvas = track(renderStudio1200x900RightCatalog(trimmedRight, studioBgHex));
     } else {
       studioSideCanvas = track(
         renderStudio1200x900SidePerspective(
@@ -1258,7 +1278,11 @@ export async function processCutoutFrame(
     }
 
     const [imagePath, frontCatalogPath, sideImagePath, maskAsset] = await Promise.all([
-      exportAsset(cutoutCanvas, 'image/webp', 0.85),
+      exportAsset(
+        cutoutCanvas,
+        options.preferTransparentPng ? 'image/png' : 'image/webp',
+        options.preferTransparentPng ? 1 : 0.85
+      ),
       exportAsset(studioFrontCanvas, 'image/webp', 0.85),
       exportAsset(studioSideCanvas, 'image/webp', 0.85),
       exportAsset(maskCanvas, 'image/png', 1),

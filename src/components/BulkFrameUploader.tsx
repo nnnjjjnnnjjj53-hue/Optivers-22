@@ -516,6 +516,7 @@ export function BulkFrameUploader({
   const abortRef = useRef<AbortController | null>(null);
   const itemsRef = useRef<BulkFrameItem[]>([]);
   const pickerRef = useRef<HTMLInputElement | null>(null);
+  const splitSheetPickerRef = useRef<HTMLInputElement | null>(null);
   const queueAnchorRef = useRef<HTMLDivElement | null>(null);
   const pendingPickRef = useRef<{
     mode: EyewearFrameMode;
@@ -1418,6 +1419,153 @@ export function BulkFrameUploader({
     setProcessing(false);
   };
 
+  /**
+   * Local 16:9 Split-Sheet Test Processor (Zero Gemini API calls):
+   * Splits uploaded 16:9 studio sheet into Left Half (front on #00FF00 green chroma)
+   * and Right Half (3/4 side on studio white), strips green chroma & edge spill to generate
+   * a transparent PNG try-on asset + two pure #FFFFFF catalog studio views.
+   */
+  const handleSplitSheetTestSelected = async (file: File) => {
+    setValidationAlert(null);
+    if (!file.type.startsWith('image/') && !/\.(png|jpe?g|webp|heic|avif)$/i.test(file.name)) {
+      toast('اختر ملف صورة لوحة مزدوجة 16:9 صالح (PNG / JPG / WebP)');
+      return;
+    }
+
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    const chosenMode = selectedMode;
+    const chosenSub: EyewearSubMode =
+      chosenMode === 'sunglasses'
+        ? 'sun'
+        : chosenMode === 'prescription' || chosenMode === 'clip_on'
+        ? 'optical'
+        : subCategory;
+    const chosenCat = resolveCatFromMode(chosenMode, chosenSub);
+    const chosenMaterial: FrameMaterial = chosenMode === 'metal' ? 'metal' : 'tr_plastic';
+    const seedNum = Math.floor(2000 + Math.random() * 6000);
+    const defaultPrice = Math.max(0, Number(bulkPrice) || 950);
+    const localId = `split-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+    const draftCard: BulkFrameItem = {
+      localId,
+      sourceFile: file,
+      originalThumbUrl: URL.createObjectURL(file),
+      status: 'enhancing',
+      stageLabel: 'جاري تقسيم اللوحة (16:9) وعزل الكروما الخضراء...',
+      approved: false,
+      isPublished: false,
+      name: cleanNameFromFile(file.name, 0),
+      code: `FR-${seedNum}`,
+      price: defaultPrice,
+      frameType: chosenMode,
+      subCategory: chosenSub,
+      frameWidthMm: chosenMode === 'kids' ? 122 : bulkWidthMm,
+      opticalDimensions: bulkOpticalDim,
+      keepLensBranding: Boolean(platformSettings.allowMerchantLensBrandingToggle && keepLensBranding),
+      fitScale: 1.0,
+      eyeLineOffset: 0.04,
+      cat: chosenCat,
+      material: chosenMaterial,
+      type: chosenMaterial === 'metal' ? 'rimless' : 'wayfarer',
+      aspectRatio: 2.4,
+      frameHexColor: '#1f2937',
+      frameOpacity: 1.0,
+      reprocessing: true,
+      isNewCollection: isNewCollectionMode,
+      newCollectionUntil: isNewCollectionMode
+        ? new Date(Date.now() + 7 * 86400000).toISOString()
+        : undefined,
+    };
+
+    setItems((prev) => [...prev, draftCard]);
+    setProcessing(true);
+    setIsQueueModalOpen(true);
+    setCancelled(false);
+    setProgress({ done: 0, total: 1 });
+    setVisibleLimit((lim) => Math.max(lim, PAGE_SIZE));
+
+    try {
+      const [phash, colorVar] = await Promise.all([
+        computePerceptualHash(file),
+        computeFrameColorVariance(file),
+      ]);
+      if (ctrl.signal.aborted) return;
+
+      const workingCard: BulkFrameItem = {
+        ...draftCard,
+        phash: phash || undefined,
+        isPatterned: colorVar.isPatterned,
+        colorFamily: colorVar.colorFamily,
+        frameHexColor: colorVar.dominantHex || draftCard.frameHexColor,
+      };
+
+      const baseRes = await processCutoutInWorker(
+        file,
+        undefined,
+        {
+          frameType: workingCard.frameType,
+          subCategory: chosenSub,
+          material: workingCard.material,
+          isCrystalFrame: Boolean(workingCard.isCrystalFrame),
+          frameWidthMm: workingCard.frameWidthMm,
+          opticalDimensions: workingCard.opticalDimensions,
+          fitScale: workingCard.fitScale,
+          eyeLineOffset: workingCard.eyeLineOffset,
+          pureWhiteCatalog: true,
+          preferTransparentPng: true,
+        },
+        (stageLabel) => {
+          if (ctrl.signal.aborted) return;
+          setItems((prev) => prev.map((x) => (x.localId === localId ? { ...x, stageLabel } : x)));
+        },
+        file
+      );
+
+      if (ctrl.signal.aborted) return;
+      const baseUrls = await uploadCutoutResult(baseRes, activeShop.id);
+      if (ctrl.signal.aborted) return;
+
+      await finalizeProcessedCard(workingCard, {
+        ...baseUrls,
+        aspectRatio: baseRes.aspectRatio,
+        frameHexColor: baseRes.frameHexColor,
+        frameOpacity: baseRes.frameOpacity,
+        detectedMaterial: baseRes.detectedMaterial,
+        detectedType: baseRes.detectedType,
+        calibration: baseRes.calibration,
+        quality: baseRes.quality,
+        qualityNoteAr: baseRes.qualityNoteAr,
+        cacheHit: false,
+      });
+
+      setProgress({ done: 1, total: 1 });
+      setProcessing(false);
+      setIsQueueModalOpen(false);
+      toast('تمت المعالجة ✅ — اللوحة المزدوجة جاهزة للاعتماد والتجربة بالكاميرا!');
+    } catch (err) {
+      if (ctrl.signal.aborted) return;
+      const msg = err instanceof Error ? err.message : 'تعذر تقسيم ومعالجة اللوحة المزدوجة';
+      setItems((prev) =>
+        prev.map((x) =>
+          x.localId === localId
+            ? {
+                ...x,
+                status: 'error',
+                stageLabel: 'فشلت المعالجة',
+                errorMsg: msg,
+                reprocessing: false,
+              }
+            : x
+        )
+      );
+      setProcessing(false);
+      toast(msg);
+    }
+  };
+
   const syncItemToProduct = (next: BulkFrameItem, rebuildImages = false) => {
     void saveDraftFrame(toPersistedDraft(activeShop.id, next));
     if (next.mergedIntoExistingProduct || !next.savedProductId || !next.frontCatalogPath || !next.imagePath) return;
@@ -1646,12 +1794,38 @@ export function BulkFrameUploader({
         }}
       />
 
+      {/* Hidden File Picker for Local 16:9 Split-Sheet Chroma Test (No Gemini API needed) */}
+      <input
+        ref={splitSheetPickerRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) {
+            void handleSplitSheetTestSelected(file);
+          }
+        }}
+      />
+
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-extrabold text-[#0F172A] flex items-center gap-2">
           <I n="upload" s={17} c="text-[#0284C7]" />
           <span>رفع النظارات (اضغط على الفئة لاختيار الصور فوراً)</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => splitSheetPickerRef.current?.click()}
+            disabled={processing}
+            title="رفع لوحة استوديو جاهزة 16:9 (النصف الأيسر على كروما خضراء #00FF00 والنصف الأيمن زاوية 3/4) للاختبار الفوري بدون مفتاح API"
+            className="px-3 py-1.5 rounded-xl text-xs font-extrabold border border-sky-300 bg-sky-50 hover:bg-sky-100 text-[#0284C7] transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+          >
+            <I n="spark" s={14} />
+            <span>اختبار لوحة مزدوجة جاهزة (كروما + 3/4)</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setIsNewCollectionMode((v) => !v)}

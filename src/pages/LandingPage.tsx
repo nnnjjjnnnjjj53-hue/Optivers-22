@@ -8,6 +8,7 @@ import { BillingCycle, LandingPreviewFrame } from '../types';
 import { MiniGlasses } from '../components/GlassesGraphics';
 import { I } from '../components/Icons';
 import { fmt } from '../components/UiShared';
+import { VisualEyewearSearchModal } from '../components/VisualEyewearSearchModal';
 import {
   buildEyewear3DGroup,
   disposeThreeObject,
@@ -236,6 +237,7 @@ export function LandingPage() {
       : DEFAULT_LANDING_PREVIEW_FRAMES;
   const [activeFrameId, setActiveFrameId] = useState<string>(previewFrames[0]?.id || 'lp-aviator');
   const [billing, setBilling] = useState<BillingCycle>('monthly');
+  const [visualSearchOpen, setVisualSearchOpen] = useState(false);
   const [showBottomPricingBar, setShowBottomPricingBar] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.scrollY < 140 : true
   );
@@ -510,6 +512,13 @@ export function LandingPage() {
                 <I n="spark" s={18} /> ابدأ تجربتك المجانية 14 يوماً
               </button>
             )}
+            <button
+              type="button"
+              className="btn !bg-[#0284C7] hover:!bg-[#0369A1] !text-white !py-3.5 !px-5 !text-sm sm:!text-base shadow-md font-extrabold"
+              onClick={() => setVisualSearchOpen(true)}
+            >
+              <I n="camera" s={18} /> ابحث عن نظارة بالصورة أو أقرب محل 📷
+            </button>
             {directoryEnabled && (
               <button
                 type="button"
@@ -914,6 +923,10 @@ export function LandingPage() {
           </div>
         </div>
       )}
+      <VisualEyewearSearchModal
+        isOpen={visualSearchOpen}
+        onClose={() => setVisualSearchOpen(false)}
+      />
     </div>
   );
 }

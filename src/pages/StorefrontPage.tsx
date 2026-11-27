@@ -134,7 +134,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     return 'shop';
   });
   const [curId, setCurId] = useState<string>(initialFrameId || products[0]?.id || '');
-  const [detailId, setDetailId] = useState<string | null>(initialFrameId || null);
+  const [detailId, setDetailId] = useState<string | null>(autoTryOn ? null : (initialFrameId || null));
   const cur = products.find((p) => p.id === curId) || products[0];
   const detailProduct = detailId ? products.find((p) => p.id === detailId) || null : null;
 
@@ -203,7 +203,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
       const matched = products.find((p) => p.id === initialFrameId);
       if (matched) {
         setCurId(matched.id);
-        setDetailId(matched.id);
+        setDetailId(autoTryOn ? null : matched.id);
         setTab('shop');
       }
     } else if (autoFocusReview && products[0]) {

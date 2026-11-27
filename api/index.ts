@@ -874,6 +874,14 @@ async function generateSplitSheetWithFallback(
 
 export function createEyewearServerApp() {
   const app = express();
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    if (req.path.startsWith('/api')) {
+      res.setHeader('X-Frame-Options', 'DENY');
+    }
+    next();
+  });
   app.use(express.json({ limit: '24mb' }));
 
   // 1. Auth Role Bootstrap & 1-Click Super Admin Demo Store Provisioning

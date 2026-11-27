@@ -11,7 +11,7 @@ import { OptiVerseProvider, useOptiVerse } from './services/optiverseStore';
 function AdminFloatingReturnBar() {
   const { session, route, navigate } = useOptiVerse();
   const path = (route || '/').split('?')[0];
-  const [collapsed, setCollapsed] = React.useState(false);
+  const [collapsed, setCollapsed] = React.useState(true);
   const [offset, setOffset] = React.useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const dragRef = React.useRef<{
     active: boolean;
@@ -62,17 +62,21 @@ function AdminFloatingReturnBar() {
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
       style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0)` }}
-      className="fixed top-16 left-4 z-[80] touch-none select-none flex items-center gap-1 rounded-full bg-slate-900/92 text-amber-300 border border-amber-400/40 shadow-2xl backdrop-blur-md p-1 transition-shadow"
+      className={`fixed top-3 left-3 z-[80] touch-none select-none flex items-center rounded-full bg-slate-900/92 text-amber-300 border border-amber-400/40 shadow-2xl backdrop-blur-md transition-all ${
+        collapsed ? 'w-10 h-10 justify-center p-0' : 'gap-1 p-1'
+      }`}
     >
       {collapsed ? (
         <button
           type="button"
-          data-no-drag="true"
-          onClick={() => setCollapsed(false)}
-          title="إظهار زر الإدارة العليا"
-          className="px-2.5 py-1 rounded-full hover:bg-slate-800 text-xs font-extrabold cursor-pointer flex items-center gap-1"
+          onClick={() => {
+            if (!dragRef.current.moved) setCollapsed(false);
+          }}
+          aria-label="إظهار زر العودة للإدارة العليا"
+          title="العودة للإدارة العليا"
+          className="w-10 h-10 rounded-full hover:bg-slate-800 text-sm font-extrabold cursor-pointer flex items-center justify-center"
         >
-          <span>↩ الإدارة</span>
+          <span>↩</span>
         </button>
       ) : (
         <>

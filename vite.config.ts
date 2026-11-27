@@ -96,6 +96,10 @@ export default defineConfig(() => {
         },
       },
     ],
+    build: {
+      sourcemap: false,
+      minify: 'esbuild' as const,
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

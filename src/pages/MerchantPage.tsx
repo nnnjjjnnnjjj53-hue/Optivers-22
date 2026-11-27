@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { DEFAULT_SHOP_ID, EGYPT_GOVERNORATES, STORE_THEMES } from '../data/seed';
-import { isSupabaseConfigured } from '../lib/supabase';
+import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
   getShopDaysLeft,
   getShopMaxProducts,
@@ -1882,7 +1882,7 @@ export function MerchantPage() {
       )}
 
       {sec === 'store' && (
-        <>
+        <div className="pb-28">
           <Head
             t="إعدادات المحل"
             sub="بيانات المحل، اللوجو، الواتساب، الباقة ورصيد المعالجة، ودليل التصوير المصور"
@@ -2361,7 +2361,39 @@ export function MerchantPage() {
               )}
             </div>
           )}
-        </>
+          <div className="mt-5 pt-2">
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  if (typeof window !== 'undefined') {
+                    window.sessionStorage.clear();
+                    for (const key of Object.keys(window.localStorage)) {
+                      if (key.startsWith('optiverse_') || key.startsWith('sb-')) {
+                        window.localStorage.removeItem(key);
+                      }
+                    }
+                  }
+                } catch {
+                  // Ignore storage access errors
+                }
+                if (supabase) {
+                  try {
+                    await supabase.auth.signOut();
+                  } catch {
+                    // Ignore signOut network errors
+                  }
+                }
+                setSession(null);
+                toast('تم تسجيل الخروج وإنهاء المعاينة التجريبية ✓');
+                navigate('/');
+              }}
+              className="w-full py-3.5 px-4 rounded-2xl bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-extrabold text-sm sm:text-base shadow-lg shadow-red-600/20 border border-red-500 flex items-center justify-center gap-2 transition cursor-pointer"
+            >
+              <span>تسجيل الخروج / إنهاء المعاينة التجريبية 🚪</span>
+            </button>
+          </div>
+        </div>
       )}
     </Shell>
   );

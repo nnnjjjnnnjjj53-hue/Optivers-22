@@ -91,9 +91,6 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   const directoryEnabled = Boolean(platformSettings.enableStoresDirectory);
 
   const shop = shops.find((s) => s.slug === slug);
-  const storeTradeName = (shop?.name || '').trim() || 'متجر البصريات';
-  const theme = resolveStoreTheme(shop?.themeKey, shop?.color);
-  const isImageLogo = Boolean(shop?.logo && (/^(https?:|data:image\/|blob:|\/)/i.test(shop.logo)));
   const queryString = route.includes('?')
     ? route.split('?')[1]
     : typeof window !== 'undefined'
@@ -101,6 +98,34 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     : '';
   const queryParams = new URLSearchParams(queryString);
   const isMerchantPreview = queryParams.get('preview') === 'merchant';
+
+  if (!shop || (!isMerchantPreview && (shop.status === 'pending' || shop.status === 'paused' || shop.status === 'expired'))) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950 text-white" dir="rtl">
+        <div className="max-w-md w-full bg-slate-900 border border-amber-500/30 p-8 rounded-3xl shadow-2xl text-center space-y-6">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/10 border border-amber-400/30 flex items-center justify-center text-3xl">
+            👓
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-xl font-extrabold text-amber-300">هذا المتجر غير متاح حاليًا</h2>
+            <p className="text-xs text-slate-300 opacity-90 leading-relaxed">
+              عذراً، هذا المتجر غير مفعل حالياً أو قيد المراجعة الإدارية، أو انتهت صلاحية اشتراكه. يرجى التواصل مع إدارة المحل أو المنصة لمزيد من التفاصيل.
+            </p>
+          </div>
+          <button
+            onClick={() => navigate('/')}
+            className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-sm transition-all cursor-pointer shadow-lg shadow-amber-500/20"
+          >
+            العودة للرئيسية ودليل المتاجر ⟳
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const storeTradeName = (shop?.name || '').trim() || 'متجر البصريات';
+  const theme = resolveStoreTheme(shop?.themeKey, shop?.color);
+  const isImageLogo = Boolean(shop?.logo && (/^(https?:|data:image\/|blob:|\/)/i.test(shop.logo)));
   const autoFocusReview = queryParams.get('review') === '1';
   const tryProductParam = queryParams.get('try')?.trim() || '';
   const autoTryOn = queryParams.get('tryon') === '1' || Boolean(tryProductParam);

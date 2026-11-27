@@ -1779,10 +1779,28 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         return { ok: true };
       }
 
+      if (!shopName.trim() || shopName.trim().length < 2 || shopName.trim().length > 80) {
+        return { ok: false, error: 'اسم المحل يجب أن يكون بين 2 و80 حرفاً' };
+      }
+      const cleanWa = wa?.trim() || '';
+      if (!/^\d{10,15}$/.test(cleanWa.replace(/\D/g, ''))) {
+        return { ok: false, error: 'رقم الهاتف غير صحيح (يجب أن يكون بين 10 و15 رقماً)' };
+      }
+      if (!city || !city.trim()) {
+        return { ok: false, error: 'يرجى تحديد المحافظة / المدينة' };
+      }
+
       const { data: authData, error } = await supabase.auth.signUp({
         email,
         password,
-        options: { data: { full_name: cleanOwner } },
+        options: {
+          data: {
+            full_name: cleanOwner,
+            shop_name: shopName.trim(),
+            phone: cleanWa,
+            governorate: city.trim(),
+          },
+        },
       });
       if (error || !authData.user) {
         return { ok: false, error: error?.message || 'تعذّر إنشاء الحساب' };
@@ -1791,31 +1809,33 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       const { data: userRes, error: userErr } = await supabase.auth.getUser();
       if (userErr || !userRes.user) {
         return {
-          ok: false,
-          error: 'يرجى تأكيد بريدك الإلكتروني وتسجيل الدخول أولاً لإتمام إنشاء المتجر',
+          ok: true,
+          error: 'تم إرسال رابط التأكيد إلى بريدك الإلكتروني. يرجى تأكيد البريد ثم تسجيل الدخول لإتمام إنشاء المتجر.',
         };
       }
 
+      const userId = userRes.user.id;
       const { data: shopRow, error: shopErr } = await supabase
         .from('shops')
         .insert({
+          owner_id: userId,
           owner_name: cleanOwner,
           owner_email: email.trim().toLowerCase(),
-          name: shopName,
-          city: city || 'القاهرة',
-          governorate: city || 'القاهرة',
+          name: shopName.trim(),
+          city: city.trim(),
+          governorate: city.trim(),
           slug: finalSlug,
-          wa_phone: wa || '01001234567',
+          wa_phone: cleanWa,
         })
         .select('id, slug')
         .single();
 
       if (shopErr || !shopRow) {
-        return { ok: false, error: shopErr?.message || 'تعذّر إنشاء المتجر. لم يتم إكمال التسجيل.' };
+        return { ok: false, error: shopErr?.message || 'تعذّر إنشاء المحل في قاعدة البيانات. لم يتم إكمال التسجيل.' };
       }
 
       const { error: roleErr } = await supabase.from('user_roles').upsert({
-        user_id: userRes.user.id,
+        user_id: userId,
         email: email.trim().toLowerCase(),
         role: 'merchant',
         shop_id: shopRow.id,
@@ -1828,7 +1848,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       await seedCatalogForShop(shopRow.id, true);
       setActiveShopSlug(finalSlug);
       setSession({
-        userId: userRes.user.id,
+        userId,
         email,
         role: 'merchant',
         shopId: shopRow.id,
@@ -2454,8 +2474,11 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           insRes = await supabase.from('products').insert(extPayload).select('id').single();
         }
         if (insRes.error) {
-          // Graceful fallback if migrations 003/004/005 haven't been applied on remote DB yet
-          insRes = await supabase.from('products').insert(basePayload).select('id').single();
+          const errMsg = insRes.error.message || '';
+          if (errMsg.includes('PENDING_PRODUCT_LIMIT') || errMsg.includes('3 products') || errMsg.includes('معلقة')) {
+            throw new Error('لا يمكن إضافة أكثر من 3 منتجات في الباقة المعلقة بانتظار تفعيل الإدارة. يرجى انتظار التفعيل أو التواصل مع الدعم.');
+          }
+          throw new Error(errMsg || 'تعذر حفظ المنتج');
         }
         const inserted = insRes.data;
 

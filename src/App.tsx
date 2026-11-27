@@ -151,13 +151,64 @@ function RouterView() {
   return <StorefrontPage slug={slug} />;
 }
 
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  state = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('OptiVerse ErrorBoundary caught error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950 text-white" dir="rtl">
+          <div className="max-w-md w-full bg-slate-900 border border-red-500/40 p-6 rounded-2xl shadow-2xl text-center space-y-4">
+            <div className="text-4xl">⚠️</div>
+            <h2 className="text-lg font-extrabold text-red-400">عذراً، حدث خطأ غير متوقع في التطبيق</h2>
+            <p className="text-xs text-slate-300 opacity-90 break-words font-mono bg-slate-950/80 p-3 rounded-xl border border-slate-800 text-left">
+              {((this.state.error as unknown) as Error)?.message || String(this.state.error)}
+            </p>
+            <button
+              onClick={() => {
+                this.setState({ hasError: false, error: null });
+                window.location.reload();
+              }}
+              className="w-full py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-sm transition-all cursor-pointer"
+            >
+              إعادة تحميل التطبيق ⟳
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
+  React.useEffect(() => {
+    const handler = (event: PromiseRejectionEvent) => {
+      console.error('Unhandled promise rejection:', event.reason);
+    };
+    window.addEventListener('unhandledrejection', handler);
+    return () => window.removeEventListener('unhandledrejection', handler);
+  }, []);
+
   return (
-    <OptiVerseProvider>
-      <AdminFloatingReturnBar />
-      <RouterView />
-      <OfflineIndicator />
-      <Modals />
-    </OptiVerseProvider>
+    <ErrorBoundary>
+      <OptiVerseProvider>
+        <AdminFloatingReturnBar />
+        <RouterView />
+        <OfflineIndicator />
+        <Modals />
+      </OptiVerseProvider>
+    </ErrorBoundary>
   );
 }

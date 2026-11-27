@@ -170,9 +170,7 @@ function getSupabaseAdminClient(): SupabaseClient | null {
 }
 
 function getConfiguredAdminEmail(): string {
-  return (process.env.ADMIN_EMAIL || process.env.VITE_ADMIN_EMAIL || 'admin@optiverse.app')
-    .trim()
-    .toLowerCase();
+  return (process.env.ADMIN_EMAIL || process.env.VITE_ADMIN_EMAIL || '').trim().toLowerCase();
 }
 
 function clampIntInRange(val: unknown, min: number, max: number): number | null {
@@ -310,7 +308,7 @@ export async function authenticateRequest(
       .maybeSingle();
 
     const isSuperAdmin =
-      email === isAdminEmailEnv ||
+      Boolean(isAdminEmailEnv && email === isAdminEmailEnv) ||
       roleRow?.role === 'super_admin' ||
       roleRow?.role === 'admin';
 
@@ -504,22 +502,29 @@ async function deductAiCredit(ctx: AuthContext, amount = 1): Promise<void> {
 
   const supabaseAdmin = getSupabaseAdminClient();
   if (supabaseAdmin && ctx.shopId) {
-    const { data: row } = await supabaseAdmin
-      .from('shops')
-      .select('ai_credits_used, ai_credits_limit')
-      .eq('id', ctx.shopId)
-      .maybeSingle();
-    if (Number(row?.ai_credits_limit ?? 0) >= 99999) return;
-    const curUsed = Number(row?.ai_credits_used ?? 0);
-    await supabaseAdmin
-      .from('shops')
-      .update({ ai_credits_used: curUsed + amount })
-      .eq('id', ctx.shopId);
+    const { data, error } = await supabaseAdmin.rpc('consume_ai_credits', {
+      p_shop_id: ctx.shopId,
+      p_amount: amount,
+    });
+    if (error || !data) {
+      const err = new Error(
+        'نفد رصيد المعالجة بالذكاء الاصطناعي — اشحن باقة 50 نظارة إضافية أو قم بترقية الباقة.'
+      );
+      (err as Error & { statusCode?: number }).statusCode = 402;
+      throw err;
+    }
     return;
   }
 
   const key = ctx.shopId || ctx.userId || 'default';
   const cur = memoryDemoCredits.get(key) ?? 250;
+  if (cur < amount) {
+    const err = new Error(
+      'نفد رصيد المعالجة بالذكاء الاصطناعي في الحساب — اشحن باقة إضافية أو قم بترقية الباقة.'
+    );
+    (err as Error & { statusCode?: number }).statusCode = 402;
+    throw err;
+  }
   memoryDemoCredits.set(key, Math.max(0, cur - amount));
 }
 
@@ -925,7 +930,7 @@ export function createEyewearServerApp() {
               is_featured: true,
               enable_delivery_service: true,
               plan_tier: 'premium',
-              plan: 'بريميوم',
+              plan_name: 'بريميوم',
               status: 'active',
               ai_credits_limit: 999999,
               slug: `admin-demo-${Date.now().toString(36)}`,

@@ -485,7 +485,7 @@ export function GuidedCaptureWizard({
 
     setPublishing(true);
     try {
-      const productFolder = `shops/${activeShop.id}/frames/${finalCode}`;
+      const productFolder = `${activeShop.id}/frames/${finalCode}`;
       let nextImages: ProductImage[] | undefined;
 
       let savedStoreFrontUrl =

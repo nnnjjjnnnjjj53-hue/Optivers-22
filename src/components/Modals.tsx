@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { CATS, DEFAULT_SHOP_ID, EGYPT_GOVERNORATES, TYPES } from '../data/seed';
-import { useOptiVerse } from '../services/optiverseStore';
+import { useOptiVerse, useResolvedRxUrl } from '../services/optiverseStore';
 import { FrameCat, FrameShapeTag, Inquiry, Product } from '../types';
 import { BeforeAfter, MiniGlasses, Rx } from './GlassesGraphics';
 import { Eyewear3DViewer } from './Eyewear3DARStage';
@@ -20,11 +20,26 @@ const SHAPE_TAG_OPTIONS: { key: FrameShapeTag; label: string }[] = [
 
 function ZoomModal({ q, onClose }: { q: Inquiry; onClose: () => void }) {
   const [z, setZ] = useState(1.4);
+  const resolvedRxUrl = useResolvedRxUrl(q.img);
+  const isPdf = Boolean(q.img && q.img.toLowerCase().endsWith('.pdf'));
   return (
     <Modal title={`كشف النظر — ${q.cust}`} onClose={onClose} w="max-w-xl">
       <div className="rounded-xl overflow-auto max-h-[62vh] bg-slate-100">
         <div style={{ width: z * 100 + '%' }}>
-          {q.img === 'demo' ? <Rx n={q.rxn || 0} /> : <img src={q.img || ''} alt="كشف" className="w-full" />}
+          {q.img === 'demo' ? (
+            <Rx n={q.rxn || 0} />
+          ) : isPdf ? (
+            <div className="p-6 text-center space-y-3">
+              <div className="text-sm font-bold text-[#0F172A]">ملف كشف طبي (PDF)</div>
+              {resolvedRxUrl && (
+                <a href={resolvedRxUrl} target="_blank" rel="noreferrer" className="btn btn-p btn-sm inline-flex">
+                  فتح / تحميل ملف الكشف PDF
+                </a>
+              )}
+            </div>
+          ) : (
+            <img src={resolvedRxUrl || ''} alt="كشف" className="w-full" />
+          )}
         </div>
       </div>
       <div className="flex items-center gap-3 mt-4">
@@ -323,7 +338,7 @@ function QuickEditProductModal({ p, onClose }: { p: Product; onClose: () => void
   const handlePhotoChange = async (file: File) => {
     setUploadingPhoto(true);
     try {
-      const uploadedUrl = await uploadAssetToStorage(file, `products/${activeShop.id}/front`, 'webp');
+      const uploadedUrl = await uploadAssetToStorage(file, `${activeShop.id}/products/front`, 'webp');
       setPreviewImgUrl(uploadedUrl);
       setPhotoChanged(true);
       toast('تم رفع الصورة الجديدة — اضغط حفظ التعديلات للتأكيد ✓');

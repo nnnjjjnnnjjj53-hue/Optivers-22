@@ -345,13 +345,14 @@ export async function estimateLensTintLocally(file: Blob): Promise<'clear' | 'ti
 }
 
 /**
- * Downscales any phone photo to max 1024px JPEG before sending to the server
- * and immediately disposes the temporary canvas/bitmap so RAM stays O(1).
+ * Downscales any phone photo to max 1600px JPEG (0.85) before sending to the server,
+ * guaranteeing request bodies stay strictly below 3MB and immediately disposing canvas/bitmap.
  */
 export async function encodeCompactUploadBase64(
   file: Blob,
-  maxSidePx = 1024
+  maxSidePx = 1600
 ): Promise<{ base64: string; mimeType: string }> {
+  const MAX_BASE64_CHARS = 2_600_000; // Keeps JSON request body safely < 3MB
   let bm: ImageBitmap | null = null;
   let canvas: HTMLCanvasElement | null = null;
   try {
@@ -361,26 +362,39 @@ export async function encodeCompactUploadBase64(
       } catch {
         bm = await createImageBitmap(file);
       }
-      const scale = Math.min(1, maxSidePx / Math.max(bm.width, bm.height));
-      const w = Math.max(1, Math.round(bm.width * scale));
-      const h = Math.max(1, Math.round(bm.height * scale));
+      const clampedMaxSide = Math.min(1600, Math.max(320, maxSidePx));
+      let curScale = Math.min(1, clampedMaxSide / Math.max(1, bm.width, bm.height));
       canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(bm, 0, 0, w, h);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
-        return {
-          base64: dataUrl.replace(/^data:[^;]+;base64,/, ''),
-          mimeType: 'image/jpeg',
-        };
+        const qualities = [0.85, 0.72, 0.58, 0.45];
+        for (let pass = 0; pass < 3; pass++) {
+          const w = Math.max(1, Math.round(bm.width * curScale));
+          const h = Math.max(1, Math.round(bm.height * curScale));
+          canvas.width = w;
+          canvas.height = h;
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, w, h);
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(bm, 0, 0, w, h);
+
+          for (const q of qualities) {
+            const dataUrl = canvas.toDataURL('image/jpeg', q);
+            const base64 = dataUrl.replace(/^data:[^;]+;base64,/, '');
+            if (base64.length <= MAX_BASE64_CHARS || (pass === 2 && q === qualities[qualities.length - 1])) {
+              return {
+                base64,
+                mimeType: 'image/jpeg',
+              };
+            }
+          }
+          curScale *= 0.72;
+        }
       }
     }
   } catch {
-    // Fallback to raw FileReader base64 if bitmap decoding fails
+    // Fallback to HTMLImageElement + canvas resize if createImageBitmap fails
   } finally {
     if (bm) {
       try {
@@ -393,6 +407,48 @@ export async function encodeCompactUploadBase64(
       canvas.width = 0;
       canvas.height = 0;
     }
+  }
+
+  // Secondary browser-compatible canvas resize via HTMLImageElement
+  try {
+    const objUrl = URL.createObjectURL(file);
+    try {
+      const imgEl = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error('تعذر تحميل الصورة'));
+        el.src = objUrl;
+      });
+      const clampedMax = Math.min(1600, Math.max(320, maxSidePx));
+      let curScale = Math.min(1, clampedMax / Math.max(1, imgEl.naturalWidth || imgEl.width, imgEl.naturalHeight || imgEl.height));
+      const c2 = document.createElement('canvas');
+      const ctx2 = c2.getContext('2d');
+      if (ctx2) {
+        for (const q of [0.85, 0.7, 0.52]) {
+          const w = Math.max(1, Math.round((imgEl.naturalWidth || imgEl.width) * curScale));
+          const h = Math.max(1, Math.round((imgEl.naturalHeight || imgEl.height) * curScale));
+          c2.width = w;
+          c2.height = h;
+          ctx2.fillStyle = '#ffffff';
+          ctx2.fillRect(0, 0, w, h);
+          ctx2.drawImage(imgEl, 0, 0, w, h);
+          const dataUrl = c2.toDataURL('image/jpeg', q);
+          const base64 = dataUrl.replace(/^data:[^;]+;base64,/, '');
+          if (base64.length <= MAX_BASE64_CHARS || q === 0.52) {
+            c2.width = 0;
+            c2.height = 0;
+            return { base64, mimeType: 'image/jpeg' };
+          }
+          curScale *= 0.75;
+        }
+      }
+      c2.width = 0;
+      c2.height = 0;
+    } finally {
+      URL.revokeObjectURL(objUrl);
+    }
+  } catch {
+    // Fall through to FileReader only if canvas decoding is impossible
   }
 
   const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -432,7 +488,7 @@ export async function extractOpticalDimensionsViaServer(
     isDemoAdminStore?: boolean;
   }
 ): Promise<ExtractedOpticalDimensionsResult> {
-  const { base64, mimeType } = await encodeCompactUploadBase64(file, 1024);
+  const { base64, mimeType } = await encodeCompactUploadBase64(file, 1600);
   if (signal?.aborted) {
     throw new DOMException('تم إلغاء الطلب', 'AbortError');
   }
@@ -528,7 +584,7 @@ export async function generateSplitSheetViaServer(
   signal?: AbortSignal
 ): Promise<SplitSheetApiResponse> {
   const [{ base64, mimeType }, computedPhash] = await Promise.all([
-    encodeCompactUploadBase64(file, 1024),
+    encodeCompactUploadBase64(file, 1600),
     options.phash ? Promise.resolve(options.phash) : computePerceptualHash(file),
   ]);
   if (signal?.aborted) {
@@ -691,7 +747,7 @@ export async function submitBatchSplitSheetViaServer(params: {
   const encodedItems = await Promise.all(
     params.items.map(async (item) => {
       const [{ base64, mimeType }, phash] = await Promise.all([
-        encodeCompactUploadBase64(item.file, 1024),
+        encodeCompactUploadBase64(item.file, 1600),
         item.phash ? Promise.resolve(item.phash) : computePerceptualHash(item.file),
       ]);
       return {

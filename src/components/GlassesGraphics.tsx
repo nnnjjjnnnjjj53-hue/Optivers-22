@@ -1,6 +1,7 @@
 import React, { useId, useState } from 'react';
 import { FaceShape, FrameType, Inquiry, Product } from '../types';
 import { resolveStoreFrontUrl } from '../utils/bulkFrameProcessor';
+import { useResolvedRxUrl } from '../services/optiverseStore';
 import { I } from './Icons';
 
 export const LENS_SHAPES: Record<FrameType, { d: string; w: number; fill: number }> = {
@@ -601,6 +602,9 @@ export function Rx({ n = 1 }: { n?: number }) {
 }
 
 export function ExamThumb({ q, onZoom }: { q: Inquiry; onZoom: () => void }) {
+  const resolvedRxUrl = useResolvedRxUrl(q.img);
+  const isPdf = Boolean(q.img && q.img.toLowerCase().endsWith('.pdf'));
+
   if (!q.img) {
     return (
       <div className="rounded-xl border-2 border-dashed border-white/15 flex flex-col items-center justify-center text-center p-4 text-xs opacity-60 h-full min-h-[140px]">
@@ -613,8 +617,13 @@ export function ExamThumb({ q, onZoom }: { q: Inquiry; onZoom: () => void }) {
     <button onClick={onZoom} className="relative block w-full rounded-xl overflow-hidden group border border-white/15 cursor-pointer">
       {q.img === 'demo' ? (
         <Rx n={q.rxn || 0} />
+      ) : isPdf ? (
+        <div className="rounded-xl bg-slate-100 text-[#0F172A] flex flex-col items-center justify-center p-4 min-h-[140px] text-xs font-bold">
+          <I n="receipt" s={26} />
+          <span className="mt-1">كشف طبي PDF</span>
+        </div>
       ) : (
-        <img src={q.img} alt="كشف" loading="lazy" decoding="async" className="w-full max-h-64 object-cover" />
+        <img src={resolvedRxUrl || ''} alt="كشف" loading="lazy" decoding="async" className="w-full max-h-64 object-cover" />
       )}
       <span className="absolute inset-x-0 bottom-0 bg-black/60 text-[.7rem] py-1 flex items-center justify-center gap-1">
         <I n="search" s={12} /> اضغط للتكبير

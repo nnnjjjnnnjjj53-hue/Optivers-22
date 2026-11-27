@@ -22,9 +22,7 @@ import {
   estimateLensTintLocally,
   extractOpticalDimensionsViaServer,
   generateSplitSheetViaServer,
-  pollBatchSplitSheetStatus,
   saveToSharedEyewearCache,
-  submitBatchSplitSheetViaServer,
 } from '../utils/splitSheetApi';
 import { CutoutWorkerOutput } from '../workers/cutoutWorker';
 import { deleteDraftFrame, loadDraftFrames, PersistedDraftFrame, saveDraftFrame } from '../utils/draftStorage';
@@ -648,10 +646,10 @@ export function BulkFrameUploader({
     const extCat = res.frontCatalogPath.ext || 'webp';
     const extSide = res.sideImagePath.ext || 'webp';
     const [imagePath, frontCatalogPath, sideImagePath, maskUrl] = await Promise.all([
-      uploadAssetToStorage(res.imagePath.blob, `products/${shopId}/cutouts`, extCut),
-      uploadAssetToStorage(res.frontCatalogPath.blob, `products/${shopId}/front`, extCat),
-      uploadAssetToStorage(res.sideImagePath.blob, `products/${shopId}/side`, extSide),
-      uploadAssetToStorage(res.lensMask.blob, `products/${shopId}/masks`, 'png'),
+      uploadAssetToStorage(res.imagePath.blob, `${shopId}/products/cutouts`, extCut),
+      uploadAssetToStorage(res.frontCatalogPath.blob, `${shopId}/products/front`, extCat),
+      uploadAssetToStorage(res.sideImagePath.blob, `${shopId}/products/side`, extSide),
+      uploadAssetToStorage(res.lensMask.blob, `${shopId}/products/masks`, 'png'),
     ]);
     return { imagePath, frontCatalogPath, sideImagePath, maskUrl };
   };
@@ -747,9 +745,9 @@ export function BulkFrameUploader({
         throw new DOMException('تم إلغاء الطلب', 'AbortError');
       }
       const [imagePath, frontCatalogPath, maskUrl] = await Promise.all([
-        uploadAssetToStorage(localRes.cutoutImage.blob, `products/${activeShop.id}/cutouts`, localRes.cutoutImage.ext || 'webp'),
-        uploadAssetToStorage(localRes.storeImage.blob, `products/${activeShop.id}/front`, localRes.storeImage.ext || 'webp'),
-        uploadAssetToStorage(localRes.lensMask.blob, `products/${activeShop.id}/masks`, 'png'),
+        uploadAssetToStorage(localRes.cutoutImage.blob, `${activeShop.id}/products/cutouts`, localRes.cutoutImage.ext || 'webp'),
+        uploadAssetToStorage(localRes.storeImage.blob, `${activeShop.id}/products/front`, localRes.storeImage.ext || 'webp'),
+        uploadAssetToStorage(localRes.lensMask.blob, `${activeShop.id}/products/masks`, 'png'),
       ]);
       return {
         urls: {
@@ -802,7 +800,7 @@ export function BulkFrameUploader({
           });
           c.width = 0;
           c.height = 0;
-          const uploadedUrl = await uploadAssetToStorage(outBlob, `products/${activeShop.id}/front`, 'webp');
+          const uploadedUrl = await uploadAssetToStorage(outBlob, `${activeShop.id}/products/front`, 'webp');
           return {
             urls: {
               imagePath: uploadedUrl,
@@ -825,7 +823,7 @@ export function BulkFrameUploader({
       // Fall through to raw source upload
     }
 
-    const fallbackUrl = await uploadAssetToStorage(srcBlob, `products/${activeShop.id}/front`, 'webp');
+    const fallbackUrl = await uploadAssetToStorage(srcBlob, `${activeShop.id}/products/front`, 'webp');
     return {
       urls: {
         imagePath: fallbackUrl,
@@ -1154,10 +1152,10 @@ export function BulkFrameUploader({
           if (signal?.aborted) return null;
 
           const [imagePath, frontCatalogPath, sideImagePath] = await Promise.all([
-            uploadAssetToStorage(tintedCut.blob, `products/${activeShop.id}/cutouts`, 'webp'),
-            uploadAssetToStorage(tintedFront.blob, `products/${activeShop.id}/front`, 'webp'),
+            uploadAssetToStorage(tintedCut.blob, `${activeShop.id}/products/cutouts`, 'webp'),
+            uploadAssetToStorage(tintedFront.blob, `${activeShop.id}/products/front`, 'webp'),
             tintedSide
-              ? uploadAssetToStorage(tintedSide.blob, `products/${activeShop.id}/side`, 'webp')
+              ? uploadAssetToStorage(tintedSide.blob, `${activeShop.id}/products/side`, 'webp')
               : Promise.resolve(tpl.sideImagePath || ''),
           ]);
 
@@ -1423,7 +1421,7 @@ export function BulkFrameUploader({
         return rescuedCard;
       } catch {
         // Last-resort raw upload fallback so card never enters error state
-        const rawUrl = await uploadAssetToStorage(srcFile, `products/${activeShop.id}/front`, 'webp');
+        const rawUrl = await uploadAssetToStorage(srcFile, `${activeShop.id}/products/front`, 'webp');
         const rescuedCard = await finalizeProcessedCard(workingCard, {
           imagePath: rawUrl,
           frontCatalogPath: rawUrl,
@@ -1542,13 +1540,14 @@ export function BulkFrameUploader({
       planTier: activeShop.planTier || 'basic',
       isDemoAdminStore: Boolean(activeShop.isDemoAdminStore),
     }));
-    const useTurbo = Boolean(planCaps.turboUploadEnabled);
-
-    // Step 1: Smart Auto-Classification (OCR + auto_frame_mode + lens_tint) + pHash + Local Fallbacks
+    // Step 1: Smart Auto-Classification (OCR + auto_frame_mode + lens_tint) + pHash + Local Fallbacks (concurrency = 2)
     const classifiedCards = [...initialCards];
-    await Promise.all(
-      classifiedCards.map(async (c, i) => {
-        if (ctrl.signal.aborted || !c.sourceFile) return;
+    let classifyIdx = 0;
+    const runClassifyWorker = async () => {
+      while (classifyIdx < classifiedCards.length && !ctrl.signal.aborted) {
+        const i = classifyIdx++;
+        const c = classifiedCards[i];
+        if (!c?.sourceFile) continue;
         try {
           const [ocr, phash, colorVar, localTint] = await Promise.all([
             extractOpticalDimensionsViaServer(c.sourceFile, ctrl.signal, authMeta).catch(() => null),
@@ -1606,8 +1605,9 @@ export function BulkFrameUploader({
         } catch {
           // Non-blocking auto-classification — keep defaults
         }
-      })
-    );
+      }
+    };
+    await Promise.all([runClassifyWorker(), runClassifyWorker()]);
 
     if (ctrl.signal.aborted) {
       setProcessing(false);
@@ -1678,81 +1678,11 @@ export function BulkFrameUploader({
     const processedLeadById = new Map<string, BulkFrameItem>();
     const finishedBatch: BulkFrameItem[] = [];
 
-    // Use Batch API path when Standard (non-Turbo) & >1 item in AI queue (and AI credits available)
-    if (!useTurbo && aiQueue.length > 1 && (isUnlimitedCredits || remainingCredits > 0)) {
-      try {
-        const { jobId } = await submitBatchSplitSheetViaServer({
-          ...authMeta,
-          turbo: false,
-          signal: ctrl.signal,
-          items: aiQueue.map((c) => ({
-            localId: c.localId,
-            file: c.sourceFile!,
-            frameType: c.frameType,
-            subCategory: c.frameType === 'clip_on' ? 'optical' : c.subCategory,
-            keepLensBranding: Boolean(c.keepLensBranding),
-            isCrystalFrame: Boolean(c.isCrystalFrame),
-            isPatterned: Boolean(c.isPatterned),
-            modelCode: c.modelCode,
-            frameColor: c.frameHexColor,
-            phash: c.phash,
-            lensWidthMm: c.lensWidthMm,
-            bridgeWidthMm: c.bridgeWidthMm,
-            templeLengthMm: c.templeLengthMm,
-            totalFrameWidthMm: c.totalFrameWidthMm,
-          })),
-        });
-
-        let batchResults: Record<string, { blob?: Blob; cacheHit?: boolean; cachedAssets?: any; error?: string }> = {};
-        while (!ctrl.signal.aborted) {
-          const st = await pollBatchSplitSheetStatus(jobId, authMeta, ctrl.signal);
-          setProgress({ done: Math.min(st.done, newCards.length), total: newCards.length });
-          if (st.status === 'completed') {
-            batchResults = st.results;
-            break;
-          }
-          if (st.status === 'failed') break;
-          await new Promise((r) => setTimeout(r, 1200));
-        }
-
-        for (const c of aiQueue) {
-          if (ctrl.signal.aborted) break;
-          const res = batchResults[c.localId];
-          if (res && !res.error && (res.blob || res.cacheHit)) {
-            const finished = await processSingleCard(c, ctrl.signal, res);
-            if (finished) {
-              processedLeadById.set(c.localId, finished);
-              finishedBatch.push(finished);
-              successCount++;
-            }
-          } else {
-            const finished = await processSingleCard(c, ctrl.signal, { localFallbackOnly: true });
-            if (finished) {
-              processedLeadById.set(c.localId, finished);
-              finishedBatch.push(finished);
-              successCount++;
-            }
-          }
-          doneCount++;
-          setProgress({ done: doneCount, total: newCards.length });
-        }
-      } catch {
-        // Fallback cleanly to local Zero-Failure isolation if batch submission fails
-        for (const c of aiQueue) {
-          if (ctrl.signal.aborted) break;
-          const finished = await processSingleCard(c, ctrl.signal, { localFallbackOnly: true });
-          if (finished) {
-            processedLeadById.set(c.localId, finished);
-            finishedBatch.push(finished);
-            successCount++;
-          }
-          doneCount++;
-          setProgress({ done: doneCount, total: newCards.length });
-        }
-      }
-    } else {
-      for (const c of aiQueue) {
-        if (ctrl.signal.aborted) break;
+    // Step 3: Process one image at a time at concurrency = 2 (keeps payloads small & reliable)
+    let aiQueueIdx = 0;
+    const runAiWorker = async () => {
+      while (aiQueueIdx < aiQueue.length && !ctrl.signal.aborted) {
+        const c = aiQueue[aiQueueIdx++];
         const finished = await processSingleCard(c, ctrl.signal);
         if (finished) {
           processedLeadById.set(c.localId, finished);
@@ -1761,10 +1691,10 @@ export function BulkFrameUploader({
         }
         doneCount++;
         setProgress({ done: doneCount, total: newCards.length });
-        if (ctrl.signal.aborted) break;
-        await new Promise((r) => setTimeout(r, 20));
       }
-    }
+    };
+    const workerCount = Math.min(2, Math.max(1, aiQueue.length));
+    await Promise.all(Array.from({ length: workerCount }, () => runAiWorker()));
 
     // Generate $0 local color-variant assets for grouped siblings
     for (const [sibId, leadRef] of siblingMap.entries()) {
@@ -2060,7 +1990,7 @@ export function BulkFrameUploader({
       });
       const sideImagePath = await uploadAssetToStorage(
         res.frontCatalogPath.blob,
-        `products/${activeShop.id}/side`,
+        `${activeShop.id}/products/side`,
         res.frontCatalogPath.ext || 'webp'
       );
       setItems((prev) =>
@@ -2134,7 +2064,7 @@ export function BulkFrameUploader({
 
   const handleAttachGlb = async (localId: string, file: File) => {
     const previewUrl = URL.createObjectURL(file);
-    const glbStorageUrl = await uploadAssetToStorage(file, `products/${activeShop.id}`, 'glb');
+    const glbStorageUrl = await uploadAssetToStorage(file, `${activeShop.id}/products`, 'glb');
     setItems((prev) =>
       prev.map((it) => {
         if (it.localId !== localId) return it;

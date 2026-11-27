@@ -18,6 +18,7 @@ import { PWAInstallButton } from '../components/PWAInstallPrompt';
 import { VisualPhotographyGuideModal } from '../components/VisualPhotographyGuideModal';
 import { resolveAngled45Url, resolveStoreFrontUrl } from '../utils/bulkFrameProcessor';
 import { formatOpticalDimensions, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
+import { encodeCompactUploadBase64 } from '../utils/splitSheetApi';
 import {
   D,
   Egp,
@@ -753,7 +754,7 @@ export function MerchantPage() {
 
   const handleUploadDirectLogo = async (file: File) => {
     try {
-      const url = await uploadAssetToStorage(file, `logos/${activeShop.id}`, 'png');
+      const url = await uploadAssetToStorage(file, `${activeShop.id}/logos`, 'png');
       await updateShop(activeShop.id, { logo: url });
       toast('تم رفع شعار المحل وتطبيقه فوراً ✓');
     } catch {
@@ -768,15 +769,7 @@ export function MerchantPage() {
     }
     setAiLogoBusy(true);
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ''));
-        reader.onerror = () => reject(new Error('تعذر قراءة الصورة'));
-        reader.readAsDataURL(file);
-      });
-      const mimeMatch = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-      const mimeType = mimeMatch ? mimeMatch[1] : file.type || 'image/jpeg';
-      const imageBase64 = mimeMatch ? mimeMatch[2] : dataUrl;
+      const { base64: imageBase64, mimeType } = await encodeCompactUploadBase64(file, 1600);
 
       const token = await getAccessToken();
       const headers: Record<string, string> = {

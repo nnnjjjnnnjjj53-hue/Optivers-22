@@ -128,7 +128,47 @@ export function getShopPlanCapabilities(shop: Shop, settings: PlatformSettings):
 
 function getAdminOwnerEmail(): string {
   const metaEnv = (import.meta as unknown as { env?: Record<string, string | undefined> })?.env || {};
-  return String(metaEnv.VITE_ADMIN_EMAIL || 'admin@optiverse.app').trim().toLowerCase();
+  return String(metaEnv.VITE_ADMIN_EMAIL || '').trim().toLowerCase();
+}
+
+export async function resolveRxImageUrl(val?: string | null): Promise<string> {
+  if (!val || val === 'demo') return val || '';
+  if (!val.startsWith('optiverse-rx://')) return val;
+  if (!supabase) return '';
+  const path = val.slice('optiverse-rx://'.length);
+  if (!path) return '';
+  const { data } = await supabase.storage.from('optiverse-rx').createSignedUrl(path, 3600);
+  return data?.signedUrl || '';
+}
+
+export function useResolvedRxUrl(val?: string | null): string {
+  const [resolved, setResolved] = useState<string>(() =>
+    val && !val.startsWith('optiverse-rx://') ? val : ''
+  );
+
+  useEffect(() => {
+    let active = true;
+    if (!val) {
+      setResolved('');
+      return;
+    }
+    if (!val.startsWith('optiverse-rx://')) {
+      setResolved(val);
+      return;
+    }
+    resolveRxImageUrl(val)
+      .then((url) => {
+        if (active && url) setResolved(url);
+      })
+      .catch(() => {
+        if (active) setResolved('');
+      });
+    return () => {
+      active = false;
+    };
+  }, [val]);
+
+  return resolved;
 }
 
 function makeSlug(name: string): string {
@@ -344,6 +384,7 @@ export interface StoreCtxValue {
   switchToAdminDemoStore: () => Promise<void>;
   exportFullBackup: () => Promise<void>;
   uploadAssetToStorage: (blob: Blob, folder: string, ext: string) => Promise<string>;
+  uploadRxPrescriptionToStorage: (shopId: string, blob: Blob, ext: string) => Promise<string>;
 }
 
 const Ctx = createContext<StoreCtxValue | null>(null);
@@ -701,7 +742,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     aiCreditsLimit:
       r.ai_credits_limit !== null && r.ai_credits_limit !== undefined && Number.isFinite(Number(r.ai_credits_limit))
         ? Number(r.ai_credits_limit)
-        : 110,
+        : 25,
     aiCreditsUsed:
       r.ai_credits_used !== null && r.ai_credits_used !== undefined && Number.isFinite(Number(r.ai_credits_used))
         ? Number(r.ai_credits_used)
@@ -714,12 +755,12 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     planTier: r.plan_tier || 'basic',
     billingCycle: r.billing_cycle || 'monthly',
     slug: r.slug,
-    plan: r.plan_name,
-    price: r.price,
-    status: r.status,
-    days: r.days_left,
+    plan: r.plan_name || 'الأساسية',
+    price: typeof r.price === 'number' ? r.price : 0,
+    status: r.status || 'active',
+    days: typeof r.days_left === 'number' ? r.days_left : 14,
     trialEndsAt: r.trial_ends_at || undefined,
-    exp: r.expires_label,
+    exp: r.expires_label || '',
     logo: r.logo,
     tagline: r.tagline || undefined,
     bannerImageUrl: r.banner_image_url || undefined,
@@ -857,7 +898,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       if (slugMatch && !hasPrivilegedSession) {
         const storefrontSlug = decodeURIComponent(slugMatch[1]);
         const { data: matchedShopRow } = await supabase
-          .from('shops')
+          .from('shops_public')
           .select('*')
           .eq('slug', storefrontSlug)
           .maybeSingle();
@@ -970,15 +1011,28 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       }
 
       const [shopsRes, plansRes, prodsRes, imgsRes, ltRes, brRes, exRes, inqRes, payRes] = await Promise.all([
-        supabase.from('shops').select('*').order('created_at', { ascending: false }),
+        hasPrivilegedSession
+          ? supabase.from('shops').select('*').order('created_at', { ascending: false })
+          : supabase.from('shops_public').select('*').order('name', { ascending: true }),
         supabase.from('plans').select('*').order('sort_order', { ascending: true }),
-        supabase.from('products').select('*').eq('is_deleted', false).order('created_at', { ascending: true }),
+        hasPrivilegedSession
+          ? supabase.from('products').select('*').eq('is_deleted', false).order('created_at', { ascending: true })
+          : supabase
+              .from('products')
+              .select('*')
+              .eq('is_deleted', false)
+              .eq('is_published', true)
+              .order('created_at', { ascending: true }),
         supabase.from('product_images').select('*').order('sort_order', { ascending: true }),
         supabase.from('lens_types').select('*').order('sort_order', { ascending: true }),
         supabase.from('brands').select('*').order('sort_order', { ascending: true }),
         supabase.from('extras').select('*').order('sort_order', { ascending: true }),
-        supabase.from('inquiries').select('*').order('created_at', { ascending: false }),
-        supabase.from('payments').select('*').order('created_at', { ascending: false }),
+        hasPrivilegedSession
+          ? supabase.from('inquiries').select('*').order('created_at', { ascending: false })
+          : Promise.resolve({ data: null as any[] | null }),
+        hasPrivilegedSession
+          ? supabase.from('payments').select('*').order('created_at', { ascending: false })
+          : Promise.resolve({ data: null as any[] | null }),
       ]);
 
       if (shopsRes.data?.length) {
@@ -987,7 +1041,9 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
 
       const [settingsRes, crmRes] = await Promise.all([
         supabase.from('platform_settings').select('*').eq('id', 'default').maybeSingle(),
-        supabase.from('crm_customers').select('*').order('order_date', { ascending: false }),
+        hasPrivilegedSession
+          ? supabase.from('crm_customers').select('*').order('order_date', { ascending: false })
+          : Promise.resolve({ data: null as any[] | null }),
       ]);
       if (settingsRes.data) {
         const sRow = settingsRes.data as any;
@@ -1335,14 +1391,10 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    const curPath = typeof window !== 'undefined' ? window.location.pathname : '';
-    const isPublicStorefront = curPath.startsWith('/s/');
-
     let channel: any = null;
     supabase.auth.getSession().then(({ data: { session: sbSess } }) => {
       if (!mounted) return;
-      const isAnonOnStorefront = isPublicStorefront && !sbSess?.user;
-      if (!isAnonOnStorefront) {
+      if (sbSess?.user) {
         channel = supabase!
           .channel('optiverse-realtime-all')
           .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => hydrateFromSupabase())
@@ -1722,7 +1774,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
   const uploadAssetToStorage = useCallback(
     async (blob: Blob, folder: string, ext: string): Promise<string> => {
       if (supabase && session) {
-        const path = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+        const cleanFolder = folder.replace(/^\/+|\/+$/g, '');
+        const path = `${cleanFolder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
         const { error } = await supabase.storage.from('optiverse-assets').upload(path, blob, {
           cacheControl: '3600',
           upsert: false,
@@ -1740,6 +1793,34 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       });
     },
     [session]
+  );
+
+  const uploadRxPrescriptionToStorage = useCallback(
+    async (shopId: string, blob: Blob, ext: string): Promise<string> => {
+      if (supabase) {
+        const cleanExt = ext.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'jpg';
+        const fileId = generateId('rx');
+        const path = `${shopId}/${fileId}.${cleanExt}`;
+        const contentType =
+          blob.type ||
+          (cleanExt === 'pdf' ? 'application/pdf' : cleanExt === 'webp' ? 'image/webp' : `image/${cleanExt}`);
+        const { error } = await supabase.storage.from('optiverse-rx').upload(path, blob, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType,
+        });
+        if (error) {
+          throw new Error(error.message || 'تعذر رفع ملف الكشف الطبي');
+        }
+        return `optiverse-rx://${path}`;
+      }
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.readAsDataURL(blob);
+      });
+    },
+    []
   );
 
   const updateShop = useCallback(
@@ -2977,7 +3058,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       setActiveShopSlug(s.slug);
       setSession({
         userId: session?.userId || 'admin-impersonate',
-        email: session?.email || 'admin@optiverse.app',
+        email: session?.email || getAdminOwnerEmail() || 'merchant@optiverse.local',
         role: 'merchant',
         shopId: s.id,
       });
@@ -3007,7 +3088,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           if (data.slug) setActiveShopSlug(data.slug);
           setSession({
             userId: session?.userId || 'super-admin-demo',
-            email: session?.email || 'admin@optiverse.app',
+            email: session?.email || getAdminOwnerEmail() || 'merchant@optiverse.local',
             role: 'super_admin',
             shopId: data.shopId,
           });
@@ -3044,7 +3125,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     setActiveShopSlug(demoShop.slug);
     setSession({
       userId: session?.userId || 'super-admin-demo',
-      email: session?.email || 'admin@optiverse.app',
+      email: session?.email || getAdminOwnerEmail() || 'merchant@optiverse.local',
       role: 'super_admin',
       shopId: demoShop.id,
     });
@@ -3168,6 +3249,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         switchToAdminDemoStore,
         exportFullBackup,
         uploadAssetToStorage,
+        uploadRxPrescriptionToStorage,
       }}
     >
       {children}

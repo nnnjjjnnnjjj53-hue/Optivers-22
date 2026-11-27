@@ -80,7 +80,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     addInquiry,
     toast,
     setModal,
-    uploadAssetToStorage,
+    uploadRxPrescriptionToStorage,
   } = useOptiVerse();
 
   const rxEnabled = Boolean(
@@ -163,6 +163,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   const [selectedLensBrandId, setSelectedLensBrandId] = useState<string>('');
 
   const [img, setImg] = useState<string | null>(null);
+  const [rxLocalPreview, setRxLocalPreview] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
   const [pd, setPd] = useState('');
   const [cname, setCname] = useState('');
@@ -606,19 +607,56 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   const cartTotal = cart.reduce((s, i) => s + i.price, 0);
   const mine = inq.filter((q) => q.shopId === shop.id && q.mine);
 
+  const uploadDataUrlToRxBucket = async (dataUrl: string, targetShopId: string): Promise<string> => {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    const ext = blob.type.includes('png') ? 'png' : blob.type.includes('webp') ? 'webp' : 'jpg';
+    return uploadRxPrescriptionToStorage(targetShopId, blob, ext);
+  };
+
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
+    const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+    const allowedMime = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    if (f.type && !allowedMime.includes(f.type) && !f.type.startsWith('image/') && !isPdf) {
+      toast('نوع الملف غير مدعوم — يُسمح بصور JPG/PNG/WebP أو PDF فقط');
+      return;
+    }
+
+    const previewReader = new FileReader();
+    previewReader.onload = () => {
+      if (!isPdf) setRxLocalPreview(String(previewReader.result || ''));
+    };
+    if (!isPdf) previewReader.readAsDataURL(f);
+
     try {
-      const c = await loadImageToCanvas(f, 1000);
-      const blob = await canvasToBlob(c, 'image/webp', 0.85);
-      const url = await uploadAssetToStorage(blob, `shops/${shop.id}/rx`, 'webp');
-      setImg(url);
-      toast('تم رفع وضغط صورة الكشف ✓');
+      if (isPdf) {
+        if (f.size > 5 * 1024 * 1024) {
+          toast('حجم ملف الـ PDF يتجاوز الحد المسموح (5 ميجابايت)');
+          return;
+        }
+        const storageRef = await uploadRxPrescriptionToStorage(shop.id, f, 'pdf');
+        setRxLocalPreview('pdf');
+        setImg(storageRef);
+        toast('تم رفع ملف الكشف الطبي (PDF) بأمان ✓');
+        return;
+      }
+
+      const c = await loadImageToCanvas(f, 1600);
+      let blob = await canvasToBlob(c, 'image/jpeg', 0.85);
+      if (blob.size > 4_800_000) {
+        blob = await canvasToBlob(c, 'image/jpeg', 0.65);
+      }
+      if (blob.size > 5 * 1024 * 1024) {
+        toast('حجم صورة الكشف كبير جداً — الحد الأقصى 5 ميجابايت');
+        return;
+      }
+      const storageRef = await uploadRxPrescriptionToStorage(shop.id, blob, 'jpg');
+      setImg(storageRef);
+      toast('تم رفع وضغط صورة الكشف بأمان ✓');
     } catch {
-      const r = new FileReader();
-      r.onload = () => setImg(String(r.result));
-      r.readAsDataURL(f);
+      toast('تعذر رفع ملف الكشف — تأكد من الحجم (حد أقصى 5 ميجابايت)');
     }
   };
 
@@ -966,10 +1004,25 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
               initialSize={selectedSize}
               isFavorite={fav.includes(detailProduct.id)}
               autoFocusReview={autoFocusReview}
-              initialRxUrl={img}
-              onRxAttached={(rxUrl) => {
-                setImg(rxUrl);
-                if (rxUrl) toast('تم حفظ صورة الكشف للخطوة الأخيرة ✓');
+              initialRxUrl={rxLocalPreview && rxLocalPreview !== 'pdf' ? rxLocalPreview : img}
+              onRxAttached={async (rxUrl) => {
+                if (!rxUrl) {
+                  setRxLocalPreview(null);
+                  setImg(null);
+                  return;
+                }
+                setRxLocalPreview(rxUrl);
+                if (rxUrl.startsWith('data:')) {
+                  try {
+                    const stored = await uploadDataUrlToRxBucket(rxUrl, shop.id);
+                    setImg(stored);
+                  } catch {
+                    setImg(rxUrl);
+                  }
+                } else {
+                  setImg(rxUrl);
+                }
+                toast('تم حفظ صورة الكشف للخطوة الأخيرة ✓');
               }}
               onToggleFavorite={() =>
                 setFav((f) =>
@@ -1050,10 +1103,25 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
               setModal({ t: 'checkout', total: cartTotal + targetProd.price });
             }
           }}
-          initialRxUrl={img}
-          onRxAttached={(rxUrl) => {
-            setImg(rxUrl);
-            if (rxUrl) toast('تم إرفاق روشتة كشف النظر ✓');
+          initialRxUrl={rxLocalPreview && rxLocalPreview !== 'pdf' ? rxLocalPreview : img}
+          onRxAttached={async (rxUrl) => {
+            if (!rxUrl) {
+              setRxLocalPreview(null);
+              setImg(null);
+              return;
+            }
+            setRxLocalPreview(rxUrl);
+            if (rxUrl.startsWith('data:')) {
+              try {
+                const stored = await uploadDataUrlToRxBucket(rxUrl, shop.id);
+                setImg(stored);
+              } catch {
+                setImg(rxUrl);
+              }
+            } else {
+              setImg(rxUrl);
+            }
+            toast('تم إرفاق روشتة كشف النظر ✓');
           }}
           frameColor={fc}
           lensColor={lc}
@@ -1959,12 +2027,15 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                             ارفع صورة الكشف (اختياري)
                           </div>
                           <div className="text-[0.68rem] text-slate-500">من المعرض أو الكاميرا</div>
-                          <input type="file" accept="image/*" className="hidden" onChange={onFile} />
+                          <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" onChange={onFile} />
                         </label>
                         <button
                           type="button"
                           className="rounded-2xl border border-[#E2E8F0] bg-white hover:bg-slate-50 p-4 text-center cursor-pointer transition"
-                          onClick={() => setImg('demo')}
+                          onClick={() => {
+                            setRxLocalPreview(null);
+                            setImg('demo');
+                          }}
                         >
                           <span className="text-[#0284C7] inline-block">
                             <I n="receipt" s={26} />
@@ -1982,8 +2053,12 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                             <div className="text-xs p-3 bg-[#F8F9FA] text-[#0F172A] font-bold text-center">
                               كشف تجريبي
                             </div>
+                          ) : rxLocalPreview === 'pdf' || img.endsWith('.pdf') ? (
+                            <div className="text-xs p-3 bg-[#F8F9FA] text-[#0F172A] font-bold text-center">
+                              ملف PDF
+                            </div>
                           ) : (
-                            <img src={img} alt="كشف" className="w-full h-24 object-cover" />
+                            <img src={rxLocalPreview || img} alt="كشف" className="w-full h-24 object-cover" />
                           )}
                         </div>
                         <div className="flex-1 text-sm">
@@ -1995,7 +2070,14 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                           </div>
                           <div className="text-xs text-slate-500">سيراجعه أخصائي المحل</div>
                         </div>
-                        <button type="button" className="btn btn-d btn-sm" onClick={() => setImg(null)}>
+                        <button
+                          type="button"
+                          className="btn btn-d btn-sm"
+                          onClick={() => {
+                            setRxLocalPreview(null);
+                            setImg(null);
+                          }}
+                        >
                           <I n="trash" s={14} />
                         </button>
                       </div>

@@ -179,6 +179,29 @@ function cleanNameFromFile(filename: string, index: number): string {
   return base.slice(0, 42);
 }
 
+function applyModelCodeToName(
+  currentName: string,
+  ocrModelCode?: string | null,
+  originalFilename?: string
+): string {
+  const cleanCode = (ocrModelCode || '').trim().toUpperCase();
+  if (!cleanCode || cleanCode.length < 2) return currentName;
+  const trimmed = (currentName || '').trim();
+  const fileStem = (originalFilename || '')
+    .replace(/\.[^/.]+$/, '')
+    .replace(/[-_]+/g, ' ')
+    .trim();
+  const isGeneric =
+    !trimmed ||
+    trimmed.startsWith('شنبر بصري') ||
+    trimmed.startsWith('نظارة ') ||
+    (fileStem && trimmed.toLowerCase() === fileStem.toLowerCase());
+  if (isGeneric) {
+    return `موديل ${cleanCode}`;
+  }
+  return currentName;
+}
+
 function extractColorGroupingKey(filename: string, modelCode?: string | null): string {
   if (modelCode && modelCode.trim().length >= 3) {
     return modelCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -1000,9 +1023,11 @@ export function BulkFrameUploader({
           if (signal?.aborted) return null;
           if (ocr) {
             const totalMm = ocr.totalFrameWidthMm || workingCard.frameWidthMm;
+            const detectedModelCode = ocr.modelCode || workingCard.modelCode;
             workingCard = {
               ...workingCard,
-              modelCode: ocr.modelCode || workingCard.modelCode,
+              name: applyModelCodeToName(workingCard.name, detectedModelCode, workingCard.sourceFile?.name),
+              modelCode: detectedModelCode,
               isCrystalFrame: ocr.isCrystalFrame || workingCard.isCrystalFrame,
               lensWidthMm: ocr.lensWidthMm || workingCard.lensWidthMm,
               bridgeWidthMm: ocr.bridgeWidthMm || workingCard.bridgeWidthMm,
@@ -1590,6 +1615,7 @@ export function BulkFrameUploader({
 
           classifiedCards[i] = {
             ...c,
+            name: applyModelCodeToName(c.name, ocr?.modelCode, c.sourceFile?.name),
             frameType: resolvedMode,
             subCategory: resolvedSub,
             cat: resolvedCat,

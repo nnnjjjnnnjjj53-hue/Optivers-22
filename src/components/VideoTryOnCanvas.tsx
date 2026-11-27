@@ -7,6 +7,8 @@ import { resolveStoreFrontUrl, resolveTryOnFrontUrl } from '../utils/bulkFramePr
 import { FRAME_SIZE_SCALE, getFaceLandmarker, getLandmarkerRuntimeInfo } from '../utils/faceTracker';
 import { assessOpticalFit, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
 import { recordStoreCameraTryOn } from '../utils/storeAnalytics';
+import { MiniGlasses } from './GlassesGraphics';
+import { I } from './Icons';
 
 interface TryOnRenderer {
   domElement: HTMLCanvasElement;
@@ -53,6 +55,13 @@ interface VideoTryOnCanvasProps {
   active?: boolean;
   showDebugBadge?: boolean;
   onLandmarksFrame?: (landmarks: { x: number; y: number; z: number }[] | null) => void;
+  carouselProducts?: Product[];
+  onSelectProduct?: (productId: string) => void;
+  onCaptureShot?: () => void;
+  onQuickShare?: () => void;
+  onOrderProduct?: (productId: string) => void;
+  shotBusy?: boolean;
+  showControlsOverlay?: boolean;
 }
 
 const ADULT_IPD_MM = 63;
@@ -299,10 +308,21 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
     active = true,
     showDebugBadge = true,
     onLandmarksFrame,
+    carouselProducts,
+    onSelectProduct,
+    onCaptureShot,
+    onQuickShare,
+    onOrderProduct,
+    shotBusy = false,
+    showControlsOverlay = false,
   },
   ref
 ) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const carouselScrollRef = useRef<HTMLDivElement | null>(null);
+  const carouselItemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const scrollSwitchTimerRef = useRef<number | null>(null);
+  const suppressScrollSyncRef = useRef(false);
   const threeRef = useRef<{
     renderer: TryOnRenderer;
     backend: 'webgpu' | 'webgl';
@@ -325,6 +345,57 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
   useEffect(() => {
     setClipOnActive(false);
   }, [product.id]);
+
+  useEffect(() => {
+    if (!showControlsOverlay) return;
+    const btn = carouselItemRefs.current[product.id];
+    if (btn) {
+      suppressScrollSyncRef.current = true;
+      btn.scrollIntoView({ inline: 'center', behavior: 'smooth', block: 'nearest' });
+      const timer = window.setTimeout(() => {
+        suppressScrollSyncRef.current = false;
+      }, 360);
+      return () => window.clearTimeout(timer);
+    }
+  }, [product.id, showControlsOverlay]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollSwitchTimerRef.current !== null) {
+        window.clearTimeout(scrollSwitchTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleCarouselScroll = () => {
+    if (suppressScrollSyncRef.current || !onSelectProduct || !carouselProducts || carouselProducts.length < 2) {
+      return;
+    }
+    if (scrollSwitchTimerRef.current !== null) {
+      window.clearTimeout(scrollSwitchTimerRef.current);
+    }
+    scrollSwitchTimerRef.current = window.setTimeout(() => {
+      const container = carouselScrollRef.current;
+      if (!container) return;
+      const cRect = container.getBoundingClientRect();
+      const centerX = cRect.left + cRect.width / 2;
+      let bestId = product.id;
+      let bestDist = Number.POSITIVE_INFINITY;
+      for (const item of carouselProducts) {
+        const el = carouselItemRefs.current[item.id];
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        const dist = Math.abs(r.left + r.width / 2 - centerX);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestId = item.id;
+        }
+      }
+      if (bestId !== product.id) {
+        onSelectProduct(bestId);
+      }
+    }, 130);
+  };
 
   const loadTokenRef = useRef(0);
   const wasFaceVisibleRef = useRef(false);
@@ -936,14 +1007,114 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
 
       {/* Clip-On Interactive Sun Attachment Floating Button */}
       {active && product.frameType === 'clip_on' && Boolean(product.clipOnImagePath) && (
-        <div className="absolute bottom-3 inset-x-0 z-20 flex justify-center pointer-events-none">
+        <div
+          className={
+            'absolute inset-x-0 z-20 flex justify-center pointer-events-none ' +
+            (showControlsOverlay ? 'bottom-52' : 'bottom-3')
+          }
+        >
           <button
             type="button"
             onClick={() => setClipOnActive((v) => !v)}
-            className="pointer-events-auto px-4 py-2 rounded-xl bg-white/95 hover:bg-white text-slate-900 border border-slate-200 shadow-lg text-xs font-extrabold flex items-center gap-2 transition cursor-pointer"
+            className="pointer-events-auto px-4 py-2 rounded-xl bg-white/95 hover:bg-white text-slate-900 border border-slate-200 shadow-lg text-xs font-extrabold flex items-center gap-2 transition-transform duration-150 active:scale-[0.97] cursor-pointer"
           >
             <span>{clipOnActive ? 'إزالة الغيار 👓' : 'تركيب غيار الشمس 🕶️'}</span>
           </button>
+        </div>
+      )}
+
+      {/* Edge-to-Edge Transparent Gradient Overlay + Luxury Shutter + Interactive Glasses Carousel */}
+      {showControlsOverlay && carouselProducts && carouselProducts.length > 0 && (
+        <div className="absolute bottom-0 inset-x-0 z-30 pt-10 pb-[max(1rem,env(safe-area-inset-bottom))] px-3 bg-gradient-to-t from-black/70 via-black/25 to-transparent flex flex-col items-center gap-3 pointer-events-none">
+          {active && (onCaptureShot || onQuickShare || onOrderProduct) && (
+            <div className="pointer-events-auto flex items-center justify-center gap-2.5 sm:gap-3.5">
+              {onQuickShare && (
+                <button
+                  type="button"
+                  disabled={shotBusy}
+                  onClick={onQuickShare}
+                  className="h-10 px-3.5 rounded-full bg-black/45 hover:bg-black/65 disabled:opacity-60 backdrop-blur-md border border-white/25 text-white font-bold text-xs shadow-lg flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition-transform duration-150 active:scale-[0.97]"
+                >
+                  <I n="share" s={14} /> <span>مشاركة</span>
+                </button>
+              )}
+
+              {onCaptureShot && (
+                <button
+                  type="button"
+                  disabled={shotBusy}
+                  onClick={onCaptureShot}
+                  aria-label="التقاط صورة"
+                  className="w-16 h-16 rounded-full border-[3px] border-white/95 bg-white/15 backdrop-blur-md flex items-center justify-center shadow-2xl transition-transform duration-150 active:scale-[0.95] cursor-pointer shrink-0"
+                >
+                  <span className="w-11 h-11 rounded-full bg-white flex items-center justify-center text-[#0F172A] shadow-inner">
+                    <I n="camera" s={20} />
+                  </span>
+                </button>
+              )}
+
+              {onOrderProduct && (
+                <button
+                  type="button"
+                  onClick={() => onOrderProduct(product.id)}
+                  className="h-10 px-3.5 rounded-full bg-[#FAF8F5] hover:bg-white text-[#0F172A] border border-white/40 font-extrabold text-xs shadow-lg flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition-transform duration-150 active:scale-[0.97]"
+                >
+                  <I n="bag" s={14} /> <span>اطلب الآن</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          <div
+            ref={carouselScrollRef}
+            onScroll={handleCarouselScroll}
+            className="pointer-events-auto w-full max-w-2xl flex items-center gap-2.5 overflow-x-auto noscroll snap-x snap-mandatory px-[calc(50%-3.25rem)] py-1"
+          >
+            {carouselProducts.map((item) => {
+              const selected = item.id === product.id;
+              const thumbUrl =
+                resolveStoreFrontUrl(item) ||
+                item.images?.find((im) => im.kind === 'front_tryon' || Math.abs(im.angleYaw) <= 15)?.imageUrl ||
+                item.images?.[0]?.imageUrl;
+              return (
+                <button
+                  key={item.id}
+                  ref={(el) => {
+                    carouselItemRefs.current[item.id] = el;
+                  }}
+                  type="button"
+                  onClick={() => onSelectProduct?.(item.id)}
+                  className={
+                    'shrink-0 w-26 snap-center rounded-2xl p-2 flex flex-col items-center gap-1 transition-all duration-150 active:scale-[0.97] cursor-pointer backdrop-blur-md border ' +
+                    (selected
+                      ? 'bg-[#FAF8F5]/95 border-white text-[#0F172A] shadow-xl scale-[1.04]'
+                      : 'bg-black/40 border-white/20 text-white/90 hover:bg-black/55')
+                  }
+                >
+                  <div className="h-10 w-full rounded-xl bg-white/90 flex items-center justify-center px-1 overflow-hidden">
+                    <MiniGlasses
+                      type={item.type}
+                      frame={item.frame}
+                      lens={item.lens}
+                      w={68}
+                      imageUrl={thumbUrl}
+                    />
+                  </div>
+                  <span className="text-[0.68rem] font-extrabold truncate w-full text-center">
+                    {item.name}
+                  </span>
+                  <span
+                    className={
+                      'text-[0.62rem] font-bold tabular-nums ' +
+                      (selected ? 'text-slate-600' : 'text-white/75')
+                    }
+                  >
+                    {item.price} ج.م
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 

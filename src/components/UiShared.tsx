@@ -133,46 +133,56 @@ export function Modal({
   onClose,
   children,
   w = 'max-w-md',
+  variant = 'dialog',
 }: {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
   w?: string;
+  variant?: 'dialog' | 'sheet';
 }) {
+  const isSheet = variant === 'sheet';
   const content = (
     <div
       dir="rtl"
-      className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+      className={
+        'fixed inset-0 z-[9999] flex justify-center overflow-y-auto ' +
+        (isSheet ? 'items-end sm:items-center p-0 sm:p-4' : 'items-center p-3 sm:p-4')
+      }
       style={{
         position: 'fixed',
         inset: 0,
         zIndex: 9999,
-        background: 'rgba(15, 23, 42, 0.72)',
+        background: 'rgba(15, 23, 42, 0.65)',
         backdropFilter: 'blur(6px)',
       }}
       onClick={onClose}
     >
       <div
         className={
-          'pop w-full ' +
-          w +
-          ' rounded-3xl p-5 sm:p-6 bg-white shadow-2xl border border-slate-200 text-[#0F172A] my-auto max-h-[90vh] flex flex-col'
+          (isSheet
+            ? `sheet-up w-full ${w} rounded-t-3xl sm:rounded-3xl px-5 pt-2.5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:p-6 max-h-[92dvh] `
+            : `pop w-full ${w} rounded-3xl p-5 sm:p-6 my-auto max-h-[90vh] `) +
+          'bg-white shadow-2xl border border-slate-200 text-[#0F172A] flex flex-col'
         }
         style={{ backgroundColor: '#FFFFFF' }}
         onClick={(e) => e.stopPropagation()}
       >
+        {isSheet && (
+          <div className="w-11 h-1.5 rounded-full bg-slate-300 mx-auto mb-3 shrink-0" aria-hidden="true" />
+        )}
         <div className="flex items-center justify-between mb-4 gap-3 border-b border-slate-100 pb-3 shrink-0">
-          <h3 className="font-extrabold text-lg text-[#0F172A] truncate">{title}</h3>
+          <h3 className="font-extrabold text-base sm:text-lg text-[#0F172A] truncate">{title}</h3>
           <button
             type="button"
-            className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-sm transition cursor-pointer shrink-0"
+            className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-sm active:scale-[0.97] transition-transform duration-150 cursor-pointer shrink-0"
             onClick={onClose}
             aria-label="إغلاق"
           >
             ✕
           </button>
         </div>
-        <div className="overflow-y-auto flex-1">{children}</div>
+        <div className="overflow-y-auto flex-1 overscroll-contain">{children}</div>
       </div>
     </div>
   );
@@ -434,8 +444,8 @@ export function Shell({
       <aside className="hidden lg:flex flex-col w-64 shrink-0 sticky top-0 h-screen p-4 bg-white border-e border-[#E2E8F0] overflow-y-auto">
         <div className="px-2 pb-4 mb-3 border-b border-[#E2E8F0] flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <div className="font-extrabold text-[#0F172A] truncate">{title}</div>
-            <div className="text-xs text-slate-500 truncate">{sub}</div>
+            <div className="font-extrabold text-[#0F172A] leading-snug break-words">{title}</div>
+            <div className="text-xs text-slate-500">{sub}</div>
           </div>
         </div>
 
@@ -484,12 +494,12 @@ export function Shell({
 
       {/* Clean Minimal Mobile Header */}
       <header className="lg:hidden sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-[#E2E8F0]">
-        <div className="flex items-center justify-between gap-3 px-4 py-3">
-          <div className="min-w-0">
-            <div className="font-extrabold text-sm text-[#0F172A] truncate">{title}</div>
-            <div className="text-[.7rem] text-slate-500 truncate">{sub}</div>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-4 py-2.5 sm:py-3">
+          <div className="min-w-0 flex-1">
+            <div className="font-extrabold text-sm text-[#0F172A] leading-snug break-words">{title}</div>
+            <div className="text-[.7rem] text-slate-500">{sub}</div>
           </div>
-          {headerAction && <div className="flex items-center gap-2 shrink-0">{headerAction}</div>}
+          {headerAction && <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">{headerAction}</div>}
         </div>
       </header>
 

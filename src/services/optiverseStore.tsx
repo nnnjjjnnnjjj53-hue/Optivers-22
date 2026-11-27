@@ -40,6 +40,36 @@ const STORAGE_KEY = 'optiverse_state_v2';
 const MY_INQ_KEY = 'optiverse_my_inquiries_v1';
 const FAV_STORAGE_KEY = 'optiverse_fav_by_shop_v1';
 const CART_STORAGE_KEY = 'optiverse_cart_by_shop_v1';
+const SHOP_PREFS_STORAGE_KEY = 'optiverse_shop_prefs_v1';
+
+interface LocalShopPrefs {
+  promoBannerEnabled?: boolean;
+  promoBannerText?: string;
+  reminderNotificationsEnabled?: boolean;
+}
+
+function readShopPrefsMap(): Record<string, LocalShopPrefs> {
+  try {
+    const raw = localStorage.getItem(SHOP_PREFS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+  } catch {
+    // ignore
+  }
+  return {};
+}
+
+function writeShopPrefsPatch(shopId: string, patch: LocalShopPrefs) {
+  try {
+    const map = readShopPrefsMap();
+    map[shopId] = { ...(map[shopId] || {}), ...patch };
+    localStorage.setItem(SHOP_PREFS_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // ignore
+  }
+}
 
 export type ModalState =
   | null
@@ -217,6 +247,23 @@ function loadSnapshot(): PersistedSnapshot {
   } catch {
     // ignore
   }
+  if (isSupabaseConfigured) {
+    return {
+      shops: [],
+      products: [],
+      reviews: [],
+      inq: [],
+      crmCustomers: [],
+      lensTypes: LENS_TYPES0,
+      brands: BRANDS0,
+      extras: EXTRAS0,
+      plans: PLANS0,
+      platformSettings: PLATFORM_SETTINGS0,
+      payments: [],
+      auditLogs: [],
+      extraShops: 0,
+    };
+  }
   return {
     shops: SHOPS0,
     products: PRODUCTS0,
@@ -306,6 +353,7 @@ export interface StoreCtxValue {
   updateShop: (shopId: string, patch: Partial<Shop>) => Promise<void>;
   saveShopLensConfigs: (shopId: string, configs: MerchantLensBrandConfig[]) => Promise<void>;
   addTopUpCredits: (shopId: string, packFrames?: number, packPrice?: number) => Promise<void>;
+  adminTopUpShopAiCredits: (shopId: string, credits?: number) => Promise<void>;
   addShopManual: (opts: {
     name: string;
     ownerName?: string;
@@ -466,13 +514,17 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     idbLoadSnapshot<PersistedSnapshot>().then((idbSnap) => {
       idbHydratedRef.current = true;
       if (!alive || !idbSnap || hasMutatedBeforeIdbRef.current) return;
-      if (idbSnap.shops?.length) setShops(idbSnap.shops);
-      if (idbSnap.products?.length) setProducts(idbSnap.products);
-      if (idbSnap.reviews?.length) setReviews(idbSnap.reviews);
-      if (idbSnap.crmCustomers?.length) setCrmCustomers(idbSnap.crmCustomers);
-      if (idbSnap.inq?.length) {
-        const mineIds = getMyInquiryIds();
-        setInq(idbSnap.inq.map((q) => (mineIds.includes(q.id) ? { ...q, mine: true } : q)));
+      if (!isSupabaseConfigured) {
+        if (idbSnap.shops?.length) setShops(idbSnap.shops);
+        if (idbSnap.products?.length) setProducts(idbSnap.products);
+        if (idbSnap.reviews?.length) setReviews(idbSnap.reviews);
+        if (idbSnap.crmCustomers?.length) setCrmCustomers(idbSnap.crmCustomers);
+        if (idbSnap.inq?.length) {
+          const mineIds = getMyInquiryIds();
+          setInq(idbSnap.inq.map((q) => (mineIds.includes(q.id) ? { ...q, mine: true } : q)));
+        }
+        if (idbSnap.payments?.length) setPayments(idbSnap.payments);
+        if (idbSnap.auditLogs?.length) setAuditLogs(idbSnap.auditLogs);
       }
       if (idbSnap.lensTypes?.length) setLensTypes(normalizeCatalogShopIds(idbSnap.lensTypes));
       if (idbSnap.brands?.length) setBrands(normalizeCatalogShopIds(idbSnap.brands));
@@ -498,8 +550,6 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
               : DEFAULT_OFFICIAL_LENS_BRANDS,
         });
       }
-      if (idbSnap.payments?.length) setPayments(idbSnap.payments);
-      if (idbSnap.auditLogs?.length) setAuditLogs(idbSnap.auditLogs);
       if (typeof idbSnap.extraShops === 'number') setExtraShops(idbSnap.extraShops);
     });
     return () => {
@@ -722,66 +772,81 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const mapDbShopRow = (r: any): Shop => ({
-    id: r.id,
-    ownerId: r.owner_id,
-    ownerName: r.owner_name || undefined,
-    ownerEmail: r.owner_email || undefined,
-    name: r.name,
-    city: r.city,
-    governorate: r.governorate || r.city || 'القاهرة',
-    address: r.address || '',
-    mapsUrl: r.maps_url || '',
-    onboardingCompleted: r.onboarding_completed !== false,
-    enableDeliveryService: Boolean(r.enable_delivery_service),
-    deliveryFee: typeof r.delivery_fee === 'number' ? r.delivery_fee : 60,
-    deliveryAreas: r.delivery_areas || '',
-    isFeatured: Boolean(r.is_featured),
-    recall6mEnabled: r.recall_6m_enabled !== false,
-    recall12mEnabled: r.recall_12m_enabled !== false,
-    aiCreditsLimit:
-      r.ai_credits_limit !== null && r.ai_credits_limit !== undefined && Number.isFinite(Number(r.ai_credits_limit))
-        ? Number(r.ai_credits_limit)
-        : 25,
-    aiCreditsUsed:
-      r.ai_credits_used !== null && r.ai_credits_used !== undefined && Number.isFinite(Number(r.ai_credits_used))
-        ? Number(r.ai_credits_used)
-        : 0,
-    topupCredits:
-      r.topup_credits !== null && r.topup_credits !== undefined && Number.isFinite(Number(r.topup_credits))
-        ? Number(r.topup_credits)
-        : 0,
-    isDemoAdminStore: Boolean(r.is_demo_admin_store),
-    planTier: r.plan_tier || 'basic',
-    billingCycle: r.billing_cycle || 'monthly',
-    slug: r.slug,
-    plan: r.plan_name || 'الأساسية',
-    price: typeof r.price === 'number' ? r.price : 0,
-    status: r.status || 'active',
-    days: typeof r.days_left === 'number' ? r.days_left : 14,
-    trialEndsAt: r.trial_ends_at || undefined,
-    exp: r.expires_label || '',
-    logo: r.logo,
-    tagline: r.tagline || undefined,
-    bannerImageUrl: r.banner_image_url || undefined,
-    videoUrl: r.video_url || undefined,
-    color: r.color,
-    themeKey: r.theme_key || undefined,
-    aiLogoGenerations: typeof r.ai_logo_generations === 'number' ? r.ai_logo_generations : undefined,
-    wa: r.wa_phone,
-    merchantLensConfigs: Array.isArray(r.merchant_lens_configs) ? r.merchant_lens_configs : undefined,
-    groupColorsInStore: Boolean(r.group_colors_in_store),
-    showColorSwatchesToCustomer: r.show_color_swatches_to_customer !== false,
-    showStockCountToCustomer: Boolean(r.show_stock_count_to_customer),
-    hideOutOfStockToCustomer: Boolean(r.hide_out_of_stock_to_customer),
-    showBusinessHoursBar: Boolean(r.show_business_hours_bar),
-    workingHoursStart: r.working_hours_start || '10:00',
-    workingHoursEnd: r.working_hours_end || '22:00',
-    reminderReviewHours: typeof r.reminder_review_hours === 'number' ? r.reminder_review_hours : 24,
-    reminderMaintenanceMonths: typeof r.reminder_maintenance_months === 'number' ? r.reminder_maintenance_months : 4,
-    reminderExamMonths: typeof r.reminder_exam_months === 'number' ? r.reminder_exam_months : 12,
-    reminderMode: r.reminder_mode === 'manual' ? 'manual' : 'auto',
-  });
+  const mapDbShopRow = (r: any): Shop => {
+    const localPrefs = readShopPrefsMap()[r.id] || {};
+    return {
+      id: r.id,
+      ownerId: r.owner_id,
+      ownerName: r.owner_name || undefined,
+      ownerEmail: r.owner_email || undefined,
+      name: r.name,
+      city: r.city,
+      governorate: r.governorate || r.city || 'القاهرة',
+      address: r.address || '',
+      mapsUrl: r.maps_url || '',
+      onboardingCompleted: r.onboarding_completed !== false,
+      enableDeliveryService: Boolean(r.enable_delivery_service),
+      deliveryFee: typeof r.delivery_fee === 'number' ? r.delivery_fee : 60,
+      deliveryAreas: r.delivery_areas || '',
+      isFeatured: Boolean(r.is_featured),
+      recall6mEnabled: r.recall_6m_enabled !== false,
+      recall12mEnabled: r.recall_12m_enabled !== false,
+      aiCreditsLimit:
+        r.ai_credits_limit !== null && r.ai_credits_limit !== undefined && Number.isFinite(Number(r.ai_credits_limit))
+          ? Number(r.ai_credits_limit)
+          : 25,
+      aiCreditsUsed:
+        r.ai_credits_used !== null && r.ai_credits_used !== undefined && Number.isFinite(Number(r.ai_credits_used))
+          ? Number(r.ai_credits_used)
+          : 0,
+      topupCredits:
+        r.topup_credits !== null && r.topup_credits !== undefined && Number.isFinite(Number(r.topup_credits))
+          ? Number(r.topup_credits)
+          : 0,
+      isDemoAdminStore: Boolean(r.is_demo_admin_store),
+      planTier: r.plan_tier || 'basic',
+      billingCycle: r.billing_cycle || 'monthly',
+      slug: r.slug,
+      plan: r.plan_name || 'الأساسية',
+      price: typeof r.price === 'number' ? r.price : 0,
+      status: r.status || 'active',
+      days: typeof r.days_left === 'number' ? r.days_left : 14,
+      trialEndsAt: r.trial_ends_at || undefined,
+      exp: r.expires_label || '',
+      logo: r.logo,
+      tagline: r.tagline || undefined,
+      bannerImageUrl: r.banner_image_url || undefined,
+      videoUrl: r.video_url || undefined,
+      color: r.color,
+      themeKey: r.theme_key || undefined,
+      aiLogoGenerations: typeof r.ai_logo_generations === 'number' ? r.ai_logo_generations : undefined,
+      wa: r.wa_phone,
+      merchantLensConfigs: Array.isArray(r.merchant_lens_configs) ? r.merchant_lens_configs : undefined,
+      groupColorsInStore: Boolean(r.group_colors_in_store),
+      showColorSwatchesToCustomer: r.show_color_swatches_to_customer !== false,
+      showStockCountToCustomer: Boolean(r.show_stock_count_to_customer),
+      hideOutOfStockToCustomer: Boolean(r.hide_out_of_stock_to_customer),
+      showBusinessHoursBar: Boolean(r.show_business_hours_bar),
+      workingHoursStart: r.working_hours_start || '10:00',
+      workingHoursEnd: r.working_hours_end || '22:00',
+      reminderReviewHours: typeof r.reminder_review_hours === 'number' ? r.reminder_review_hours : 24,
+      reminderMaintenanceMonths: typeof r.reminder_maintenance_months === 'number' ? r.reminder_maintenance_months : 4,
+      reminderExamMonths: typeof r.reminder_exam_months === 'number' ? r.reminder_exam_months : 12,
+      reminderMode: r.reminder_mode === 'manual' ? 'manual' : 'auto',
+      reminderNotificationsEnabled:
+        typeof r.reminder_notifications_enabled === 'boolean'
+          ? r.reminder_notifications_enabled
+          : Boolean(localPrefs.reminderNotificationsEnabled),
+      promoBannerEnabled:
+        typeof r.promo_banner_enabled === 'boolean'
+          ? r.promo_banner_enabled
+          : Boolean(localPrefs.promoBannerEnabled),
+      promoBannerText:
+        typeof r.promo_banner_text === 'string'
+          ? r.promo_banner_text
+          : localPrefs.promoBannerText || '',
+    };
+  };
 
   const mapDbProductRows = (prods: any[], imgs: any[]): Product[] => {
     const imgMap = new Map<string, ProductImage[]>();
@@ -1035,14 +1100,17 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           : Promise.resolve({ data: null as any[] | null }),
       ]);
 
-      if (shopsRes.data?.length) {
+      if (Array.isArray(shopsRes.data)) {
         setShops(shopsRes.data.map(mapDbShopRow));
       }
 
-      const [settingsRes, crmRes] = await Promise.all([
+      const [settingsRes, crmRes, auditRes] = await Promise.all([
         supabase.from('platform_settings').select('*').eq('id', 'default').maybeSingle(),
         hasPrivilegedSession
           ? supabase.from('crm_customers').select('*').order('order_date', { ascending: false })
+          : Promise.resolve({ data: null as any[] | null }),
+        hasPrivilegedSession
+          ? supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(100)
           : Promise.resolve({ data: null as any[] | null }),
       ]);
       if (settingsRes.data) {
@@ -1094,7 +1162,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           }))
         );
       }
-      if (crmRes.data?.length) {
+      if (Array.isArray(crmRes.data)) {
         setCrmCustomers(
           crmRes.data.map((c: any) => ({
             id: c.id,
@@ -1113,6 +1181,20 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             recall6mSentAt: c.recall_6m_sent_at || undefined,
             recall12mSentAt: c.recall_12m_sent_at || undefined,
             notes: c.notes || '',
+          }))
+        );
+      }
+      if (Array.isArray(auditRes.data)) {
+        setAuditLogs(
+          auditRes.data.map((a: any) => ({
+            id: a.id,
+            actorRole: a.actor_role || 'merchant',
+            shopId: a.shop_id || undefined,
+            action: a.action,
+            details: a.details || '',
+            createdAt: a.created_at
+              ? new Date(a.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
+              : 'الآن',
           }))
         );
       }
@@ -1176,7 +1258,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           }))
         );
       }
-      if (inqRes.data?.length) {
+      if (Array.isArray(inqRes.data)) {
         const mineIds = getMyInquiryIds();
         setInq(
           inqRes.data.map((r: any) => ({
@@ -1211,7 +1293,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           }))
         );
       }
-      if (payRes.data?.length) {
+      if (Array.isArray(payRes.data)) {
         setPayments(
           payRes.data.map((r: any) => ({
             id: r.invoice_no || r.id,
@@ -1221,7 +1303,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             method: r.method,
             referenceNo: r.reference_no || undefined,
             status: r.status,
-            date: r.created_at ? new Date(r.created_at).toLocaleDateString('ar-EG') : 'اليوم',
+            date: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
           }))
         );
       }
@@ -1283,7 +1365,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         setSession(nextSess);
         const curPath = typeof window !== 'undefined' ? window.location.pathname : '';
         const isIntentionalPreviewOrNav =
-          curPath.startsWith('/s/') || curPath.startsWith('/shop/') || curPath.startsWith('/merchant');
+          curPath.startsWith('/s/') || curPath.startsWith('/shop/');
         if (shouldRedirect && !isIntentionalPreviewOrNav && !curPath.startsWith('/admin')) {
           navigate('/admin');
         }
@@ -1825,6 +1907,19 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
 
   const updateShop = useCallback(
     async (shopId: string, patch: Partial<Shop>) => {
+      if (
+        patch.promoBannerEnabled !== undefined ||
+        patch.promoBannerText !== undefined ||
+        patch.reminderNotificationsEnabled !== undefined
+      ) {
+        writeShopPrefsPatch(shopId, {
+          ...(patch.promoBannerEnabled !== undefined ? { promoBannerEnabled: patch.promoBannerEnabled } : {}),
+          ...(patch.promoBannerText !== undefined ? { promoBannerText: patch.promoBannerText } : {}),
+          ...(patch.reminderNotificationsEnabled !== undefined
+            ? { reminderNotificationsEnabled: patch.reminderNotificationsEnabled }
+            : {}),
+        });
+      }
       setShops((a) => a.map((s) => (s.id === shopId ? { ...s, ...patch } : s)));
       if (supabase) {
         const payload: Record<string, any> = {
@@ -1861,7 +1956,9 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           ...(patch.trialEndsAt !== undefined ? { trial_ends_at: patch.trialEndsAt } : {}),
           ...(patch.exp !== undefined ? { expires_label: patch.exp } : {}),
         };
-        await supabase.from('shops').update(payload).eq('id', shopId);
+        if (Object.keys(payload).length > 0) {
+          await supabase.from('shops').update(payload).eq('id', shopId);
+        }
         if (
           patch.themeKey !== undefined ||
           patch.aiLogoGenerations !== undefined ||
@@ -1879,7 +1976,10 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           patch.reminderReviewHours !== undefined ||
           patch.reminderMaintenanceMonths !== undefined ||
           patch.reminderExamMonths !== undefined ||
-          patch.reminderMode !== undefined
+          patch.reminderMode !== undefined ||
+          patch.reminderNotificationsEnabled !== undefined ||
+          patch.promoBannerEnabled !== undefined ||
+          patch.promoBannerText !== undefined
         ) {
           try {
             await supabase
@@ -1922,6 +2022,15 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
                   ? { reminder_exam_months: patch.reminderExamMonths }
                   : {}),
                 ...(patch.reminderMode !== undefined ? { reminder_mode: patch.reminderMode } : {}),
+                ...(patch.reminderNotificationsEnabled !== undefined
+                  ? { reminder_notifications_enabled: patch.reminderNotificationsEnabled }
+                  : {}),
+                ...(patch.promoBannerEnabled !== undefined
+                  ? { promo_banner_enabled: patch.promoBannerEnabled }
+                  : {}),
+                ...(patch.promoBannerText !== undefined
+                  ? { promo_banner_text: patch.promoBannerText }
+                  : {}),
               })
               .eq('id', shopId);
           } catch {
@@ -1953,6 +2062,18 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       }
     },
     [activeShop, platformSettings.topupPackFrames, platformSettings.topupPackPrice, shops]
+  );
+
+  const adminTopUpShopAiCredits = useCallback(
+    async (shopId: string, credits = 50) => {
+      const target = shops.find((s) => s.id === shopId);
+      if (!target) return;
+      const nextTopup = (target.topupCredits || 0) + credits;
+      await updateShop(shopId, { topupCredits: nextTopup });
+      await logAudit('شحن رصيد AI للتاجر', `إضافة +${credits} صورة AI لمتجر "${target.name}"`, shopId);
+      toast(`تم شحن +${credits} صورة AI لمتجر "${target.name}" بنجاح ✓`);
+    },
+    [logAudit, shops, toast, updateShop]
   );
 
   const savePlatformSettings = useCallback(
@@ -3203,6 +3324,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         updateShop,
         saveShopLensConfigs,
         addTopUpCredits,
+        adminTopUpShopAiCredits,
         addShopManual,
         extraShops,
         setExtraShops,

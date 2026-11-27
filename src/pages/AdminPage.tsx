@@ -67,6 +67,9 @@ export function AdminPage() {
     signOut,
     shops,
     updateShop,
+    adminTopUpShopAiCredits,
+    products,
+    inq,
     toast,
     setModal,
     navigate,
@@ -154,6 +157,32 @@ export function AdminPage() {
       // ignore
     }
   }, [adminCfg]);
+
+  const [dailyAnalyticsRows, setDailyAnalyticsRows] = useState<
+    { stat_date: string; visits_count: number; tryons_count: number; shares_count: number }[]
+  >([]);
+
+  useEffect(() => {
+    if (!supabase || !isAdminRole(session?.role)) return;
+    supabase
+      .from('shop_daily_analytics')
+      .select('stat_date, visits_count, tryons_count, shares_count')
+      .then(
+        ({ data }) => {
+          if (Array.isArray(data)) {
+            setDailyAnalyticsRows(
+              data.map((r) => ({
+                stat_date: String(r.stat_date || ''),
+                visits_count: Number(r.visits_count) || 0,
+                tryons_count: Number(r.tryons_count) || 0,
+                shares_count: Number(r.shares_count) || 0,
+              }))
+            );
+          }
+        },
+        () => {}
+      );
+  }, [session?.role, sec]);
 
   useEffect(() => {
     if (!supabase || !isAdminRole(session?.role)) return;
@@ -374,10 +403,41 @@ export function AdminPage() {
     ['set', 'إعدادات النظام والصلاحيات', 'gear'],
   ];
 
-  const m6 = [21500, 26800, 31200, 36900, 41100, 48500];
-  const m12 = [9800, 12400, 14100, 16800, 18900, 21500, 26800, 31200, 36900, 41100, 48500, 52300];
-  const l6 = ['يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر'];
-  const l12 = ['ديسمبر', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', ...l6].slice(0, 12);
+  const nowDate = new Date();
+  const monthBuckets = Array.from({ length: 12 }, (_, idx) => {
+    const d = new Date(nowDate.getFullYear(), nowDate.getMonth() - (11 - idx), 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const label = new Intl.DateTimeFormat('ar-EG', { month: 'short' }).format(d);
+    return { key, label };
+  });
+  const revenueByMonthKey = new Map<string, number>();
+  payments
+    .filter((p) => p.status === 'ok')
+    .forEach((p) => {
+      const parsed = p.date ? new Date(p.date) : null;
+      let ym = '';
+      if (parsed && !Number.isNaN(parsed.getTime())) {
+        ym = `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}`;
+      } else if (typeof p.date === 'string' && /^\d{4}-\d{2}/.test(p.date)) {
+        ym = p.date.slice(0, 7);
+      }
+      if (ym) {
+        revenueByMonthKey.set(ym, (revenueByMonthKey.get(ym) || 0) + (Number(p.amount) || 0));
+      }
+    });
+  const m12 = monthBuckets.map((b) => revenueByMonthKey.get(b.key) || 0);
+  const l12 = monthBuckets.map((b) => b.label);
+  const m6 = m12.slice(6);
+  const l6 = l12.slice(6);
+
+  const curMonthRev = m12[11] || 0;
+  const prevMonthRev = m12[10] || 0;
+  const revenueGrowthPct =
+    prevMonthRev > 0
+      ? Math.round(((curMonthRev - prevMonthRev) / prevMonthRev) * 100)
+      : curMonthRev > 0
+      ? 100
+      : 0;
 
   const totalShopsCount = shops.length;
   const trialShopsCount = shops.filter((s) => s.status === 'trial').length;
@@ -386,6 +446,19 @@ export function AdminPage() {
   const monthlyRevenue = shops
     .filter((s) => s.status === 'active' || s.status === 'soon')
     .reduce((sum, s) => sum + s.price, 0);
+
+  const todayCairo = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Cairo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(nowDate);
+  const todayTryonsCount = dailyAnalyticsRows
+    .filter((r) => r.stat_date === todayCairo)
+    .reduce((sum, r) => sum + r.tryons_count, 0);
+  const totalSharesCount = dailyAnalyticsRows.reduce((sum, r) => sum + r.shares_count, 0);
+  const totalAiProcessedFrames = shops.reduce((sum, s) => sum + (s.aiCreditsUsed || 0), 0);
+  const totalWaOrdersCount = inq.length;
 
   const searchLower = q.trim().toLowerCase();
   const rows = shops.filter(
@@ -436,198 +509,365 @@ export function AdminPage() {
   };
 
   const Table = ({ list }: { list: typeof shops }) => (
-    <div className="glass rounded-2xl overflow-x-auto">
-      <table className="w-full text-sm min-w-[1120px]">
-        <thead className="text-xs text-slate-500">
-          <tr className="border-b border-[#E2E8F0]">
-            {[
-              'المحل والمحافظة',
-              'بيانات المالك والتواصل',
-              'الباقة والرصيد',
-              'الحالة والمدة',
-              'التوصيل والتمييز',
-              'رابط المتجر',
-              'إجراءات',
-            ].map((h) => (
-              <th key={h} className="p-3 text-start font-semibold whitespace-nowrap">
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {list.map((s) => {
-            const dLeft = getShopDaysLeft(s);
-            const shopPath = `/s/${s.slug}`;
-            const gov = s.governorate || s.city || 'القاهرة';
-            const creditsCap = (s.aiCreditsLimit || 110) + (s.topupCredits || 0);
-            const creditsUsed = s.aiCreditsUsed || 0;
-            const waHref = `https://wa.me/${waNum(s.wa)}?text=${encodeURIComponent(
-              `مرحباً ${s.ownerName || s.name}، معك إدارة منصة OptiVerse بخصوص متجرك "${s.name}".`
-            )}`;
-            return (
-              <tr key={s.id} className="border-b border-slate-100 hover:bg-[#F8F9FA] align-top">
-                <td className="p-3">
-                  <div className="font-bold flex items-center gap-1.5">
+    <>
+      {/* Desktop Table */}
+      <div className="hidden md:block glass rounded-2xl overflow-x-auto">
+        <table className="w-full text-sm min-w-[1140px]">
+          <thead className="text-xs text-slate-500">
+            <tr className="border-b border-[#E2E8F0]">
+              {[
+                'المحل والمحافظة',
+                'بيانات المالك والتواصل',
+                'الباقة ورصيد AI',
+                'الحالة والمدة',
+                'التوصيل والتمييز',
+                'رابط المتجر',
+                'إجراءات',
+              ].map((h) => (
+                <th key={h} className="p-3 text-start font-semibold whitespace-nowrap">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((s) => {
+              const dLeft = getShopDaysLeft(s);
+              const shopPath = `/s/${s.slug}`;
+              const gov = s.governorate || s.city || 'القاهرة';
+              const creditsCap = (s.aiCreditsLimit || 110) + (s.topupCredits || 0);
+              const creditsUsed = s.aiCreditsUsed || 0;
+              const waHref = `https://wa.me/${waNum(s.wa)}?text=${encodeURIComponent(
+                `مرحباً، معك إدارة منصة OptiVerse بخصوص محل "${s.name}".`
+              )}`;
+              return (
+                <tr key={s.id} className="border-b border-slate-100 hover:bg-[#F8F9FA] align-top">
+                  <td className="p-3">
+                    <div className="font-bold flex items-center gap-1.5 text-[#0F172A]">
+                      <span>{s.name}</span>
+                      {s.isFeatured && <span title="متجر مميز">⭐</span>}
+                      {s.isDemoAdminStore && <span className="badge b-info text-[0.65rem]">ديمو</span>}
+                    </div>
+                    <div className="text-xs text-slate-600 mt-0.5">{gov}</div>
+                    {s.address && <div className="text-[0.68rem] text-slate-500 max-w-[180px] truncate">{s.address}</div>}
+                    {Boolean(s.mapsUrl && /^https?:\/\//i.test(s.mapsUrl)) && (
+                      <a
+                        href={s.mapsUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-[0.68rem] text-[#0284C7] hover:underline mt-0.5"
+                      >
+                        <I n="map" s={11} /> الخريطة
+                      </a>
+                    )}
+                  </td>
+                  <td className="p-3">
+                    <div className="font-semibold text-xs text-slate-700">
+                      المالك: {s.ownerName || 'غير محدد'}
+                    </div>
+                    {s.ownerEmail && (
+                      <div className="text-[.7rem] opacity-65 font-mono" dir="ltr" style={{ textAlign: 'start' }}>
+                        {s.ownerEmail}
+                      </div>
+                    )}
+                    <a
+                      href={waHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-xs font-bold text-[#059669] hover:underline mt-1"
+                    >
+                      <I n="msg" s={12} /> واتساب التاجر ({s.wa || '—'})
+                    </a>
+                  </td>
+                  <td className="p-3">
+                    <span className={'badge ' + (s.planTier === 'pro' || s.plan === 'الاحترافية' ? 'b-acc' : 'b-info')}>
+                      {s.plan}
+                    </span>
+                    <div className="text-[.7rem] opacity-70 mt-1 tabular-nums">{s.price} ج.م/ش</div>
+                    <div className="text-[.7rem] font-bold text-[#0F172A] tabular-nums mt-0.5">
+                      المستهلك {creditsUsed} / {creditsCap} صورة
+                    </div>
+                  </td>
+                  <td className="p-3 whitespace-nowrap">
+                    <div>{stBadge(s.status)}</div>
+                    <div className="text-xs text-slate-600 mt-1 tabular-nums">
+                      {s.exp} ({dLeft} يوم)
+                    </div>
+                  </td>
+                  <td className="p-3">
+                    <div className="space-y-2 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-slate-600">توصيل</span>
+                        <Switch
+                          on={Boolean(s.enableDeliveryService)}
+                          onChange={async (v) => {
+                            await updateShop(s.id, { enableDeliveryService: v });
+                            await logAudit('تفعيل التوصيل', `${s.name}: ${v}`, s.id);
+                            toast(v ? `تم تفعيل خدمة التوصيل لـ ${s.name} ✓` : `تم إيقاف التوصيل لـ ${s.name}`);
+                          }}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-slate-600">مميز ⭐</span>
+                        <Switch
+                          on={Boolean(s.isFeatured)}
+                          onChange={async (v) => {
+                            await updateShop(s.id, { isFeatured: v });
+                            await logAudit('تمييز متجر بالدليل', `${s.name}: ${v}`, s.id);
+                            toast(v ? `تم تمييز ${s.name} في دليل المحلات ⭐` : `تم إلغاء تمييز ${s.name}`);
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </td>
+                  <td className="p-3">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => navigate(shopPath)}
+                        className="font-mono text-xs tx-acc hover:underline cursor-pointer"
+                        dir="ltr"
+                      >
+                        {shopPath}
+                      </button>
+                      <button
+                        type="button"
+                        title="نسخ رابط المتجر"
+                        className="btn btn-g btn-sm !p-1.5"
+                        onClick={() => {
+                          const full = `${window.location.origin}${shopPath}`;
+                          navigator.clipboard?.writeText(full).then(() => toast('تم نسخ رابط المتجر ✓')).catch(() => toast(full));
+                        }}
+                      >
+                        <I n="copy" s={12} />
+                      </button>
+                    </div>
+                  </td>
+                  <td className="p-3">
+                    <div className="flex gap-1.5 flex-wrap">
+                      {(s.status === 'trial' || s.status === 'expired' || s.status === 'paused') && (
+                        <button
+                          className="btn btn-p btn-sm"
+                          onClick={async () => {
+                            await updateShop(s.id, {
+                              status: 'active',
+                              days: Math.max(30, dLeft),
+                              exp: 'مفعل (شهر)',
+                            });
+                            await logAudit('تفعيل الاشتراك', `تم تفعيل اشتراك ${s.name}`, s.id);
+                            toast(`تم تفعيل اشتراك ${s.name} ✓`);
+                          }}
+                        >
+                          <I n="check" s={13} /> تفعيل
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-g btn-sm !border-teal-200 !text-teal-800 hover:!bg-teal-50"
+                        onClick={() => adminTopUpShopAiCredits(s.id, 50)}
+                      >
+                        ➕ شحن رصيد AI (+50 صورة)
+                      </button>
+                      <button className="btn btn-g btn-sm" onClick={() => setModal({ t: 'renew', s })}>
+                        <I n="refresh" s={13} /> تجديد
+                      </button>
+                      <button className="btn btn-g btn-sm" onClick={() => setModal({ t: 'editplan', s })}>
+                        <I n="edit" s={13} /> الباقة
+                      </button>
+                      <button className="btn btn-g btn-sm" onClick={() => setModal({ t: 'addpayment', s })}>
+                        <I n="receipt" s={13} /> دفع
+                      </button>
+                      <button
+                        className="btn btn-g btn-sm"
+                        onClick={async () => {
+                          const next = s.status === 'paused' ? 'active' : 'paused';
+                          await updateShop(s.id, { status: next });
+                          await logAudit(
+                            next === 'paused' ? 'إيقاف متجر' : 'استئناف متجر',
+                            `${s.name} (${s.slug})`,
+                            s.id
+                          );
+                          toast(next === 'active' ? `تم استئناف ${s.name}` : `تم إيقاف ${s.name} مؤقتاً`);
+                        }}
+                      >
+                        <I n={s.status === 'paused' ? 'play' : 'pause'} s={13} />{' '}
+                        {s.status === 'paused' ? 'استئناف' : 'إيقاف'}
+                      </button>
+                      <button className="btn btn-p btn-sm" onClick={() => enterShopAsMerchant(s)}>
+                        <I n="enter" s={13} /> دخول كمتجر
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+            {!list.length && (
+              <tr>
+                <td colSpan={7} className="p-8 text-center opacity-60">
+                  لا توجد محلات مسجلة مطابقة للبحث
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Mobile Cards View */}
+      <div className="md:hidden space-y-3">
+        {list.map((s) => {
+          const dLeft = getShopDaysLeft(s);
+          const shopPath = `/s/${s.slug}`;
+          const gov = s.governorate || s.city || 'القاهرة';
+          const creditsCap = (s.aiCreditsLimit || 110) + (s.topupCredits || 0);
+          const creditsUsed = s.aiCreditsUsed || 0;
+          const waHref = `https://wa.me/${waNum(s.wa)}?text=${encodeURIComponent(
+            `مرحباً، معك إدارة منصة OptiVerse بخصوص محل "${s.name}".`
+          )}`;
+          return (
+            <div key={s.id} className="glass rounded-2xl p-4 space-y-3 border border-[#E2E8F0]">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="font-extrabold text-base text-[#0F172A] flex items-center gap-1.5 flex-wrap">
                     <span>{s.name}</span>
                     {s.isFeatured && <span title="متجر مميز">⭐</span>}
                     {s.isDemoAdminStore && <span className="badge b-info text-[0.65rem]">ديمو</span>}
                   </div>
-                  <div className="text-xs text-slate-600 mt-0.5">{gov}</div>
-                  {s.address && <div className="text-[0.68rem] text-slate-500 max-w-[180px] truncate">{s.address}</div>}
-                  {Boolean(s.mapsUrl && /^https?:\/\//i.test(s.mapsUrl)) && (
-                    <a
-                      href={s.mapsUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-[0.68rem] text-[#0284C7] hover:underline mt-0.5"
-                    >
-                      <I n="map" s={11} /> الخريطة
-                    </a>
-                  )}
-                </td>
-                <td className="p-3">
-                  <div className="font-semibold text-xs text-[#0F172A]">{s.ownerName || 'غير محدد'}</div>
-                  {s.ownerEmail && (
-                    <div className="text-[.7rem] opacity-65 font-mono" dir="ltr" style={{ textAlign: 'start' }}>
-                      {s.ownerEmail}
-                    </div>
-                  )}
-                  <a
-                    href={waHref}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-xs font-bold text-[#059669] hover:underline mt-1"
-                    dir="ltr"
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    {gov} · المالك: {s.ownerName || 'غير محدد'}
+                  </div>
+                </div>
+                <div className="shrink-0 text-end">
+                  {stBadge(s.status)}
+                  <div className="text-[0.68rem] text-slate-500 mt-1 tabular-nums">{dLeft} يوم متبقي</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] text-xs">
+                <div>
+                  <div className="text-slate-500 text-[0.68rem]">الباقة والاشتراك</div>
+                  <div className="font-extrabold text-[#0F172A]">
+                    {s.plan} · {s.price} ج.م/ش
+                  </div>
+                </div>
+                <div>
+                  <div className="text-slate-500 text-[0.68rem]">استهلاك AI</div>
+                  <div className="font-extrabold text-[#0284C7] tabular-nums">
+                    المستهلك {creditsUsed} / {creditsCap} صورة
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <a
+                  href={waHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-g btn-sm !text-[#059669] !border-emerald-200 flex-1 justify-center"
+                >
+                  <I n="msg" s={14} /> 💬 واتساب التاجر
+                </a>
+                <button
+                  type="button"
+                  className="btn btn-g btn-sm"
+                  onClick={() => {
+                    const full = `${window.location.origin}${shopPath}`;
+                    navigator.clipboard?.writeText(full).then(() => toast('تم نسخ رابط المتجر ✓')).catch(() => toast(full));
+                  }}
+                >
+                  <I n="copy" s={13} /> نسخ الرابط
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 py-1.5 border-y border-slate-100 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-600">توصيل</span>
+                  <Switch
+                    on={Boolean(s.enableDeliveryService)}
+                    onChange={async (v) => {
+                      await updateShop(s.id, { enableDeliveryService: v });
+                      await logAudit('تفعيل التوصيل', `${s.name}: ${v}`, s.id);
+                      toast(v ? `تم تفعيل خدمة التوصيل لـ ${s.name} ✓` : `تم إيقاف التوصيل لـ ${s.name}`);
+                    }}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-600">مميز ⭐</span>
+                  <Switch
+                    on={Boolean(s.isFeatured)}
+                    onChange={async (v) => {
+                      await updateShop(s.id, { isFeatured: v });
+                      await logAudit('تمييز متجر بالدليل', `${s.name}: ${v}`, s.id);
+                      toast(v ? `تم تمييز ${s.name} في دليل المحلات ⭐` : `تم إلغاء تمييز ${s.name}`);
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  className="btn btn-g btn-sm col-span-2 !border-teal-200 !text-teal-800 hover:!bg-teal-50 justify-center"
+                  onClick={() => adminTopUpShopAiCredits(s.id, 50)}
+                >
+                  ➕ شحن رصيد AI (+50 صورة)
+                </button>
+                {(s.status === 'trial' || s.status === 'expired' || s.status === 'paused') && (
+                  <button
+                    type="button"
+                    className="btn btn-p btn-sm justify-center"
+                    onClick={async () => {
+                      await updateShop(s.id, {
+                        status: 'active',
+                        days: Math.max(30, dLeft),
+                        exp: 'مفعل (شهر)',
+                      });
+                      await logAudit('تفعيل الاشتراك', `تم تفعيل اشتراك ${s.name}`, s.id);
+                      toast(`تم تفعيل اشتراك ${s.name} ✓`);
+                    }}
                   >
-                    <I n="msg" s={12} /> {s.wa || 'واتساب'}
-                  </a>
-                </td>
-                <td className="p-3">
-                  <span className={'badge ' + (s.planTier === 'pro' || s.plan === 'الاحترافية' ? 'b-acc' : 'b-info')}>
-                    {s.plan}
-                  </span>
-                  <div className="text-[.7rem] opacity-70 mt-1 tabular-nums">{s.price} ج.م/ش</div>
-                  <div className="text-[.68rem] text-slate-500 tabular-nums mt-0.5">
-                    AI: {creditsUsed} / {creditsCap}
-                  </div>
-                </td>
-                <td className="p-3 whitespace-nowrap">
-                  <div>{stBadge(s.status)}</div>
-                  <div className="text-xs text-slate-600 mt-1 tabular-nums">
-                    {s.exp} ({dLeft} يوم)
-                  </div>
-                </td>
-                <td className="p-3">
-                  <div className="space-y-2 text-xs">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-slate-600">توصيل</span>
-                      <Switch
-                        on={Boolean(s.enableDeliveryService)}
-                        onChange={async (v) => {
-                          await updateShop(s.id, { enableDeliveryService: v });
-                          await logAudit('تفعيل التوصيل', `${s.name}: ${v}`, s.id);
-                          toast(v ? `تم تفعيل خدمة التوصيل لـ ${s.name} ✓` : `تم إيقاف التوصيل لـ ${s.name}`);
-                        }}
-                      />
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-slate-600">مميز ⭐</span>
-                      <Switch
-                        on={Boolean(s.isFeatured)}
-                        onChange={async (v) => {
-                          await updateShop(s.id, { isFeatured: v });
-                          await logAudit('تمييز متجر بالدليل', `${s.name}: ${v}`, s.id);
-                          toast(v ? `تم تمييز ${s.name} في دليل المحلات ⭐` : `تم إلغاء تمييز ${s.name}`);
-                        }}
-                      />
-                    </div>
-                  </div>
-                </td>
-                <td className="p-3">
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => navigate(shopPath)}
-                      className="font-mono text-xs tx-acc hover:underline cursor-pointer"
-                      dir="ltr"
-                    >
-                      {shopPath}
-                    </button>
-                    <button
-                      type="button"
-                      title="نسخ رابط المتجر"
-                      className="btn btn-g btn-sm !p-1.5"
-                      onClick={() => {
-                        const full = `${window.location.origin}${shopPath}`;
-                        navigator.clipboard?.writeText(full).then(() => toast('تم نسخ رابط المتجر ✓')).catch(() => toast(full));
-                      }}
-                    >
-                      <I n="copy" s={12} />
-                    </button>
-                  </div>
-                </td>
-                <td className="p-3">
-                  <div className="flex gap-1.5 flex-wrap">
-                    {(s.status === 'trial' || s.status === 'expired' || s.status === 'paused') && (
-                      <button
-                        className="btn btn-p btn-sm"
-                        onClick={async () => {
-                          await updateShop(s.id, {
-                            status: 'active',
-                            days: Math.max(30, dLeft),
-                            exp: 'مفعل (شهر)',
-                          });
-                          await logAudit('تفعيل الاشتراك', `تم تفعيل اشتراك ${s.name}`, s.id);
-                          toast(`تم تفعيل اشتراك ${s.name} ✓`);
-                        }}
-                      >
-                        <I n="check" s={13} /> تفعيل
-                      </button>
-                    )}
-                    <button className="btn btn-g btn-sm" onClick={() => setModal({ t: 'renew', s })}>
-                      <I n="refresh" s={13} /> تجديد
-                    </button>
-                    <button className="btn btn-g btn-sm" onClick={() => setModal({ t: 'editplan', s })}>
-                      <I n="edit" s={13} /> الباقة
-                    </button>
-                    <button className="btn btn-g btn-sm" onClick={() => setModal({ t: 'addpayment', s })}>
-                      <I n="receipt" s={13} /> دفع
-                    </button>
-                    <button
-                      className="btn btn-g btn-sm"
-                      onClick={async () => {
-                        const next = s.status === 'paused' ? 'active' : 'paused';
-                        await updateShop(s.id, { status: next });
-                        await logAudit(
-                          next === 'paused' ? 'إيقاف متجر' : 'استئناف متجر',
-                          `${s.name} (${s.slug})`,
-                          s.id
-                        );
-                        toast(next === 'active' ? `تم استئناف ${s.name}` : `تم إيقاف ${s.name} مؤقتاً`);
-                      }}
-                    >
-                      <I n={s.status === 'paused' ? 'play' : 'pause'} s={13} />{' '}
-                      {s.status === 'paused' ? 'استئناف' : 'إيقاف'}
-                    </button>
-                    <button className="btn btn-p btn-sm" onClick={() => enterShopAsMerchant(s)}>
-                      <I n="enter" s={13} /> دخول كمتجر
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
-          {!list.length && (
-            <tr>
-              <td colSpan={7} className="p-8 text-center opacity-60">
-                لا توجد نتائج
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
+                    <I n="check" s={13} /> تفعيل
+                  </button>
+                )}
+                <button type="button" className="btn btn-g btn-sm justify-center" onClick={() => setModal({ t: 'renew', s })}>
+                  <I n="refresh" s={13} /> تجديد
+                </button>
+                <button type="button" className="btn btn-g btn-sm justify-center" onClick={() => setModal({ t: 'editplan', s })}>
+                  <I n="edit" s={13} /> الباقة
+                </button>
+                <button type="button" className="btn btn-g btn-sm justify-center" onClick={() => setModal({ t: 'addpayment', s })}>
+                  <I n="receipt" s={13} /> دفع
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-g btn-sm justify-center"
+                  onClick={async () => {
+                    const next = s.status === 'paused' ? 'active' : 'paused';
+                    await updateShop(s.id, { status: next });
+                    await logAudit(
+                      next === 'paused' ? 'إيقاف متجر' : 'استئناف متجر',
+                      `${s.name} (${s.slug})`,
+                      s.id
+                    );
+                    toast(next === 'active' ? `تم استئناف ${s.name}` : `تم إيقاف ${s.name} مؤقتاً`);
+                  }}
+                >
+                  <I n={s.status === 'paused' ? 'play' : 'pause'} s={13} />{' '}
+                  {s.status === 'paused' ? 'استئناف' : 'إيقاف'}
+                </button>
+                <button type="button" className="btn btn-p btn-sm col-span-2 justify-center" onClick={() => enterShopAsMerchant(s)}>
+                  <I n="enter" s={13} /> دخول كمتجر
+                </button>
+              </div>
+            </div>
+          );
+        })}
+        {!list.length && (
+          <div className="glass rounded-2xl p-8 text-center text-sm opacity-60">
+            لا توجد محلات مسجلة مطابقة للبحث
+          </div>
+        )}
+      </div>
+    </>
   );
 
   return (
@@ -644,16 +884,14 @@ export function AdminPage() {
           className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white btn-sm whitespace-nowrap shrink-0"
           onClick={switchToAdminDemoStore}
         >
-          <I n="store" s={14} /> متجر الديمو ⭐
+          <I n="store" s={14} /> معاينة متجر الديمو
         </button>
       }
     >
+      <div className="pb-24">
       {sec === 'over' && (
         <>
           <Head t="نظرة عامة والإيرادات" sub="لوحة مالك منصة OptiVerse">
-            <button type="button" className="btn btn-tryon" onClick={switchToAdminDemoStore}>
-              <I n="enter" s={16} /> التبديل إلى متجر الديمو الخاص بي
-            </button>
             <button type="button" className="btn btn-g" onClick={() => setModal({ t: 'addpayment' })}>
               <I n="receipt" s={16} /> تسجيل عملية دفع
             </button>
@@ -697,7 +935,11 @@ export function AdminPage() {
               icon="dollar"
               label="إجمالي الإيرادات الشهرية"
               value={<Egp v={monthlyRevenue} />}
-              sub={<span className="badge b-ok">+18%</span>}
+              sub={
+                <span className={'badge ' + (revenueGrowthPct > 0 ? 'b-ok' : revenueGrowthPct < 0 ? 'b-bad' : 'b-info')}>
+                  {revenueGrowthPct > 0 ? `+${revenueGrowthPct}%` : `${revenueGrowthPct}%`}
+                </span>
+              }
             />
           </div>
 
@@ -996,7 +1238,7 @@ export function AdminPage() {
             <Stat icon="bell" tone="b-warn" label="معلّق" value={<Egp v={pendingTotal} />} />
             <Stat icon="x" tone="b-bad" label="متأخر" value={<Egp v={lateTotal} />} />
           </div>
-          <div className="glass rounded-2xl overflow-x-auto">
+          <div className="hidden md:block glass rounded-2xl overflow-x-auto">
             <table className="w-full text-sm min-w-[640px]">
               <thead className="text-xs text-slate-500">
                 <tr className="border-b border-[#E2E8F0]">
@@ -1026,57 +1268,94 @@ export function AdminPage() {
                     </td>
                   </tr>
                 ))}
+                {!payments.length && (
+                  <tr>
+                    <td colSpan={6} className="p-8 text-center text-sm text-slate-500">
+                      لا توجد فواتير أو عمليات دفع مسجلة حتى الآن
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
+          </div>
+
+          <div className="md:hidden space-y-2.5">
+            {payments.map((r) => (
+              <div key={r.id} className="glass rounded-2xl p-3.5 border border-[#E2E8F0] space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-extrabold text-sm text-[#0F172A]">{r.shopName}</span>
+                  <span className={'badge ' + (r.status === 'ok' ? 'b-ok' : r.status === 'wait' ? 'b-warn' : 'b-bad')}>
+                    {r.status === 'ok' ? 'مدفوعة' : r.status === 'wait' ? 'بانتظار التأكيد' : 'متأخرة'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-xs text-slate-600">
+                  <span>{r.method}</span>
+                  <span className="font-extrabold text-[#D97706]">
+                    <Egp v={r.amount} />
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[0.7rem] text-slate-500 font-mono" dir="ltr">
+                  <span>{r.referenceNo || '—'}</span>
+                  <span>{r.id}</span>
+                </div>
+              </div>
+            ))}
+            {!payments.length && (
+              <div className="glass rounded-2xl p-8 text-center text-sm text-slate-500">
+                لا توجد فواتير أو عمليات دفع مسجلة حتى الآن
+              </div>
+            )}
           </div>
         </>
       )}
 
-      {sec === 'stats' && (
-        <>
-          <Head t="إحصائيات التجربة بالذكاء الاصطناعي" sub="استخدام التجربة الافتراضية الحية عبر المنصة" />
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-            <Stat icon="eye" label="تجارب اليوم" value="1,284" />
-            <Stat icon="box" label="نظارات مجهزة بالذكاء الاصطناعي" value="3,920" />
-            <Stat icon="share" label="مشاركات للأصدقاء" value="9,310" />
-            <Stat icon="msg" label="طلبات واتساب" value="4,775" />
-          </div>
-          <div className="grid lg:grid-cols-2 gap-4">
-            <div className="glass rounded-2xl p-5">
-              <h3 className="font-bold mb-4">الأكثر تجربةً (نوع الإطار)</h3>
-              <Bars
-                rows={[
-                  ['Aviator', 41200],
-                  ['Wayfarer', 33800],
-                  ['Round', 22100],
-                  ['Rimless', 17300],
-                  ['Cat-Eye', 9600],
-                ]}
-              />
+      {sec === 'stats' && (() => {
+        const frameTypeCounts: [string, number][] = (Object.entries(TYPES) as [FrameType, string][]).map(
+          ([typeKey, label]) => [label, products.filter((p) => p.type === typeKey).length]
+        );
+        const activeCount = shops.filter((s) => s.status === 'active').length;
+        const trialCount = shops.filter((s) => s.status === 'trial').length;
+        const pausedExpiredCount = shops.filter((s) => s.status === 'paused' || s.status === 'expired' || s.status === 'soon').length;
+        const maxShopStat = Math.max(1, shops.length);
+        const categoryCounts: [string, number][] = [
+          ['طبية', products.filter((p) => p.frameType === 'prescription' || (!p.frameType && p.cat === 'med')).length],
+          ['شمسية', products.filter((p) => p.frameType === 'sunglasses' || (!p.frameType && p.cat === 'sun')).length],
+          ['غيار شمس (Clip-On)', products.filter((p) => p.frameType === 'clip_on').length],
+          ['أطفال', products.filter((p) => p.frameType === 'kids').length],
+          ['معدن', products.filter((p) => p.frameType === 'metal').length],
+        ];
+
+        return (
+          <>
+            <Head t="إحصائيات التجربة بالذكاء الاصطناعي" sub="بيانات حية من قاعدة البيانات دون أي أرقام افتراضية" />
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+              <Stat icon="eye" label="تجارب اليوم" value={fmt(todayTryonsCount)} />
+              <Stat icon="box" label="نظارات مجهزة بالذكاء الاصطناعي" value={fmt(totalAiProcessedFrames)} />
+              <Stat icon="share" label="مشاركات للأصدقاء" value={fmt(totalSharesCount)} />
+              <Stat icon="msg" label="طلبات واتساب" value={fmt(totalWaOrdersCount)} />
             </div>
-            <div className="glass rounded-2xl p-5">
-              <h3 className="font-bold mb-4">الأجهزة المستخدمة</h3>
-              <Bars
-                rows={[
-                  ['Android', 54, '%'],
-                  ['iPhone', 38, '%'],
-                  ['كمبيوتر', 8, '%'],
-                ]}
-                max={100}
-              />
-              <h3 className="font-bold mt-6 mb-4">شكل الوجه المكتشف</h3>
-              <Bars
-                rows={[
-                  ['بيضاوي', 46, '%'],
-                  ['دائري', 31, '%'],
-                  ['مربع', 23, '%'],
-                ]}
-                max={100}
-              />
+            <div className="grid lg:grid-cols-2 gap-4">
+              <div className="glass rounded-2xl p-5">
+                <h3 className="font-bold mb-4">توزيع الإطارات المسجلة حسب التصميم ({fmt(products.length)})</h3>
+                <Bars rows={frameTypeCounts} max={Math.max(1, ...frameTypeCounts.map((r) => r[1]))} />
+              </div>
+              <div className="glass rounded-2xl p-5">
+                <h3 className="font-bold mb-4">حالة اشتراكات المحلات ({fmt(shops.length)})</h3>
+                <Bars
+                  rows={[
+                    ['نشط', activeCount],
+                    ['تجريبي', trialCount],
+                    ['قريب الانتهاء / متوقف', pausedExpiredCount],
+                  ]}
+                  max={maxShopStat}
+                />
+                <h3 className="font-bold mt-6 mb-4">تصنيف النظارات في المخازن</h3>
+                <Bars rows={categoryCounts} max={Math.max(1, ...categoryCounts.map((r) => r[1]))} />
+              </div>
             </div>
-          </div>
-        </>
-      )}
+          </>
+        );
+      })()}
 
       {sec === 'set' && (
         <>
@@ -1600,11 +1879,17 @@ export function AdminPage() {
                   <span className="text-slate-500 whitespace-nowrap">{log.createdAt}</span>
                 </div>
               ))}
+              {!auditLogs.length && (
+                <div className="text-center text-xs text-slate-500 py-6">
+                  لا توجد عمليات مسجلة في السجل حتى الآن
+                </div>
+              )}
             </div>
           </div>
         </>
       )}
       {sec === 'lenses' && <AdminLensMatrixManager />}
+      </div>
     </Shell>
   );
 }

@@ -1284,7 +1284,7 @@ export function FaceTryOnStage({
               <button
                 type="button"
                 onClick={startLiveCamera}
-                className="btn bg-[#0284C7] hover:bg-[#0369A1] text-white !px-2.5 !py-2.5 shadow-sm text-xs sm:text-sm font-bold justify-center whitespace-nowrap"
+                className="btn bg-[#0284C7] hover:bg-[#0369A1] text-white !px-2.5 !py-2.5 shadow-sm text-xs sm:text-sm font-bold justify-center whitespace-nowrap active:scale-[0.97] transition-transform duration-150"
               >
                 <I n="camera" s={15} />{' '}
                 <span>
@@ -1294,7 +1294,7 @@ export function FaceTryOnStage({
               <button
                 type="button"
                 onClick={() => setPhotoCanvasModalOpen(true)}
-                className="px-2.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-[#0F172A] border border-[#E2E8F0] shadow-sm text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+                className="px-2.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-[#0F172A] border border-[#E2E8F0] shadow-sm text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap active:scale-[0.97] transition-transform duration-150"
               >
                 <I n="upload" s={15} /> <span>جرّب على صورتك</span>
               </button>
@@ -1348,7 +1348,7 @@ export function FaceTryOnStage({
           {showSplit && compareProduct ? (
             <div className="grid grid-cols-2 w-full h-full divide-x divide-x-reverse divide-white/25">
               <div ref={fullHalfStageRef} className="relative w-full h-full overflow-hidden flex items-center justify-center">
-                <div className="relative w-full aspect-[3/4] sm:aspect-[4/3] max-h-full overflow-hidden">
+                <div className="relative w-full h-full overflow-hidden">
                   <video
                     ref={videoRef}
                     playsInline
@@ -1376,7 +1376,7 @@ export function FaceTryOnStage({
                 </div>
               </div>
               <div className="relative w-full h-full overflow-hidden flex items-center justify-center">
-                <div className="relative w-full aspect-[3/4] sm:aspect-[4/3] max-h-full overflow-hidden">
+                <div className="relative w-full h-full overflow-hidden">
                   <video
                     ref={compareVideoRef}
                     playsInline
@@ -1403,7 +1403,7 @@ export function FaceTryOnStage({
               </div>
             </div>
           ) : (
-            <div className="relative w-full max-w-4xl aspect-[3/4] sm:aspect-[4/3] max-h-full overflow-hidden">
+            <div className="relative w-full h-full overflow-hidden">
               <video
                 ref={videoRef}
                 playsInline
@@ -1422,6 +1422,20 @@ export function FaceTryOnStage({
                 active={camStatus === 'streaming'}
                 onLandmarksFrame={handleLandmarksFrame}
                 showDebugBadge={true}
+                carouselProducts={carouselItems}
+                onSelectProduct={onSelectProduct}
+                onCaptureShot={captureTryOnScreenshot}
+                onQuickShare={handleQuickShareFromCamera}
+                onOrderProduct={
+                  onOrderProduct
+                    ? (pid) => {
+                        onOrderProduct(pid);
+                        closeFullscreen();
+                      }
+                    : undefined
+                }
+                shotBusy={shotBusy}
+                showControlsOverlay={true}
               />
             </div>
           )}
@@ -1672,85 +1686,87 @@ export function FaceTryOnStage({
         </div>
       </div>
 
-      {/* Bottom Clean Dock: Sits cleanly BELOW the camera viewport so it never blocks the face */}
-      <div className="shrink-0 w-full z-30 pt-2.5 pb-[max(1.25rem,env(safe-area-inset-bottom))] px-3 bg-gradient-to-t from-black via-black/95 to-black/80 border-t border-white/10 flex flex-col items-center gap-2.5">
-        {/* Circular Screenshot Shutter Button + Share with Friends + Direct Order CTA */}
-        {(camStatus === 'streaming' || (mode === 'photo' && photoSrc)) && (
-          <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
-            <button
-              type="button"
-              disabled={shotBusy}
-              onClick={handleQuickShareFromCamera}
-              className="h-11 px-3.5 rounded-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-extrabold text-xs sm:text-sm shadow-xl flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition active:scale-95"
-            >
-              <span>مشاركة مع الأصدقاء 📤</span>
-            </button>
-
-            <button
-              type="button"
-              disabled={shotBusy}
-              onClick={captureTryOnScreenshot}
-              aria-label="التقاط صورة"
-              className="w-14 h-14 sm:w-16 sm:h-16 rounded-full border-[3.5px] border-white bg-white/20 backdrop-blur-md flex items-center justify-center shadow-2xl active:scale-95 transition-transform cursor-pointer shrink-0"
-            >
-              <span className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-white flex items-center justify-center text-slate-900">
-                <I n="camera" s={20} />
-              </span>
-            </button>
-
-            {onOrderProduct && (
+      {/* Bottom Dock for Photo / Split Comparison Mode (Single Live Camera renders transparent Edge-to-Edge overlay inside VideoTryOnCanvas) */}
+      {(mode !== 'camera' || showSplit) && (
+        <div className="shrink-0 w-full z-30 pt-2.5 pb-[max(1.25rem,env(safe-area-inset-bottom))] px-3 bg-gradient-to-t from-black via-black/95 to-black/80 border-t border-white/10 flex flex-col items-center gap-2.5">
+          {/* Circular Screenshot Shutter Button + Share with Friends + Direct Order CTA */}
+          {(camStatus === 'streaming' || (mode === 'photo' && photoSrc)) && (
+            <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
               <button
                 type="button"
-                onClick={() => {
-                  onOrderProduct(product.id);
-                  closeFullscreen();
-                }}
-                className="h-11 px-3.5 sm:px-4 rounded-full bg-[#D97706] hover:bg-[#B45309] text-white font-extrabold text-xs sm:text-sm shadow-xl flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition active:scale-95"
+                disabled={shotBusy}
+                onClick={handleQuickShareFromCamera}
+                className="h-11 px-3.5 rounded-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-extrabold text-xs sm:text-sm shadow-xl flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition-transform duration-150 active:scale-[0.97]"
               >
-                <I n="bag" s={15} /> اطلب هذه النظارة
+                <span>مشاركة مع الأصدقاء 📤</span>
               </button>
-            )}
-          </div>
-        )}
 
-        <p className="text-[0.68rem] text-white/75 text-center leading-4 px-2">
-          🔒 خصوصيتك محمية: الكاميرا تعمل لحظياً على جهازك فقط ولا يتم التقاط أو حفظ أي صور.
-        </p>
-
-        {/* Simple Horizontal Strip to Switch Between Available Glasses */}
-        <div className="w-full max-w-2xl flex items-center gap-2.5 overflow-x-auto noscroll px-1 pb-0.5">
-          {carouselItems.map((item) => {
-            const selected = item.id === product.id;
-            const thumbUrl = resolveStoreFrontUrl(item) || frontImgOf(item)?.imageUrl;
-            return (
               <button
-                key={item.id}
                 type="button"
-                onClick={() => onSelectProduct?.(item.id)}
-                className={
-                  'shrink-0 w-24 rounded-2xl p-2 flex flex-col items-center gap-1 transition cursor-pointer backdrop-blur-md border ' +
-                  (selected
-                    ? 'bg-white/25 border-white shadow-lg scale-[1.03]'
-                    : 'bg-black/45 border-white/15 opacity-80 hover:opacity-100')
-                }
+                disabled={shotBusy}
+                onClick={captureTryOnScreenshot}
+                aria-label="التقاط صورة"
+                className="w-14 h-14 sm:w-16 sm:h-16 rounded-full border-[3.5px] border-white bg-white/20 backdrop-blur-md flex items-center justify-center shadow-2xl active:scale-95 transition-transform cursor-pointer shrink-0"
               >
-                <div className="h-9 w-full flex items-center justify-center">
-                  <MiniGlasses
-                    type={item.type}
-                    frame={item.frame}
-                    lens={item.lens}
-                    w={68}
-                    imageUrl={thumbUrl}
-                  />
-                </div>
-                <span className="text-[0.68rem] font-bold text-white truncate w-full text-center">
-                  {item.name}
+                <span className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-white flex items-center justify-center text-slate-900">
+                  <I n="camera" s={20} />
                 </span>
               </button>
-            );
-          })}
+
+              {onOrderProduct && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOrderProduct(product.id);
+                    closeFullscreen();
+                  }}
+                  className="h-11 px-3.5 sm:px-4 rounded-full bg-[#D97706] hover:bg-[#B45309] text-white font-extrabold text-xs sm:text-sm shadow-xl flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition-transform duration-150 active:scale-[0.97]"
+                >
+                  <I n="bag" s={15} /> اطلب هذه النظارة
+                </button>
+              )}
+            </div>
+          )}
+
+          <p className="text-[0.68rem] text-white/75 text-center leading-4 px-2">
+            🔒 خصوصيتك محمية: الكاميرا تعمل لحظياً على جهازك فقط ولا يتم التقاط أو حفظ أي صور.
+          </p>
+
+          {/* Simple Horizontal Strip to Switch Between Available Glasses */}
+          <div className="w-full max-w-2xl flex items-center gap-2.5 overflow-x-auto noscroll px-1 pb-0.5">
+            {carouselItems.map((item) => {
+              const selected = item.id === product.id;
+              const thumbUrl = resolveStoreFrontUrl(item) || frontImgOf(item)?.imageUrl;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onSelectProduct?.(item.id)}
+                  className={
+                    'shrink-0 w-24 rounded-2xl p-2 flex flex-col items-center gap-1 transition-all duration-150 active:scale-[0.97] cursor-pointer backdrop-blur-md border ' +
+                    (selected
+                      ? 'bg-white/25 border-white shadow-lg scale-[1.03]'
+                      : 'bg-black/45 border-white/15 opacity-80 hover:opacity-100')
+                  }
+                >
+                  <div className="h-9 w-full flex items-center justify-center">
+                    <MiniGlasses
+                      type={item.type}
+                      frame={item.frame}
+                      lens={item.lens}
+                      w={68}
+                      imageUrl={thumbUrl}
+                    />
+                  </div>
+                  <span className="text-[0.68rem] font-bold text-white truncate w-full text-center">
+                    {item.name}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Instant Screenshot Preview Sheet (Save, Share, Retake, or Order Directly) */}
       {capturedShot && (

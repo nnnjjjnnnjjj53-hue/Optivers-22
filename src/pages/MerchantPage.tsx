@@ -24,6 +24,13 @@ import {
   scanPaperLedgerViaServer,
 } from '../utils/splitSheetApi';
 import {
+  ReminderTypeKey,
+  buildReminderWhatsAppMessage,
+  dispatchDueRemindersNotification,
+  evaluateCustomerReminders,
+  isCustomerContactLenses,
+} from '../utils/crmReminders';
+import {
   ANALYTICS_UPDATED_EVENT,
   ShopLiveAnalyticsSummary,
   fetchShopLiveAnalytics,
@@ -201,7 +208,6 @@ export function MerchantPage() {
   const [prodSearch, setProdSearch] = useState('');
   const [crmView, setCrmView] = useState<'all' | 'orders' | 'customers'>('all');
   const [crmSearch, setCrmSearch] = useState('');
-  const [reminderSettingsOpen, setReminderSettingsOpen] = useState(false);
   const [ledgerScanning, setLedgerScanning] = useState(false);
   const [scannedLedgerRows, setScannedLedgerRows] = useState<ScannedLedgerCustomer[]>([]);
   const [savingScannedRows, setSavingScannedRows] = useState(false);
@@ -287,11 +293,42 @@ export function MerchantPage() {
     if (!activeShop) return;
     setObOwnerName(activeShop.ownerName || '');
     setObWa(activeShop.wa || '');
-    setObShopName(activeShop.name || '');
+    const isPlaceholderShopName =
+      !activeShop.onboardingCompleted &&
+      (!activeShop.name ||
+        activeShop.name.trim() === 'متجر جديد' ||
+        (activeShop.ownerName && activeShop.name.trim() === `متجر ${activeShop.ownerName.trim()}`));
+    setObShopName(isPlaceholderShopName ? '' : activeShop.name || '');
     setObGov(activeShop.governorate || activeShop.city || 'القاهرة');
     setObAddress(activeShop.address || '');
     setObMapsUrl(activeShop.mapsUrl || '');
   }, [activeShop?.id]);
+
+  // Never allow Super Admin / Admin accounts to get stuck in Merchant Dashboard or Onboarding
+  useEffect(() => {
+    if (!authLoading && session && isAdminRole(session.role) && !activeShop?.isDemoAdminStore) {
+      navigate('/admin');
+    }
+  }, [authLoading, session, activeShop?.isDemoAdminStore, navigate]);
+
+  // Dispatch Service Worker notifications strictly for today's due CRM reminders (never for chats/orders)
+  useEffect(() => {
+    if (!session || !activeShop?.id || !activeShop.reminderNotificationsEnabled) return;
+    if (isAdminRole(session.role) && !activeShop.isDemoAdminStore) return;
+    const due = crmCustomers.filter(
+      (c) => c.shopId === activeShop.id && evaluateCustomerReminders(c).hasAnyDue
+    );
+    if (due.length > 0) {
+      void dispatchDueRemindersNotification(activeShop.id, activeShop.name, due);
+    }
+  }, [
+    session,
+    activeShop?.id,
+    activeShop?.name,
+    activeShop?.reminderNotificationsEnabled,
+    activeShop?.isDemoAdminStore,
+    crmCustomers,
+  ]);
 
   useEffect(() => {
     if (!adModalProduct || !activeShop) return;
@@ -610,8 +647,8 @@ export function MerchantPage() {
     );
   }
 
-  // Mandatory Merchant Onboarding Profile Gate (blocks dashboard until key contact/location fields are completed)
-  if (!activeShop.onboardingCompleted && !activeShop.isDemoAdminStore) {
+  // Mandatory Merchant Onboarding Profile Gate (never shown to Admin accounts)
+  if (!activeShop.onboardingCompleted && !activeShop.isDemoAdminStore && !isAdminRole(session.role)) {
     const handleCompleteOnboarding = async (e: React.FormEvent) => {
       e.preventDefault();
       if (!obOwnerName.trim() || !obWa.trim() || !obShopName.trim() || !obAddress.trim()) {
@@ -652,7 +689,10 @@ export function MerchantPage() {
               <div>
                 <label className="text-xs font-bold text-slate-700">اسم صاحب المحل *</label>
                 <input
-                  className="inp mt-1"
+                  type="text"
+                  dir="rtl"
+                  autoComplete="name"
+                  className="inp mt-1 text-right"
                   placeholder="مثال: أحمد محمد"
                   value={obOwnerName}
                   onChange={(e) => setObOwnerName(e.target.value)}
@@ -662,6 +702,7 @@ export function MerchantPage() {
               <div>
                 <label className="text-xs font-bold text-slate-700">رقم واتساب الطلبات *</label>
                 <input
+                  type="tel"
                   className="inp mt-1"
                   dir="ltr"
                   placeholder="01001234567"
@@ -676,7 +717,10 @@ export function MerchantPage() {
               <div>
                 <label className="text-xs font-bold text-slate-700">اسم المحل التجاري *</label>
                 <input
-                  className="inp mt-1"
+                  type="text"
+                  dir="rtl"
+                  autoComplete="organization"
+                  className="inp mt-1 text-right"
                   placeholder="مثال: بصريات النور"
                   value={obShopName}
                   onChange={(e) => setObShopName(e.target.value)}
@@ -756,23 +800,14 @@ export function MerchantPage() {
       ? 999999
       : Math.max(0, creditsCap - creditsUsed);
 
-  // CRM Customers & Flexible 3-Tier Recalls (Review -> Maintenance -> Exam)
-  const reviewHours = Math.max(1, Number(activeShop.reminderReviewHours ?? 24));
-  const maintMonths = Math.max(1, Number(activeShop.reminderMaintenanceMonths ?? 4));
-  const examMonths = Math.max(1, Number(activeShop.reminderExamMonths ?? 12));
-  const reminderMode = activeShop.reminderMode === 'manual' ? 'manual' : 'auto';
+  // Smart Automatic CRM Reminders (Glasses: 24h, 4m, 12m | Contact Lenses: 3m or 12m if annual)
   const shopCrm = crmCustomers.filter((c) => c.shopId === activeShop.id);
-  const nowMs = Date.now();
-  const dueCrmList = shopCrm.map((c) => {
-    const elapsedMs = Math.max(0, nowMs - new Date(c.orderDate).getTime());
-    const hoursSince = Math.floor(elapsedMs / 3600000);
-    const daysSince = Math.floor(elapsedMs / 86400000);
-    const dueReview = hoursSince >= reviewHours && !c.recallReviewSentAt;
-    const due6 = (activeShop.recall6mEnabled ?? true) && daysSince >= maintMonths * 30 && !c.recall6mSentAt;
-    const due12 = (activeShop.recall12mEnabled ?? true) && daysSince >= examMonths * 30 && !c.recall12mSentAt;
-    return { ...c, hoursSince, daysSince, dueReview, due6, due12 };
-  });
-  const dueRecallCount = dueCrmList.filter((c) => c.dueReview || c.due6 || c.due12).length;
+  const dueCrmList = shopCrm.map((c) => ({
+    ...c,
+    eval: evaluateCustomerReminders(c),
+  }));
+  const dueTodayCustomers = dueCrmList.filter((c) => c.eval.hasAnyDue);
+  const dueRecallCount = dueTodayCustomers.length;
 
   const delByCode = async () => {
     const res = await softDeleteProductByCode(activeShop.id, code);
@@ -798,7 +833,7 @@ export function MerchantPage() {
   ];
 
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://optiverse.app';
-  const link = `${origin}/s/${activeShop.slug}`;
+  const link = `${origin}/?shop=${encodeURIComponent(activeShop.slug)}`;
   const copy = () => {
     navigator.clipboard
       ?.writeText(link)
@@ -1104,15 +1139,28 @@ export function MerchantPage() {
       return;
     }
     const parsedPrice = Number(crmPrice);
+    const prodText = crmProdName.trim() || 'إطار نظارة';
+    const notesText = crmNotes.trim() || undefined;
+    const lensMeta = isCustomerContactLenses({
+      id: '',
+      shopId: activeShop.id,
+      customerName: crmName.trim(),
+      phone: crmPhone.trim(),
+      productName: prodText,
+      notes: notesText,
+      orderDate: new Date().toISOString(),
+    });
     await addCrmCustomer({
       shopId: activeShop.id,
       customerName: crmName.trim(),
       phone: crmPhone.trim(),
-      productName: crmProdName.trim() || 'إطار نظارة',
+      productName: prodText,
       pd: crmPd.trim() || undefined,
       pricePaid: !isNaN(parsedPrice) && parsedPrice > 0 ? parsedPrice : undefined,
       orderDate: new Date().toISOString(),
-      notes: crmNotes.trim() || undefined,
+      notes: notesText,
+      reminderCategory: lensMeta.isContactLenses ? 'contact_lenses' : 'glasses',
+      contactLensMonths: lensMeta.isContactLenses ? (lensMeta.isAnnualContactLenses ? 12 : 3) : undefined,
     });
     setCrmName('');
     setCrmPhone('');
@@ -1120,7 +1168,7 @@ export function MerchantPage() {
     setCrmPd('');
     setCrmPrice('');
     setCrmNotes('');
-    toast('تم تسجيل العميل في قاعدة البيانات ✓');
+    toast('تم تسجيل العميل وتفعيل قواعد التذكير الذكية ✓');
   };
 
   const handleScanLedgerPhoto = async (file: File) => {
@@ -1159,15 +1207,28 @@ export function MerchantPage() {
         const isoDate = row.orderDate && /^\d{4}-\d{2}-\d{2}$/.test(row.orderDate)
           ? new Date(`${row.orderDate}T12:00:00`).toISOString()
           : new Date().toISOString();
+        const prodText = row.productName.trim() || 'نظارة طبية';
+        const notesText = row.notes?.trim() || 'تمت الإضافة بماسح الدفتر الذكي';
+        const lensMeta = isCustomerContactLenses({
+          id: '',
+          shopId: activeShop.id,
+          customerName: row.customerName.trim() || 'عميل دفتر',
+          phone: row.phone.trim() || '01000000000',
+          productName: prodText,
+          notes: notesText,
+          orderDate: isoDate,
+        });
         await addCrmCustomer({
           shopId: activeShop.id,
           customerName: row.customerName.trim() || 'عميل دفتر',
           phone: row.phone.trim() || '01000000000',
-          productName: row.productName.trim() || 'نظارة طبية',
+          productName: prodText,
           pd: row.pd?.trim() || undefined,
           pricePaid: typeof row.pricePaid === 'number' && row.pricePaid > 0 ? row.pricePaid : undefined,
           orderDate: isoDate,
-          notes: row.notes?.trim() || 'تمت الإضافة بماسح الدفتر الذكي',
+          notes: notesText,
+          reminderCategory: lensMeta.isContactLenses ? 'contact_lenses' : 'glasses',
+          contactLensMonths: lensMeta.isContactLenses ? (lensMeta.isAnnualContactLenses ? 12 : 3) : undefined,
         });
       }
       setScannedLedgerRows([]);
@@ -1330,7 +1391,7 @@ export function MerchantPage() {
           <button
             type="button"
             className="btn btn-tryon btn-sm whitespace-nowrap shrink-0"
-            onClick={() => navigate(`/shop/${activeShop.slug}?preview=1`)}
+            onClick={() => navigate(`/?shop=${encodeURIComponent(activeShop.slug)}&preview=merchant`)}
           >
             <I n="eye" s={14} /> معاينة المتجر
           </button>
@@ -1394,9 +1455,71 @@ export function MerchantPage() {
             </div>
           ) : null}
 
+          {/* Prominent Top Alert Banner when CRM reminders are due today */}
+          {dueTodayCustomers.length > 0 && (
+            <div className="mb-4 rounded-2xl bg-amber-50 border-2 border-amber-300 p-4 shadow-sm space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0">
+                    <I n="bell" s={18} />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="font-extrabold text-sm sm:text-base text-amber-950">
+                      🔔 تنبيه التذكيرات: لديك {dueTodayCustomers.length} عميل مستحق للتذكير اليوم
+                    </div>
+                    <div className="text-xs text-amber-800">
+                      اضغط على زر الواتساب لإرسال رسالة متابعة مخصصة حسب نوع الطلب فوراً
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCrmView('customers');
+                    setSec('crm');
+                  }}
+                  className="btn bg-[#0F172A] hover:bg-slate-800 text-white btn-sm text-xs shrink-0"
+                >
+                  عرض جميع التذكيرات ({dueTodayCustomers.length})
+                </button>
+              </div>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                {dueTodayCustomers.slice(0, 3).map((c) => {
+                  const pType: ReminderTypeKey = c.eval.primaryType || 'review';
+                  const waText = encodeURIComponent(buildReminderWhatsAppMessage(c, activeShop, pType));
+                  return (
+                    <div
+                      key={`home-due-${c.id}`}
+                      className="rounded-xl bg-white border border-amber-200 p-3 flex flex-col justify-between gap-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <b className="text-xs sm:text-sm text-[#0F172A] truncate">{c.customerName}</b>
+                          <span className="badge b-warn text-[0.62rem] shrink-0">{c.eval.primaryBadgeLabel}</span>
+                        </div>
+                        <div className="text-[0.7rem] text-slate-600 mt-0.5 truncate">
+                          {c.productName} · <span dir="ltr">{c.phone}</span>
+                        </div>
+                      </div>
+                      <a
+                        href={`https://wa.me/${waNum(c.phone)}?text=${waText}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={() => void markCrmRecallSent(c.id, pType)}
+                        className="btn bg-emerald-600 hover:bg-emerald-700 text-white btn-sm w-full text-xs font-extrabold"
+                      >
+                        تذكير واتساب الآن 💬
+                      </a>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <Head t={`أهلاً بك، ${activeShop.name} 👋`} sub="ملخص نشاط متجرك وتفاعل العملاء لحظياً" />
 
-          {/* Compact Horizontal Row of 3 Clickable Summary Cards */}
+          {/* Compact Horizontal Row of 3 Clickable Summary Cards (zero text truncation) */}
           <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-5">
             <button
               type="button"
@@ -1404,8 +1527,8 @@ export function MerchantPage() {
               className="glass rounded-2xl p-3 sm:p-4 text-start hover:border-[#0284C7]/50 hover:shadow-md transition cursor-pointer flex flex-col justify-between gap-1.5"
             >
               <div className="flex items-center justify-between gap-1.5">
-                <span className="text-[0.7rem] sm:text-xs font-extrabold text-slate-600 truncate">
-                  النظارات المنشورة
+                <span className="text-xs sm:text-sm font-extrabold text-[#0F172A]">
+                  النظارات
                 </span>
                 <span className="w-7 h-7 rounded-lg bg-sky-50 text-[#0284C7] border border-sky-200 flex items-center justify-center shrink-0">
                   <I n="box" s={14} />
@@ -1414,19 +1537,22 @@ export function MerchantPage() {
               <div className="text-xl sm:text-2xl font-extrabold text-[#0F172A] tabular-nums" dir="ltr">
                 {fmt(publishedProductsCount)}
               </div>
-              <div className="text-[0.65rem] text-slate-500 truncate">
-                من أصل <span dir="ltr">{maxProducts}</span> · عرض المخزن
+              <div className="text-[0.65rem] text-slate-500">
+                من أصل <span dir="ltr">{maxProducts}</span>
               </div>
             </button>
 
             <button
               type="button"
-              onClick={() => setSec('crm')}
+              onClick={() => {
+                setCrmView('customers');
+                setSec('crm');
+              }}
               className="glass rounded-2xl p-3 sm:p-4 text-start hover:border-[#D97706]/50 hover:shadow-md transition cursor-pointer flex flex-col justify-between gap-1.5"
             >
               <div className="flex items-center justify-between gap-1.5">
-                <span className="text-[0.7rem] sm:text-xs font-extrabold text-slate-600 truncate">
-                  عملاء التذكير
+                <span className="text-xs sm:text-sm font-extrabold text-[#0F172A]">
+                  العملاء
                 </span>
                 <span
                   className={
@@ -1442,19 +1568,22 @@ export function MerchantPage() {
               <div className="text-xl sm:text-2xl font-extrabold text-[#0F172A] tabular-nums" dir="ltr">
                 {fmt(dueRecallCount)}
               </div>
-              <div className="text-[0.65rem] text-slate-500 truncate">
-                إجمالي المسجلين: <span dir="ltr">{fmt(shopCrm.length)}</span>
+              <div className="text-[0.65rem] text-slate-500">
+                المسجلين: <span dir="ltr">{fmt(shopCrm.length)}</span>
               </div>
             </button>
 
             <button
               type="button"
-              onClick={() => setSec('crm')}
+              onClick={() => {
+                setCrmView('orders');
+                setSec('crm');
+              }}
               className="glass rounded-2xl p-3 sm:p-4 text-start hover:border-[#0284C7]/50 hover:shadow-md transition cursor-pointer flex flex-col justify-between gap-1.5"
             >
               <div className="flex items-center justify-between gap-1.5">
-                <span className="text-[0.7rem] sm:text-xs font-extrabold text-slate-600 truncate">
-                  طلبات الواتساب
+                <span className="text-xs sm:text-sm font-extrabold text-[#0F172A]">
+                  الطلبات
                 </span>
                 <span
                   className={
@@ -1470,8 +1599,8 @@ export function MerchantPage() {
               <div className="text-xl sm:text-2xl font-extrabold text-[#0F172A] tabular-nums" dir="ltr">
                 {fmt(shopInq.length)}
               </div>
-              <div className="text-[0.65rem] text-slate-500 truncate">
-                {newCount > 0 ? `${newCount} طلبات جديدة` : 'إدارة الطلبات'}
+              <div className="text-[0.65rem] text-slate-500">
+                {newCount > 0 ? `${newCount} جديدة` : 'عرض الكل'}
               </div>
             </button>
           </div>
@@ -1603,12 +1732,9 @@ export function MerchantPage() {
                 </button>
               </div>
               {dueCrmList.slice(0, 3).map((c) => {
-                const recallKind: 'review' | '6m' | '12m' = c.due12 ? '12m' : c.due6 ? '6m' : 'review';
-                const reviewUrl = `${origin}/s/${activeShop.slug}${c.productId ? `/f/${c.productId}` : ''}?review=1`;
+                const recallKind = c.eval.primaryType || 'review';
                 const msg = encodeURIComponent(
-                  recallKind === 'review'
-                    ? `أهلاً ${c.customerName} 👋 نورتنا في ${activeShop.name}! نتمنى نظارتك (${c.productName}) تكون عجبتك. شاركنا تقييمك السريع هنا:\n${reviewUrl}`
-                    : `أهلاً ${c.customerName} 👋 ${activeShop.name} بيفكّرك بموعد صيانة ومراجعة نظارتك (${c.productName}). تحب تشرفنا في المحل؟`
+                  buildReminderWhatsAppMessage(c, activeShop, recallKind)
                 );
                 return (
                   <div
@@ -1621,7 +1747,7 @@ export function MerchantPage() {
                     <div className="flex-1 min-w-[150px]">
                       <div className="font-bold text-sm text-[#0F172A]">{c.customerName}</div>
                       <div className="text-xs text-slate-500">
-                        {c.productName} · منذ {c.daysSince} يوم
+                        {c.productName} · منذ {c.eval.daysSince} يوم
                         {typeof c.pricePaid === 'number' && c.pricePaid > 0 ? ` · ${fmt(c.pricePaid)} ج.م` : ''}
                       </div>
                     </div>
@@ -1633,7 +1759,13 @@ export function MerchantPage() {
                       onClick={() => markCrmRecallSent(c.id, recallKind)}
                     >
                       <I n="msg" s={14} />{' '}
-                      {recallKind === 'review' ? 'طلب تقييم ⭐' : recallKind === '12m' ? 'فحص نظر 💬' : 'تذكير صيانة 💬'}
+                      {c.eval.isContactLenses
+                        ? 'تجديد العدسات 💬'
+                        : recallKind === 'review'
+                        ? 'طلب تقييم ⭐'
+                        : recallKind === '12m'
+                        ? 'فحص نظر 💬'
+                        : 'تذكير صيانة 💬'}
                     </a>
                   </div>
                 );
@@ -1933,7 +2065,7 @@ export function MerchantPage() {
                             <button
                               type="button"
                               className="btn btn-tryon btn-sm flex-1"
-                              onClick={() => navigate(`/s/${activeShop.slug}/f/${p.id}?preview=1`)}
+                              onClick={() => navigate(`/s/${activeShop.slug}/f/${p.id}?preview=merchant`)}
                             >
                               <I n="eye" s={13} /> معاينة
                             </button>
@@ -2629,200 +2761,69 @@ export function MerchantPage() {
             </div>
           )}
 
-          {/* 2. CRM Customers Database & Compact Collapsible 3-Tier Reminders */}
+          {/* 2. CRM Customers Database & Smart Automatic Reminders */}
           {crmView !== 'orders' && (
             <div className="space-y-4">
-              <h3 className="font-extrabold text-sm sm:text-base text-[#0F172A]">
-                قاعدة العملاء وتذكيرات المتابعة ({shopCrm.length})
-              </h3>
-
-              {/* Compact Collapsible Reminder Duration Bar */}
-              <div className="glass rounded-2xl px-4 py-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 flex-wrap min-w-0">
-                    <span className="font-extrabold text-xs sm:text-sm text-[#0F172A]">
-                      ⏱️ مدد التذكير:
-                    </span>
-                    <span className="text-xs text-slate-600 font-bold">
-                      {reviewHours} ساعة · {maintMonths} شهور · {examMonths} شهر
-                    </span>
-                    <span className="badge b-info text-[0.65rem]">
-                      {reminderMode === 'auto' ? 'تلقائي' : 'يدوي'}
-                    </span>
-                    <span className="badge b-warn text-[0.65rem]">{dueRecallCount} مستحقون اليوم</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setReminderSettingsOpen((v) => !v)}
-                    className="btn btn-g btn-sm text-xs shrink-0"
-                  >
-                    {reminderSettingsOpen ? 'إخفاء الإعدادات ▴' : 'تعديل مدد التذكير ▾'}
-                  </button>
-                </div>
-
-                {reminderSettingsOpen && (
-                  <div className="mt-3 pt-3 border-t border-slate-200/80 space-y-3">
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <span className="text-xs font-bold text-slate-600">وضع التشغيل:</span>
-                      <div className="inline-flex rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-1">
-                        <button
-                          type="button"
-                          onClick={() => updateShop(activeShop.id, { reminderMode: 'auto' })}
-                          className={
-                            'px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer transition ' +
-                            (reminderMode === 'auto' ? 'bg-[#0F172A] text-white' : 'text-slate-600')
-                          }
-                        >
-                          تلقائي
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => updateShop(activeShop.id, { reminderMode: 'manual' })}
-                          className={
-                            'px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer transition ' +
-                            (reminderMode === 'manual' ? 'bg-[#0F172A] text-white' : 'text-slate-600')
-                          }
-                        >
-                          يدوي
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="grid sm:grid-cols-3 gap-3">
-                      <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3">
-                        <label className="text-xs font-bold text-[#0F172A] block mb-1">
-                          1. تقييم النظارة بعد الشراء (ساعات)
-                        </label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={720}
-                          className="inp text-xs"
-                          dir="ltr"
-                          value={reviewHours}
-                          onChange={(e) =>
-                            updateShop(activeShop.id, { reminderReviewHours: Math.max(1, Number(e.target.value) || 24) })
-                          }
-                        />
-                      </div>
-
-                      <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <label className="text-xs font-bold text-[#0F172A]">2. صيانة الشنبر (شهور)</label>
-                          <Switch
-                            on={activeShop.recall6mEnabled ?? true}
-                            onChange={(v) => updateShop(activeShop.id, { recall6mEnabled: v })}
-                          />
-                        </div>
-                        <input
-                          type="number"
-                          min={1}
-                          max={24}
-                          className="inp text-xs"
-                          dir="ltr"
-                          value={maintMonths}
-                          onChange={(e) =>
-                            updateShop(activeShop.id, {
-                              reminderMaintenanceMonths: Math.max(1, Number(e.target.value) || 4),
-                            })
-                          }
-                        />
-                      </div>
-
-                      <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <label className="text-xs font-bold text-[#0F172A]">3. فحص النظر (شهور)</label>
-                          <Switch
-                            on={activeShop.recall12mEnabled ?? true}
-                            onChange={(v) => updateShop(activeShop.id, { recall12mEnabled: v })}
-                          />
-                        </div>
-                        <input
-                          type="number"
-                          min={1}
-                          max={36}
-                          className="inp text-xs"
-                          dir="ltr"
-                          value={examMonths}
-                          onChange={(e) =>
-                            updateShop(activeShop.id, {
-                              reminderExamMonths: Math.max(1, Number(e.target.value) || 12),
-                            })
-                          }
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-extrabold text-sm sm:text-base text-[#0F172A]">
+                  قاعدة العملاء وتذكيرات المتابعة التلقائية ({shopCrm.length})
+                </h3>
+                <span className="badge b-info text-[0.68rem]">
+                  النظارات: 24 ساعة · 4 شهور · 12 شهر | العدسات اللاصقة: 3 شهور (أو 12 للسنوية)
+                </span>
               </div>
 
-              {/* Highlighted Due-Today Customer Cards with 1-Click WhatsApp Reminder */}
-              {(() => {
-                const dueTodayCustomers = dueCrmList.filter((c) => c.dueReview || c.due6 || c.due12);
-                if (!dueTodayCustomers.length) return null;
-                return (
-                  <div className="rounded-2xl bg-amber-50/70 border-2 border-amber-300 p-4 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <h4 className="font-extrabold text-sm text-amber-950 flex items-center gap-1.5">
-                        <span>🔔 عملاء مستحقون للتذكير اليوم ({dueTodayCustomers.length})</span>
-                      </h4>
-                      <span className="text-[0.7rem] font-bold text-amber-800">
-                        أرسل تذكير الواتساب فوراً بضغطة واحدة
-                      </span>
-                    </div>
-                    <div className="grid sm:grid-cols-2 gap-3">
-                      {dueTodayCustomers.map((c) => {
-                        const reviewUrl = `${origin}/s/${activeShop.slug}${c.productId ? `/f/${c.productId}` : ''}?review=1`;
-                        const primaryType: '12m' | '6m' | 'review' = c.due12
-                          ? '12m'
-                          : c.due6
-                          ? '6m'
-                          : 'review';
-                        const primaryLabel = c.due12
-                          ? `موعد فحص النظر (${examMonths} شهر)`
-                          : c.due6
-                          ? `موعد صيانة وتنظيف (${maintMonths} شهور)`
-                          : `طلب تقييم بعد الشراء (${reviewHours} ساعة)`;
-                        const primaryMsg = encodeURIComponent(
-                          primaryType === '12m'
-                            ? `أهلاً ${c.customerName} 👋 معكم ${activeShop.name}. حان موعد المراجعة الدورية لفحص النظر بعد ${examMonths} شهراً منذ استلام (${c.productName}) — يسعدنا استقبالك لاستعراض أحدث الموديلات.`
-                            : primaryType === '6m'
-                            ? `أهلاً ${c.customerName} 👋 معكم ${activeShop.name}. مرّ ${maintMonths} أشهر على نظارتك (${c.productName}) — يشرفنا زيارتك للصيانة والضبط والتنظيف المجاني.`
-                            : `أهلاً ${c.customerName} 👋 شكراً لزيارتك ${activeShop.name}. نتمنى نظارتك (${c.productName}) تكون عند حسن ظنك! يسعدنا تقييمك السريع هنا:\n${reviewUrl}`
-                        );
-                        return (
-                          <div
-                            key={`due-${c.id}`}
-                            className="rounded-xl bg-white border border-amber-200 p-3 flex flex-col justify-between gap-2.5 shadow-xs"
-                          >
-                            <div>
-                              <div className="flex items-center justify-between gap-2">
-                                <b className="text-sm text-[#0F172A] truncate">{c.customerName}</b>
-                                <span className="badge b-warn text-[0.65rem] shrink-0">{primaryLabel}</span>
-                              </div>
-                              <div className="text-xs text-slate-600 mt-1 flex flex-wrap gap-2">
-                                <span className="font-mono" dir="ltr">
-                                  {c.phone}
-                                </span>
-                                <span>· {c.productName}</span>
-                              </div>
-                            </div>
-                            <a
-                              href={`https://wa.me/${waNum(c.phone)}?text=${primaryMsg}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              onClick={() => void markCrmRecallSent(c.id, primaryType)}
-                              className="btn bg-emerald-600 hover:bg-emerald-700 text-white btn-sm w-full text-xs font-extrabold"
-                            >
-                              إرسال تذكير واتساب بضغطة واحدة 💬
-                            </a>
-                          </div>
-                        );
-                      })}
-                    </div>
+              {/* Highlighted Due-Today Customer Cards with 1-Click Customized WhatsApp Reminder */}
+              {dueTodayCustomers.length > 0 && (
+                <div className="rounded-2xl bg-amber-50/80 border-2 border-amber-300 p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="font-extrabold text-sm text-amber-950 flex items-center gap-1.5">
+                      <span>🔔 عملاء مستحقون للتذكير اليوم ({dueTodayCustomers.length})</span>
+                    </h4>
+                    <span className="text-[0.7rem] font-bold text-amber-800">
+                      أرسل تذكير الواتساب فوراً بضغطة واحدة
+                    </span>
                   </div>
-                );
-              })()}
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    {dueTodayCustomers.map((c) => {
+                      const primaryType: ReminderTypeKey = c.eval.primaryType || 'review';
+                      const primaryMsg = encodeURIComponent(
+                        buildReminderWhatsAppMessage(c, activeShop, primaryType)
+                      );
+                      return (
+                        <div
+                          key={`due-${c.id}`}
+                          className="rounded-xl bg-white border border-amber-200 p-3 flex flex-col justify-between gap-2.5 shadow-xs"
+                        >
+                          <div>
+                            <div className="flex items-center justify-between gap-2">
+                              <b className="text-sm text-[#0F172A] truncate">{c.customerName}</b>
+                              <span className="badge b-warn text-[0.65rem] shrink-0">
+                                {c.eval.primaryBadgeLabel}
+                              </span>
+                            </div>
+                            <div className="text-xs text-slate-600 mt-1 flex flex-wrap gap-2">
+                              <span className="font-mono" dir="ltr">
+                                {c.phone}
+                              </span>
+                              <span>· {c.productName}</span>
+                            </div>
+                          </div>
+                          <a
+                            href={`https://wa.me/${waNum(c.phone)}?text=${primaryMsg}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={() => void markCrmRecallSent(c.id, primaryType)}
+                            className="btn bg-emerald-600 hover:bg-emerald-700 text-white btn-sm w-full text-xs font-extrabold"
+                          >
+                            إرسال تذكير واتساب بضغطة واحدة 💬
+                          </a>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* Smart Paper Ledger Scanner + Review Cards */}
               <div className="glass rounded-2xl p-4 space-y-3 border border-sky-200/80">
@@ -3019,17 +3020,17 @@ export function MerchantPage() {
 
               <div className="space-y-3">
                 {dueCrmList.map((c) => {
-                  const reviewUrl = `${origin}/s/${activeShop.slug}${c.productId ? `/f/${c.productId}` : ''}?review=1`;
+                  const ev = c.eval;
+                  const formattedDate = new Date(c.orderDate).toLocaleDateString('ar-EG');
                   const reviewMsg = encodeURIComponent(
-                    `أهلاً ${c.customerName} 👋 شكراً لزيارتك ${activeShop.name}. نتمنى نظارتك (${c.productName}) تكون عند حسن ظنك! يسعدنا تقييمك السريع هنا:\n${reviewUrl}`
+                    buildReminderWhatsAppMessage(c, activeShop, 'review')
                   );
                   const maintMsg = encodeURIComponent(
-                    `أهلاً ${c.customerName} 👋 معكم ${activeShop.name}. مرّ ${maintMonths} أشهر على نظارتك (${c.productName}) — يشرفنا زيارتك للصيانة والضبط والتنظيف المجاني.`
+                    buildReminderWhatsAppMessage(c, activeShop, '6m')
                   );
                   const examMsg = encodeURIComponent(
-                    `أهلاً ${c.customerName} 👋 معكم ${activeShop.name}. حان موعد المراجعة الدورية لفحص النظر بعد ${examMonths} شهراً منذ استلام (${c.productName}) — يسعدنا استقبالك لاستعراض أحدث الموديلات.`
+                    buildReminderWhatsAppMessage(c, activeShop, '12m')
                   );
-                  const formattedDate = new Date(c.orderDate).toLocaleDateString('ar-EG');
 
                   return (
                     <div key={c.id} className="glass rounded-2xl p-4 space-y-3">
@@ -3041,9 +3042,18 @@ export function MerchantPage() {
                               {c.phone}
                             </span>
                             <span className="badge b-info text-[0.65rem]">{formattedDate}</span>
-                            {c.dueReview && <span className="badge b-warn text-[0.65rem]">مستحق طلب تقييم</span>}
-                            {c.due6 && <span className="badge b-warn text-[0.65rem]">مستحق صيانة ({maintMonths}ش)</span>}
-                            {c.due12 && <span className="badge b-warn text-[0.65rem]">مستحق فحص ({examMonths}ش)</span>}
+                            {ev.isContactLenses ? (
+                              <span className="badge b-acc text-[0.65rem]">
+                                {ev.isAnnualContactLenses ? 'عدسات سنوية (12ش)' : 'عدسات لاصقة (3ش)'}
+                              </span>
+                            ) : (
+                              <span className="badge b-info text-[0.65rem]">نظارة</span>
+                            )}
+                            {ev.dueReview24h && <span className="badge b-warn text-[0.65rem]">مستحق متابعة (24 ساعة)</span>}
+                            {ev.dueMaint4m && <span className="badge b-warn text-[0.65rem]">مستحق صيانة مجانية (4ش)</span>}
+                            {ev.dueExam12m && <span className="badge b-warn text-[0.65rem]">مستحق كشف نظر (12ش)</span>}
+                            {ev.dueLens3m && <span className="badge b-warn text-[0.65rem]">مستحق تجديد عدسات (3ش)</span>}
+                            {ev.dueLens12m && <span className="badge b-warn text-[0.65rem]">مستحق تجديد عدسات سنوية</span>}
                           </div>
 
                           <div className="text-xs text-slate-700 flex flex-wrap items-center gap-2">
@@ -3072,43 +3082,71 @@ export function MerchantPage() {
                         </div>
 
                         <div className="flex flex-wrap items-center gap-1.5">
-                          {c.recallReviewSentAt && <span className="badge b-ok text-[0.65rem]">أُرسل تقييم ✓</span>}
-                          {c.recall6mSentAt && <span className="badge b-ok text-[0.65rem]">أُرسل صيانة ✓</span>}
-                          {c.recall12mSentAt && <span className="badge b-ok text-[0.65rem]">أُرسل فحص ✓</span>}
+                          {c.recallReviewSentAt && <span className="badge b-ok text-[0.65rem]">أُرسل متابعة ✓</span>}
+                          {c.recall6mSentAt && (
+                            <span className="badge b-ok text-[0.65rem]">
+                              {ev.isContactLenses ? 'أُرسل تجديد عدسات ✓' : 'أُرسل صيانة ✓'}
+                            </span>
+                          )}
+                          {c.recall12mSentAt && (
+                            <span className="badge b-ok text-[0.65rem]">
+                              {ev.isContactLenses ? 'أُرسل تجديد سنوي ✓' : 'أُرسل فحص ✓'}
+                            </span>
+                          )}
                         </div>
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
-                        <a
-                          href={`https://wa.me/${waNum(c.phone)}?text=${reviewMsg}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={
-                            'btn btn-sm text-xs ' +
-                            (c.dueReview ? 'bg-[#D97706] hover:bg-[#B45309] text-white' : 'btn-g')
-                          }
-                          onClick={() => markCrmRecallSent(c.id, 'review')}
-                        >
-                          <I n="msg" s={13} /> طلب تقييم ⭐
-                        </a>
-                        <a
-                          href={`https://wa.me/${waNum(c.phone)}?text=${maintMsg}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={'btn btn-sm text-xs ' + (c.due6 ? 'btn-p' : 'btn-g')}
-                          onClick={() => markCrmRecallSent(c.id, '6m')}
-                        >
-                          <I n="msg" s={13} /> تذكير صيانة ({maintMonths}ش)
-                        </a>
-                        <a
-                          href={`https://wa.me/${waNum(c.phone)}?text=${examMsg}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={'btn btn-sm text-xs ' + (c.due12 ? 'btn-p' : 'btn-g')}
-                          onClick={() => markCrmRecallSent(c.id, '12m')}
-                        >
-                          <I n="msg" s={13} /> فحص نظر ({examMonths}ش)
-                        </a>
+                        {ev.isContactLenses ? (
+                          <a
+                            href={`https://wa.me/${waNum(c.phone)}?text=${ev.isAnnualContactLenses ? examMsg : maintMsg}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={
+                              'btn btn-sm text-xs ' +
+                              (ev.dueLens3m || ev.dueLens12m ? 'btn-p' : 'btn-g')
+                            }
+                            onClick={() =>
+                              markCrmRecallSent(c.id, ev.isAnnualContactLenses ? '12m' : '6m')
+                            }
+                          >
+                            <I n="msg" s={13} />{' '}
+                            {ev.isAnnualContactLenses ? 'تذكير تجديد سنوي (12ش)' : 'تذكير تجديد العدسات (3ش)'}
+                          </a>
+                        ) : (
+                          <>
+                            <a
+                              href={`https://wa.me/${waNum(c.phone)}?text=${reviewMsg}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className={
+                                'btn btn-sm text-xs ' +
+                                (ev.dueReview24h ? 'bg-[#D97706] hover:bg-[#B45309] text-white' : 'btn-g')
+                              }
+                              onClick={() => markCrmRecallSent(c.id, 'review')}
+                            >
+                              <I n="msg" s={13} /> متابعة وتقييم (24 ساعة) ⭐
+                            </a>
+                            <a
+                              href={`https://wa.me/${waNum(c.phone)}?text=${maintMsg}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className={'btn btn-sm text-xs ' + (ev.dueMaint4m ? 'btn-p' : 'btn-g')}
+                              onClick={() => markCrmRecallSent(c.id, '6m')}
+                            >
+                              <I n="msg" s={13} /> صيانة مجانية (4 شهور)
+                            </a>
+                            <a
+                              href={`https://wa.me/${waNum(c.phone)}?text=${examMsg}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className={'btn btn-sm text-xs ' + (ev.dueExam12m ? 'btn-p' : 'btn-g')}
+                              onClick={() => markCrmRecallSent(c.id, '12m')}
+                            >
+                              <I n="msg" s={13} /> كشف نظر سنوي (12 شهر)
+                            </a>
+                          </>
+                        )}
                       </div>
                     </div>
                   );
@@ -3473,6 +3511,65 @@ export function MerchantPage() {
                     onChange={(v) => updateShop(activeShop.id, { showColorSwatchesToCustomer: v })}
                   />
                 </div>
+              </div>
+
+              {/* Storefront Promo Banner Settings */}
+              <div className="pt-2 border-t border-slate-200/80 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-extrabold text-[#0F172A]">🏷️ شريط الإعلان العلوي بالمتجر (Promo Banner)</div>
+                    <div className="text-[0.68rem] text-slate-500">
+                      اعرض شريط عروض أو إعلان قصير أعلى صفحة متجر العملاء
+                    </div>
+                  </div>
+                  <Switch
+                    on={Boolean(activeShop.promoBannerEnabled)}
+                    onChange={(v) => updateShop(activeShop.id, { promoBannerEnabled: v })}
+                  />
+                </div>
+                {activeShop.promoBannerEnabled && (
+                  <div>
+                    <input
+                      type="text"
+                      dir="rtl"
+                      className="inp text-xs"
+                      maxLength={140}
+                      placeholder="مثال: خصم 20% على جميع النظارات الطبية لفترة محدودة!"
+                      value={activeShop.promoBannerText || ''}
+                      onChange={(e) => updateShop(activeShop.id, { promoBannerText: e.target.value })}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Reminder-Only Mobile Notifications Toggle */}
+              <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-extrabold text-[#0F172A]">🔔 إشعارات مواعيد التذكير</div>
+                  <div className="text-[0.68rem] text-slate-500">
+                    تنبيه على الموبايل لمواعيد تذكير العملاء المستحقة اليوم فقط (صيانة / فحص / عدسات)
+                  </div>
+                </div>
+                <Switch
+                  on={Boolean(activeShop.reminderNotificationsEnabled)}
+                  onChange={async (v) => {
+                    if (v && typeof window !== 'undefined' && 'Notification' in window) {
+                      const perm = await Notification.requestPermission();
+                      if (perm !== 'granted') {
+                        toast('يرجى السماح بالإشعارات من إعدادات المتصفح لتفعيل التنبيهات');
+                        return;
+                      }
+                      await updateShop(activeShop.id, { reminderNotificationsEnabled: true });
+                      if (dueTodayCustomers.length > 0) {
+                        await dispatchDueRemindersNotification(activeShop.id, activeShop.name, dueTodayCustomers);
+                      }
+                      toast('تم تفعيل إشعارات مواعيد التذكير ✓');
+                      return;
+                    }
+                    await updateShop(activeShop.id, { reminderNotificationsEnabled: v });
+                    toast(v ? 'تم تفعيل إشعارات التذكير ✓' : 'تم إيقاف إشعارات التذكير');
+                  }}
+                />
               </div>
             </div>
 

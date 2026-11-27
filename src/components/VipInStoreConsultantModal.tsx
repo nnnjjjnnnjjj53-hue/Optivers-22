@@ -181,7 +181,7 @@ export function VipInStoreConsultantModal({
 
   return (
     <Modal
-      title={`🪄 مستشار الـ VIP داخل المحل — ${shop.name}`}
+      title={`مستشار الـ VIP — ${shop.name}`}
       onClose={() => {
         stopCamera();
         onClose();
@@ -339,7 +339,7 @@ export function VipInStoreConsultantModal({
               <div className="flex items-center justify-between">
                 <div className="text-xs font-extrabold text-[#0F172A]">
                   {lockedShape
-                    ? `أفضل ${top3.length} ترشيحات متوفرة في مخزنك:`
+                    ? 'أفضل ترشيحات مخزنك:'
                     : 'معاينة أولية من المخزن المتاح:'}
                 </div>
                 <span className="text-[0.68rem] text-slate-500 font-bold">

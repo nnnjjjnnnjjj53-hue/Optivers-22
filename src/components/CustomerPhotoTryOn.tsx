@@ -73,9 +73,9 @@ export function CustomerPhotoTryOn({
     platformSettings.enableLensesSystem ?? platformSettings.enablePrescriptionLenses
   );
   const [subMode, setSubMode] = useState<'tryon' | 'rx'>(
-    rxEnabled && initialSubMode === 'rx' ? 'rx' : 'tryon'
+    initialSubMode === 'rx' ? 'rx' : 'tryon'
   );
-  const effectiveSubMode: 'tryon' | 'rx' = rxEnabled ? subMode : 'tryon';
+  const effectiveSubMode: 'tryon' | 'rx' = subMode;
   const [portraitUrl, setPortraitUrl] = useState<string | null>(initialPhotoUrl);
   const [rxUrl, setRxUrl] = useState<string | null>(initialRxUrl);
   const [clipOnActive, setClipOnActive] = useState(false);
@@ -127,8 +127,8 @@ export function CustomerPhotoTryOn({
   }, [product.id]);
 
   useEffect(() => {
-    setSubMode(rxEnabled && initialSubMode === 'rx' ? 'rx' : 'tryon');
-  }, [initialSubMode, rxEnabled]);
+    setSubMode(initialSubMode === 'rx' ? 'rx' : 'tryon');
+  }, [initialSubMode]);
 
   useEffect(() => {
     if (initialRxUrl !== undefined) {
@@ -352,20 +352,18 @@ export function CustomerPhotoTryOn({
           >
             التجربة على صورتك بالكانفاس
           </button>
-          {rxEnabled && (
-            <button
-              type="button"
-              onClick={() => setSubMode('rx')}
-              className={
-                'px-3.5 py-2 rounded-xl text-xs font-extrabold transition cursor-pointer border ' +
-                (effectiveSubMode === 'rx'
-                  ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                  : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400')
-              }
-            >
-              رفع روشتة كشف النظر {rxUrl ? '✓' : ''}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setSubMode('rx')}
+            className={
+              'px-3.5 py-2 rounded-xl text-xs font-extrabold transition cursor-pointer border ' +
+              (effectiveSubMode === 'rx'
+                ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400')
+            }
+          >
+            رفع روشتة كشف النظر {rxUrl ? '✓' : ''}
+          </button>
         </div>
 
         {onClose && (
@@ -637,8 +635,8 @@ export function CustomerPhotoTryOn({
         </div>
       )}
 
-      {/* MODE B: Prescription Upload */}
-      {rxEnabled && effectiveSubMode === 'rx' && (
+      {/* MODE B: Prescription Upload (Always enabled independently of lens brand matrix) */}
+      {effectiveSubMode === 'rx' && (
         <div className="space-y-3">
           {!rxUrl ? (
             <div
@@ -730,7 +728,8 @@ export function CustomerPhotoTryOn({
                   onClick={() => onOrderProduct(product.id)}
                   className="w-full py-2.5 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white text-xs font-extrabold cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
                 >
-                  <I n="eye" s={15} /> متابعة اختيار العدسات وإرسال الكشف
+                  <I n="eye" s={15} />{' '}
+                  {rxEnabled ? 'متابعة اختيار العدسات وإرسال الكشف' : 'متابعة إرسال الكشف الطبي مع الطلب'}
                 </button>
               )}
             </div>

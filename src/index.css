@@ -13,8 +13,12 @@
 }
 
 html,
-body {
+body,
+#root {
   margin: 0;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   background: #f8f9fa;
   color: #0f172a;
   font-family: "Cairo", system-ui, sans-serif;
@@ -124,6 +128,8 @@ body {
 
 .inp {
   width: 100%;
+  min-height: 44px;
+  line-height: 1.5;
   background: #ffffff;
   border: 1px solid #cbd5e1;
   border-radius: 0.8rem;
@@ -132,6 +138,15 @@ body {
   color: #0f172a;
   font-family: inherit;
   font-size: 0.9rem;
+}
+
+.inp::placeholder {
+  color: #94a3b8;
+  opacity: 1;
+}
+
+.inp:focus::placeholder {
+  color: #cbd5e1;
 }
 
 .inp:focus {
@@ -290,12 +305,27 @@ select.inp option {
   }
 }
 
+@keyframes sheetUp {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 100%, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
 .fade {
   animation: fadeUp 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .pop {
   animation: pop 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.sheet-up {
+  animation: sheetUp 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .dotp {
@@ -379,6 +409,7 @@ input[type="range"] {
 @media (prefers-reduced-motion: reduce) {
   .fade,
   .pop,
+  .sheet-up,
   .floaty,
   .scanline,
   .dotp,

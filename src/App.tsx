@@ -107,7 +107,17 @@ function AdminFloatingReturnBar() {
 
 function RouterView() {
   const { route } = useOptiVerse();
-  const path = (route || '/').split('?')[0];
+  const [rawPath, rawSearch] = (route || '/').split('?');
+  const path = rawPath || '/';
+  const searchParams = new URLSearchParams(
+    rawSearch !== undefined ? rawSearch : typeof window !== 'undefined' ? window.location.search.slice(1) : ''
+  );
+  const shopQuerySlug = searchParams.get('shop')?.trim();
+  const frameQueryId = searchParams.get('f')?.trim() || searchParams.get('frame')?.trim() || undefined;
+
+  if ((path === '/' || path === '') && shopQuerySlug) {
+    return <StorefrontPage slug={shopQuerySlug} initialFrameId={frameQueryId} />;
+  }
 
   if (path === '/' || path === '') {
     return <LandingPage />;

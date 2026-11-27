@@ -142,6 +142,9 @@ export interface Shop {
   reminderMaintenanceMonths?: number;
   reminderExamMonths?: number;
   reminderMode?: 'auto' | 'manual';
+  reminderNotificationsEnabled?: boolean;
+  promoBannerEnabled?: boolean;
+  promoBannerText?: string;
 }
 
 export type LensTrack = 'single_vision' | 'custom_lab';
@@ -347,6 +350,8 @@ export interface CrmCustomer {
   recallReviewSentAt?: string;
   recall6mSentAt?: string;
   recall12mSentAt?: string;
+  reminderCategory?: 'glasses' | 'contact_lenses';
+  contactLensMonths?: number;
   notes?: string;
 }
 

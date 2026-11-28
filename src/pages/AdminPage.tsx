@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { DEFAULT_LANDING_PREVIEW_FRAMES, TYPES } from '../data/seed';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { getShopDaysLeft, isAdminRole, useOptiVerse } from '../services/optiverseStore';
-import { FrameType, LandingPreviewFrame, Plan, SponsoredSupplier } from '../types';
+import { FrameType, LandingPreviewFrame, Plan, Shop, SponsoredSupplier } from '../types';
 import { AdminLensMatrixManager } from '../components/AdminLensMatrixManager';
 import { I } from '../components/Icons';
 import {
@@ -10,6 +10,7 @@ import {
   Egp,
   Head,
   LineChart,
+  Modal,
   Shell,
   ShellNavItem,
   Stat,
@@ -57,6 +58,57 @@ function loadAdminSettings(): AdminSettingsState {
   return DEFAULT_ADMIN_SETTINGS;
 }
 
+async function listAllFilesRecursively(bucket: string, prefix: string): Promise<string[]> {
+  const client = supabase;
+  if (!client) return [];
+  const cleanPrefix = prefix.replace(/^\/+|\/+$/g, '');
+  const filePaths: string[] = [];
+
+  async function crawl(dir: string, storageClient: NonNullable<typeof supabase>) {
+    try {
+      const { data, error } = await storageClient.storage.from(bucket).list(dir, {
+        limit: 100,
+        offset: 0,
+      });
+      if (error || !Array.isArray(data)) return;
+
+      for (const item of data) {
+        if (!item.name || item.name === '.emptyFolderPlaceholder') continue;
+        const currentPath = dir ? `${dir}/${item.name}` : item.name;
+        if (item.id === null || !item.metadata) {
+          await crawl(currentPath, storageClient);
+        } else {
+          filePaths.push(currentPath);
+        }
+      }
+    } catch {
+      // ignore individual folder list errors
+    }
+  }
+
+  await crawl(cleanPrefix, client);
+  return filePaths;
+}
+
+async function deleteShopStorageFiles(shopId: string): Promise<void> {
+  const client = supabase;
+  if (!client || !shopId) return;
+  const buckets = ['optiverse-assets', 'optiverse-rx'];
+  for (const bucket of buckets) {
+    try {
+      const files = await listAllFilesRecursively(bucket, shopId);
+      if (files.length > 0) {
+        for (let i = 0; i < files.length; i += 50) {
+          const chunk = files.slice(i, i + 50);
+          await client.storage.from(bucket).remove(chunk);
+        }
+      }
+    } catch (err) {
+      console.warn(`[deleteShopStorageFiles] Best-effort cleanup for ${bucket} failed:`, err);
+    }
+  }
+}
+
 export function AdminPage() {
   const {
     session,
@@ -66,6 +118,7 @@ export function AdminPage() {
     signInWithGoogle,
     signOut,
     shops,
+    setShops,
     updateShop,
     adminTopUpShopAiCredits,
     products,
@@ -84,12 +137,18 @@ export function AdminPage() {
     logAudit,
     exportFullBackup,
     uploadAssetToStorage,
+    hydrateFromSupabase,
   } = useOptiVerse();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authErr, setAuthErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Shop Permanent Deletion Modal state
+  const [shopToDelete, setShopToDelete] = useState<Shop | null>(null);
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState('');
+  const [isDeletingShop, setIsDeletingShop] = useState(false);
 
   // 2FA TOTP challenge & enrollment state
   const [mfaFactorId, setMfaFactorId] = useState<string | null>(null);
@@ -508,6 +567,69 @@ export function AdminPage() {
     toast('تم إضافة المورد المعتمد ✓');
   };
 
+  const openDeleteModal = (shop: Shop) => {
+    setShopToDelete(shop);
+    setDeleteConfirmInput('');
+    setIsDeletingShop(false);
+  };
+
+  const closeDeleteModal = () => {
+    if (isDeletingShop) return;
+    setShopToDelete(null);
+    setDeleteConfirmInput('');
+    setIsDeletingShop(false);
+  };
+
+  const handleConfirmDeleteShop = async () => {
+    if (!shopToDelete || isDeletingShop) return;
+    if (deleteConfirmInput.trim() !== shopToDelete.name.trim()) return;
+
+    setIsDeletingShop(true);
+    try {
+      // 1) مسح ملفات المحل من الـ Storage (best-effort: لو فشلت ما توقفش الحذف)
+      await deleteShopStorageFiles(shopToDelete.id);
+
+      // 2) استدعاء supabase.rpc('admin_delete_shop', { p_shop_id: shop.id })
+      if (supabase) {
+        const { error } = await supabase.rpc('admin_delete_shop', {
+          p_shop_id: shopToDelete.id,
+        });
+
+        if (error) {
+          const msg = String(error.message || '');
+          if (msg.includes('NOT_AUTHORIZED')) {
+            toast('ليس لديك صلاحية الحذف');
+          } else if (msg.includes('SHOP_NOT_FOUND')) {
+            toast('المحل غير موجود (ربما اتحذف بالفعل)');
+            setShops((prev) => prev.filter((s) => s.id !== shopToDelete.id));
+            await hydrateFromSupabase();
+            setShopToDelete(null);
+            setDeleteConfirmInput('');
+          } else if (msg.includes('CANNOT_DELETE_DEMO_ADMIN_STORE')) {
+            toast('لا يمكن حذف المتجر التجريبي الخاص بالإدارة');
+          } else {
+            toast('حصل خطأ، حاول تاني');
+            console.error('Error deleting shop via admin_delete_shop:', error);
+          }
+          return;
+        }
+      }
+
+      // 3) النجاح: حذف من القائمة وتحديث الواجهة
+      setShops((prev) => prev.filter((s) => s.id !== shopToDelete.id));
+      await logAudit('حذف حساب محل نهائياً', `تم حذف المحل ${shopToDelete.name} (${shopToDelete.id}) نهائياً`);
+      toast('تم حذف الحساب نهائيًا ✅');
+      await hydrateFromSupabase();
+      setShopToDelete(null);
+      setDeleteConfirmInput('');
+    } catch (err) {
+      console.error('Unexpected error in handleConfirmDeleteShop:', err);
+      toast('حصل خطأ، حاول تاني');
+    } finally {
+      setIsDeletingShop(false);
+    }
+  };
+
   const Table = ({ list }: { list: typeof shops }) => (
     <>
       {/* Desktop Table */}
@@ -696,6 +818,15 @@ export function AdminPage() {
                       <button className="btn btn-p btn-sm" onClick={() => enterShopAsMerchant(s)}>
                         <I n="enter" s={13} /> دخول كمتجر
                       </button>
+                      {!s.isDemoAdminStore && (
+                        <button
+                          type="button"
+                          className="btn btn-sm !bg-rose-50 hover:!bg-rose-100 !text-rose-700 !border-rose-300 whitespace-nowrap"
+                          onClick={() => openDeleteModal(s)}
+                        >
+                          🗑️ حذف الحساب نهائيًا
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -857,6 +988,15 @@ export function AdminPage() {
                 <button type="button" className="btn btn-p btn-sm col-span-2 justify-center" onClick={() => enterShopAsMerchant(s)}>
                   <I n="enter" s={13} /> دخول كمتجر
                 </button>
+                {!s.isDemoAdminStore && (
+                  <button
+                    type="button"
+                    className="btn btn-sm col-span-2 justify-center !bg-rose-50 hover:!bg-rose-100 !text-rose-700 !border-rose-300"
+                    onClick={() => openDeleteModal(s)}
+                  >
+                    🗑️ حذف الحساب نهائيًا
+                  </button>
+                )}
               </div>
             </div>
           );
@@ -1015,6 +1155,7 @@ export function AdminPage() {
             </div>
             {[
               ['all', 'الكل'],
+              ['pending', 'بانتظار التأكيد'],
               ['trial', 'تجريبي'],
               ['active', 'نشط'],
               ['soon', 'ينتهي قريباً'],
@@ -1890,6 +2031,61 @@ export function AdminPage() {
       )}
       {sec === 'lenses' && <AdminLensMatrixManager />}
       </div>
+
+      {shopToDelete && (
+        <Modal
+          title="حذف الحساب نهائيًا"
+          onClose={closeDeleteModal}
+        >
+          <div className="space-y-4 text-sm" dir="rtl">
+            <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 leading-relaxed text-xs sm:text-sm font-semibold flex items-start gap-2.5">
+              <span className="text-xl shrink-0">⚠️</span>
+              <div>
+                هيتم حذف المحل وكل منتجاته وصوره وعملائه وطلباته وحساب صاحبه نهائيًا ولا يمكن التراجع. اكتب اسم المحل للتأكيد
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-100 border border-slate-200 text-center font-extrabold text-[#0F172A] text-sm select-all">
+              {shopToDelete.name}
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-700 block mb-1">
+                اسم المحل المطلوب كتابته للتأكيد *
+              </label>
+              <input
+                type="text"
+                dir="rtl"
+                className="inp w-full"
+                placeholder="اكتب اسم المحل هنا بدقة للتأكيد..."
+                value={deleteConfirmInput}
+                onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                disabled={isDeletingShop}
+                autoFocus
+              />
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                className="btn btn-g flex-1 justify-center"
+                onClick={closeDeleteModal}
+                disabled={isDeletingShop}
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                className="btn flex-1 justify-center !bg-rose-600 hover:!bg-rose-700 !text-white font-extrabold disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+                disabled={deleteConfirmInput.trim() !== shopToDelete.name.trim() || isDeletingShop}
+                onClick={handleConfirmDeleteShop}
+              >
+                {isDeletingShop ? 'جاري الحذف...' : 'حذف نهائي'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </Shell>
   );
 }

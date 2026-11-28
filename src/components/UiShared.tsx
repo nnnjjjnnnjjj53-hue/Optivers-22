@@ -68,6 +68,8 @@ export const stBadge = (s: ShopStatus) =>
     <span className="badge b-warn">ينتهي قريباً</span>
   ) : s === 'expired' ? (
     <span className="badge b-bad">منتهي</span>
+  ) : s === 'pending' ? (
+    <span className="badge b-warn">بانتظار التأكيد</span>
   ) : (
     <span className="badge b-bad">موقوف</span>
   );

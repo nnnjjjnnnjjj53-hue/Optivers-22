@@ -433,6 +433,7 @@ export interface StoreCtxValue {
   exportFullBackup: () => Promise<void>;
   uploadAssetToStorage: (blob: Blob, folder: string, ext: string) => Promise<string>;
   uploadRxPrescriptionToStorage: (shopId: string, blob: Blob, ext: string) => Promise<string>;
+  hydrateFromSupabase: () => Promise<void>;
 }
 
 const Ctx = createContext<StoreCtxValue | null>(null);
@@ -3327,6 +3328,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         exportFullBackup,
         uploadAssetToStorage,
         uploadRxPrescriptionToStorage,
+        hydrateFromSupabase,
       }}
     >
       {children}

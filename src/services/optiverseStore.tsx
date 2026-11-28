@@ -668,10 +668,27 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     ? routePath.slice(1).split('/')[0]
     : '';
 
-  const activeShop =
+  const fallbackShop: Shop = {
+    id: '',
+    name: '',
+    slug: '',
+    city: 'القاهرة',
+    plan: 'الأساسية',
+    status: 'pending',
+    days: 0,
+    price: 0,
+    color: '#0284C7',
+    wa: '',
+    logo: '',
+    exp: '',
+    onboardingCompleted: false,
+  };
+
+  const activeShop: Shop =
     shops.find((s) => s.slug === (routeSlug || activeShopSlug)) ||
     (session?.shopId ? shops.find((s) => s.id === session.shopId) : undefined) ||
-    shops[0];
+    (session?.role === 'merchant' && !session?.shopId ? undefined : shops[0]) ||
+    fallbackShop;
 
   const currentShopKey = activeShop?.slug || 'optivibe';
   const fav = favByShop[currentShopKey] ?? (activeShop?.id === DEFAULT_SHOP_ID ? ['p-1001'] : []);
@@ -1372,7 +1389,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         return { role: 'super_admin' as const, needsMfa: Boolean(verifiedTotp) };
       }
 
-      // Regular merchant account — ensure a 14-day trial store exists (handles Google first-time sign-in)
+      // Regular merchant account — co-opted without automatic shop creation
       let shopId = roleRow?.shop_id || undefined;
       if (!shopId) {
         const { data: existingShop } = await supabase
@@ -1382,37 +1399,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           .maybeSingle();
         if (existingShop) {
           shopId = existingShop.id;
-        } else {
-          const displayName =
-            user.user_metadata?.full_name || user.user_metadata?.name || (email ? email.split('@')[0] : 'متجر جديد');
-          const { data: newShop, error: newShopErr } = await supabase
-            .from('shops')
-            .insert({
-              owner_name: displayName,
-              owner_email: email || null,
-              name: `متجر ${displayName}`,
-              city: 'القاهرة',
-              slug: makeSlug(displayName),
-              wa_phone: '01001234567',
-            })
-            .select('id, slug')
-            .single();
-          if (newShopErr || !newShop) {
-            throw new Error(newShopErr?.message || 'تعذّر إنشاء متجر التجربة التلقائي');
-          }
-          shopId = newShop.id;
-          setActiveShopSlug(newShop.slug);
-          await seedCatalogForShop(newShop.id, true);
         }
-      }
-
-      if (!roleRow && shopId) {
-        await supabase.from('user_roles').upsert({
-          user_id: user.id,
-          email,
-          role: 'merchant',
-          shop_id: shopId,
-        });
       }
 
       setSession({
@@ -1529,7 +1516,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           return { ok: true, role: 'super_admin' as const, needsMfa: false };
         }
         const matchedShop =
-          shops.find((s) => s.ownerEmail?.toLowerCase() === cleanEmail) || activeShop;
+          shops.find((s) => s.ownerEmail?.toLowerCase() === cleanEmail) || activeShop || shops[0];
         setActiveShopSlug(matchedShop.slug);
         setSession({
           userId: 'local-merchant',
@@ -1806,56 +1793,10 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         return { ok: false, error: error?.message || 'تعذّر إنشاء الحساب' };
       }
 
-      const { data: userRes, error: userErr } = await supabase.auth.getUser();
-      if (userErr || !userRes.user) {
-        return {
-          ok: true,
-          error: 'تم إرسال رابط التأكيد إلى بريدك الإلكتروني. يرجى تأكيد البريد ثم تسجيل الدخول لإتمام إنشاء المتجر.',
-        };
-      }
-
-      const userId = userRes.user.id;
-      const { data: shopRow, error: shopErr } = await supabase
-        .from('shops')
-        .insert({
-          owner_id: userId,
-          owner_name: cleanOwner,
-          owner_email: email.trim().toLowerCase(),
-          name: shopName.trim(),
-          city: city.trim(),
-          governorate: city.trim(),
-          slug: finalSlug,
-          wa_phone: cleanWa,
-        })
-        .select('id, slug')
-        .single();
-
-      if (shopErr || !shopRow) {
-        return { ok: false, error: shopErr?.message || 'تعذّر إنشاء المحل في قاعدة البيانات. لم يتم إكمال التسجيل.' };
-      }
-
-      const { error: roleErr } = await supabase.from('user_roles').upsert({
-        user_id: userId,
-        email: email.trim().toLowerCase(),
-        role: 'merchant',
-        shop_id: shopRow.id,
-      });
-
-      if (roleErr) {
-        return { ok: false, error: roleErr.message || 'تعذّر ربط صلاحيات التاجر بالحساب' };
-      }
-
-      await seedCatalogForShop(shopRow.id, true);
-      setActiveShopSlug(finalSlug);
-      setSession({
-        userId,
-        email,
-        role: 'merchant',
-        shopId: shopRow.id,
-      });
-      await hydrateFromSupabase();
-      navigate('/merchant');
-      return { ok: true };
+      return {
+        ok: true,
+        error: 'تم تسجيل الحساب بنجاح. يرجى تأكيد بريدك الإلكتروني (إذا لزم) وتسجيل الدخول.',
+      };
     },
     [hydrateFromSupabase, logAudit, navigate, seedCatalogForShop]
   );

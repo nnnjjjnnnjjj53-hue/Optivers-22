@@ -183,6 +183,7 @@ export function MerchantPage() {
   const [obGov, setObGov] = useState('القاهرة');
   const [obAddress, setObAddress] = useState('');
   const [obMapsUrl, setObMapsUrl] = useState('');
+  const [submittingOnboarding, setSubmittingOnboarding] = useState(false);
 
   // CRM add customer form state
   const [crmName, setCrmName] = useState('');
@@ -648,24 +649,59 @@ export function MerchantPage() {
   }
 
   // Mandatory Merchant Onboarding Profile Gate (never shown to Admin accounts)
-  if (!activeShop.onboardingCompleted && !activeShop.isDemoAdminStore && !isAdminRole(session.role)) {
+  if (!activeShop || (!activeShop.onboardingCompleted && !activeShop.isDemoAdminStore && !isAdminRole(session.role))) {
     const handleCompleteOnboarding = async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!obOwnerName.trim() || !obWa.trim() || !obShopName.trim() || !obAddress.trim()) {
-        toast('يرجى استكمال اسم المالك، رقم الواتساب، اسم المحل، والعنوان');
+      if (!obOwnerName.trim() || !obWa.trim() || !obShopName.trim() || !obAddress.trim() || !obGov.trim()) {
+        toast('يرجى استكمال جميع الحقول الإجبارية (اسم المالك، رقم الواتساب، اسم المحل، المحافظة، والعنوان)');
         return;
       }
-      await updateShop(activeShop.id, {
-        ownerName: obOwnerName.trim(),
-        wa: obWa.trim(),
-        name: obShopName.trim(),
-        governorate: obGov,
-        city: obGov,
-        address: obAddress.trim(),
-        mapsUrl: obMapsUrl.trim() || undefined,
-        onboardingCompleted: true,
-      });
-      toast('تم تفعيل ملف محلك بنجاح! مرحباً بك في لوحة التحكم 🎉');
+      const cleanPhone = obWa.trim().replace(/\D/g, '');
+      if (!/^\d{10,15}$/.test(cleanPhone)) {
+        toast('رقم الهاتف غير صحيح (يجب أن يكون بين 10 و15 رقماً بدون فراغات افتراضية)');
+        return;
+      }
+      setSubmittingOnboarding(true);
+      try {
+        if (supabase) {
+          if (!activeShop) {
+            const { data, error } = await supabase.rpc('create_my_shop', {
+              p_name: obShopName.trim(),
+              p_phone: cleanPhone,
+              p_governorate: obGov.trim(),
+            });
+            if (error) {
+              throw new Error(error.message || 'تعذر إنشاء المحل عبر النظام');
+            }
+            const newShopId = typeof data === 'object' && data !== null ? (data as any).id || (data as any) : data;
+            if (newShopId) {
+              await updateShop(String(newShopId), {
+                ownerName: obOwnerName.trim(),
+                address: obAddress.trim(),
+                mapsUrl: obMapsUrl.trim() || undefined,
+                onboardingCompleted: true,
+              });
+            }
+          } else {
+            await updateShop(activeShop.id, {
+              ownerName: obOwnerName.trim(),
+              wa: cleanPhone,
+              name: obShopName.trim(),
+              governorate: obGov,
+              city: obGov,
+              address: obAddress.trim(),
+              mapsUrl: obMapsUrl.trim() || undefined,
+              onboardingCompleted: true,
+            });
+          }
+        }
+        toast('تم تفعيل ملف محلك بنجاح! مرحباً بك في لوحة التحكم 🎉');
+        window.location.reload();
+      } catch (err: any) {
+        toast(err.message || 'حدث خطأ أثناء إنشاء المحل');
+      } finally {
+        setSubmittingOnboarding(false);
+      }
     };
 
     return (
@@ -705,7 +741,7 @@ export function MerchantPage() {
                   type="tel"
                   className="inp mt-1"
                   dir="ltr"
-                  placeholder="01001234567"
+                  placeholder="010xxxxxxxxx"
                   value={obWa}
                   onChange={(e) => setObWa(e.target.value)}
                   required
@@ -767,9 +803,10 @@ export function MerchantPage() {
 
             <button
               type="submit"
-              className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white w-full !py-3 font-extrabold"
+              disabled={submittingOnboarding}
+              className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white w-full !py-3 font-extrabold disabled:opacity-50 cursor-pointer"
             >
-              حفظ وبدء استخدام لوحة التاجر
+              {submittingOnboarding ? 'جاري إنشاء وتفعيل المحل...' : 'حفظ وبدء استخدام لوحة التاجر'}
             </button>
           </form>
         </div>

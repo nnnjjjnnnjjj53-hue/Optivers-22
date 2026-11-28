@@ -499,6 +499,7 @@ export function AdminPage() {
       : 0;
 
   const totalShopsCount = shops.length;
+  const pendingShopsCount = shops.filter((s) => s.status === 'pending').length;
   const trialShopsCount = shops.filter((s) => s.status === 'trial').length;
   const activeShopsCount = shops.filter((s) => s.status === 'active' || s.status === 'soon').length;
   const soon = shops.filter((s) => s.status === 'soon').length;
@@ -767,7 +768,7 @@ export function AdminPage() {
                   </td>
                   <td className="p-3">
                     <div className="flex gap-1.5 flex-wrap">
-                      {(s.status === 'trial' || s.status === 'expired' || s.status === 'paused') && (
+                      {(s.status === 'pending' || s.status === 'trial' || s.status === 'expired' || s.status === 'paused') && (
                         <button
                           className="btn btn-p btn-sm"
                           onClick={async () => {
@@ -942,7 +943,7 @@ export function AdminPage() {
                 >
                   ➕ شحن رصيد AI (+50 صورة)
                 </button>
-                {(s.status === 'trial' || s.status === 'expired' || s.status === 'paused') && (
+                {(s.status === 'pending' || s.status === 'trial' || s.status === 'expired' || s.status === 'paused') && (
                   <button
                     type="button"
                     className="btn btn-p btn-sm justify-center"
@@ -1039,6 +1040,23 @@ export function AdminPage() {
               <I n="plus" s={16} /> إضافة محل يدوياً
             </button>
           </Head>
+          {pendingShopsCount > 0 && (
+            <div className="mb-4 rounded-2xl p-4 bg-amber-50 border-2 border-amber-300 flex flex-wrap items-center justify-between gap-3">
+              <div className="font-extrabold text-amber-950 text-sm sm:text-base">
+                ⏳ يوجد {pendingShopsCount} {pendingShopsCount === 1 ? 'محل' : 'محلات'} بانتظار تأكيد وتفعيل الإدارة
+              </div>
+              <button
+                type="button"
+                className="btn bg-amber-600 hover:bg-amber-700 text-white btn-sm shrink-0"
+                onClick={() => {
+                  setFlt('pending');
+                  setSec('shops');
+                }}
+              >
+                مراجعة وتفعيل الطلبات المعلقة ←
+              </button>
+            </div>
+          )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
             <Stat
               icon="store"

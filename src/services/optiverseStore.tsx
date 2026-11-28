@@ -349,6 +349,8 @@ export interface StoreCtxValue {
   shops: Shop[];
   setShops: React.Dispatch<React.SetStateAction<Shop[]>>;
   activeShop: Shop;
+  userHasShop: boolean;
+  refreshUserSessionAndShop: () => Promise<Shop | null>;
   setActiveShopSlug: (slug: string) => void;
   updateShop: (shopId: string, patch: Partial<Shop>) => Promise<void>;
   saveShopLensConfigs: (shopId: string, configs: MerchantLensBrandConfig[]) => Promise<void>;
@@ -685,11 +687,24 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     onboardingCompleted: false,
   };
 
+  const userMerchantShop =
+    session && session.role === 'merchant'
+      ? shops.find(
+          (s) =>
+            (session.shopId && s.id === session.shopId) ||
+            (session.userId && s.ownerId === session.userId)
+        )
+      : undefined;
+  const userHasShop = Boolean(userMerchantShop && userMerchantShop.id);
+
   const activeShop: Shop =
-    shops.find((s) => s.slug === (routeSlug || activeShopSlug)) ||
-    (session?.shopId ? shops.find((s) => s.id === session.shopId) : undefined) ||
-    (session?.role === 'merchant' && !session?.shopId ? undefined : shops[0]) ||
-    fallbackShop;
+    (routeSlug ? shops.find((s) => s.slug === routeSlug) : undefined) ||
+    (session && session.role === 'merchant'
+      ? userMerchantShop || fallbackShop
+      : shops.find((s) => s.slug === activeShopSlug) ||
+        (session?.shopId ? shops.find((s) => s.id === session.shopId) : undefined) ||
+        shops[0] ||
+        fallbackShop);
 
   const currentShopKey = activeShop?.slug || 'optivibe';
   const fav = favByShop[currentShopKey] ?? (activeShop?.id === DEFAULT_SHOP_ID ? ['p-1001'] : []);
@@ -1354,12 +1369,6 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           .maybeSingle();
         if (byEmail) {
           roleRow = byEmail;
-          await supabase.from('user_roles').upsert({
-            user_id: user.id,
-            email,
-            role: byEmail.role,
-            shop_id: byEmail.shop_id || null,
-          });
         }
       }
 
@@ -1369,9 +1378,6 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         (adminEmail && email === adminEmail);
 
       if (isAdmin) {
-        if (!roleRow) {
-          await supabase.from('user_roles').upsert({ user_id: user.id, email, role: 'super_admin' });
-        }
         const { data: factors } = await supabase.auth.mfa.listFactors();
         const verifiedTotp = factors?.totp?.find((f) => f.status === 'verified');
         const nextSess: AuthSession = {
@@ -1390,17 +1396,33 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         return { role: 'super_admin' as const, needsMfa: Boolean(verifiedTotp) };
       }
 
-      // Regular merchant account — co-opted without automatic shop creation
+      // Regular merchant account
       let shopId = roleRow?.shop_id || undefined;
-      if (!shopId) {
+      let ownShopRow: any = null;
+      if (shopId) {
+        const { data: byShopId } = await supabase
+          .from('shops')
+          .select('*')
+          .eq('id', shopId)
+          .maybeSingle();
+        ownShopRow = byShopId || null;
+      }
+      if (!ownShopRow) {
         const { data: existingShop } = await supabase
           .from('shops')
-          .select('id, slug')
+          .select('*')
           .eq('owner_id', user.id)
           .maybeSingle();
         if (existingShop) {
+          ownShopRow = existingShop;
           shopId = existingShop.id;
         }
+      }
+
+      if (ownShopRow) {
+        const mappedOwn = mapDbShopRow(ownShopRow);
+        setShops((prev) => [mappedOwn, ...prev.filter((s) => s.id !== mappedOwn.id)]);
+        if (mappedOwn.slug) setActiveShopSlug(mappedOwn.slug);
       }
 
       setSession({
@@ -1410,13 +1432,88 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         shopId,
       });
       await hydrateFromSupabase();
+      if (ownShopRow) {
+        const mappedOwn = mapDbShopRow(ownShopRow);
+        setShops((prev) => (prev.some((s) => s.id === mappedOwn.id) ? prev : [mappedOwn, ...prev]));
+      }
       if (shouldRedirect && !window.location.pathname.startsWith('/merchant')) {
         navigate('/merchant');
       }
       return { role: 'merchant' as const, needsMfa: false };
     },
-    [hydrateFromSupabase, navigate, seedCatalogForShop]
+    [hydrateFromSupabase, navigate]
   );
+
+  const refreshUserSessionAndShop = useCallback(async (): Promise<Shop | null> => {
+    if (!supabase) return null;
+    const { data: authRes } = await supabase.auth.getUser();
+    if (!authRes.user) return null;
+    const user = authRes.user;
+    const email = (user.email || '').trim().toLowerCase();
+    const adminEmail = getAdminOwnerEmail();
+
+    const { data: roleRow } = await supabase
+      .from('user_roles')
+      .select('role, shop_id')
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    const isAdmin =
+      roleRow?.role === 'super_admin' ||
+      roleRow?.role === 'admin' ||
+      (adminEmail && email === adminEmail);
+
+    if (isAdmin) {
+      setSession({
+        userId: user.id,
+        email: user.email || adminEmail,
+        role: 'super_admin',
+      });
+      await hydrateFromSupabase();
+      return null;
+    }
+
+    let shopId = roleRow?.shop_id || undefined;
+    let shopRow: any = null;
+    if (shopId) {
+      const { data: byShopId } = await supabase
+        .from('shops')
+        .select('*')
+        .eq('id', shopId)
+        .maybeSingle();
+      shopRow = byShopId || null;
+    }
+    if (!shopRow) {
+      const { data: existingShop } = await supabase
+        .from('shops')
+        .select('*')
+        .eq('owner_id', user.id)
+        .maybeSingle();
+      if (existingShop) {
+        shopRow = existingShop;
+        shopId = existingShop.id;
+      }
+    }
+
+    let mapped: Shop | null = null;
+    if (shopRow) {
+      mapped = mapDbShopRow(shopRow);
+      setShops((prev) => [mapped!, ...prev.filter((s) => s.id !== mapped!.id)]);
+      if (mapped.slug) setActiveShopSlug(mapped.slug);
+    }
+
+    setSession({
+      userId: user.id,
+      email: user.email || '',
+      role: 'merchant',
+      shopId,
+    });
+    await hydrateFromSupabase();
+    if (mapped) {
+      setShops((prev) => (prev.some((s) => s.id === mapped!.id) ? prev : [mapped!, ...prev]));
+    }
+    return mapped;
+  }, [hydrateFromSupabase]);
 
   useEffect(() => {
     if (!supabase) {
@@ -1770,8 +1867,11 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       if (!shopName.trim() || shopName.trim().length < 2 || shopName.trim().length > 80) {
         return { ok: false, error: 'اسم المحل يجب أن يكون بين 2 و80 حرفاً' };
       }
-      const cleanWa = wa?.trim() || '';
-      if (!/^\d{10,15}$/.test(cleanWa.replace(/\D/g, ''))) {
+      const cleanWa = (wa?.trim() || '')
+        .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+        .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+        .replace(/\D/g, '');
+      if (!/^\d{10,15}$/.test(cleanWa)) {
         return { ok: false, error: 'رقم الهاتف غير صحيح (يجب أن يكون بين 10 و15 رقماً)' };
       }
       if (!city || !city.trim()) {
@@ -1878,6 +1978,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       }
       setShops((a) => a.map((s) => (s.id === shopId ? { ...s, ...patch } : s)));
       if (supabase) {
+        const adminActing = isAdminRole(session?.role);
         const payload: Record<string, any> = {
           ...(patch.name !== undefined ? { name: patch.name } : {}),
           ...(patch.ownerName !== undefined ? { owner_name: patch.ownerName } : {}),
@@ -1899,6 +2000,23 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           ...(patch.logo !== undefined ? { logo: patch.logo } : {}),
           ...(patch.color !== undefined ? { color: patch.color } : {}),
           ...(patch.wa !== undefined ? { wa_phone: patch.wa } : {}),
+          ...(adminActing
+            ? {
+                ...(patch.status !== undefined ? { status: patch.status } : {}),
+                ...(patch.days !== undefined ? { days_left: patch.days } : {}),
+                ...(patch.exp !== undefined ? { expires_label: patch.exp } : {}),
+                ...(patch.trialEndsAt !== undefined ? { trial_ends_at: patch.trialEndsAt } : {}),
+                ...(patch.isFeatured !== undefined ? { is_featured: patch.isFeatured } : {}),
+                ...(patch.plan !== undefined ? { plan_name: patch.plan } : {}),
+                ...(patch.planTier !== undefined ? { plan_tier: patch.planTier } : {}),
+                ...(patch.price !== undefined ? { price: patch.price } : {}),
+                ...(patch.billingCycle !== undefined ? { billing_cycle: patch.billingCycle } : {}),
+                ...(patch.aiCreditsLimit !== undefined ? { ai_credits_limit: patch.aiCreditsLimit } : {}),
+                ...(patch.isDemoAdminStore !== undefined
+                  ? { is_demo_admin_store: patch.isDemoAdminStore }
+                  : {}),
+              }
+            : {}),
         };
         if (Object.keys(payload).length > 0) {
           await supabase.from('shops').update(payload).eq('id', shopId);
@@ -1983,7 +2101,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         }
       }
     },
-    []
+    [session?.role]
   );
 
   const saveShopLensConfigs = useCallback(
@@ -2165,13 +2283,6 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         if (shopErr || !shopRow) {
           throw new Error(shopErr?.message || 'تعذّر إنشاء المحل في قاعدة البيانات');
         }
-
-        await supabase.from('user_roles').upsert({
-          user_id: authUserRes.user.id,
-          email: finalShop.ownerEmail || authUserRes.user.email || null,
-          role: 'merchant',
-          shop_id: shopRow.id,
-        });
 
         if (shopRow?.id) {
           finalShop = { ...finalShop, id: shopRow.id, slug: shopRow.slug || finalShop.slug };
@@ -3276,6 +3387,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         shops,
         setShops,
         activeShop,
+        userHasShop,
+        refreshUserSessionAndShop,
         setActiveShopSlug,
         updateShop,
         saveShopLensConfigs,

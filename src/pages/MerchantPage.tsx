@@ -126,6 +126,23 @@ function buildEgyptianProductAd(opts: {
   ].join('\n\n');
 }
 
+function mapCreateMyShopError(rawMsg?: string): string {
+  const msg = String(rawMsg || '').toUpperCase();
+  if (msg.includes('INVALID_SHOP_NAME')) {
+    return 'اسم المحل غير صالح (يجب أن يكون بين حرفين و80 حرفاً)';
+  }
+  if (msg.includes('INVALID_PHONE')) {
+    return 'رقم الموبايل غير صالح (يجب أن يكون من 10 إلى 15 رقماً)';
+  }
+  if (msg.includes('ADMIN_CANNOT_CREATE_SHOP')) {
+    return 'لا يمكن لحساب الإدارة إنشاء متجر تاجر';
+  }
+  if (msg.includes('NOT_AUTHENTICATED')) {
+    return 'انتهت جلسة الدخول، يرجى تسجيل الدخول مرة أخرى';
+  }
+  return 'تعذّر حفظ بيانات المحل، يرجى المحاولة مرة أخرى';
+}
+
 export function MerchantPage() {
   const {
     route,
@@ -140,6 +157,8 @@ export function MerchantPage() {
     signOut,
     platformSettings,
     activeShop,
+    userHasShop,
+    refreshUserSessionAndShop,
     updateShop,
     addTopUpCredits,
     products,
@@ -177,13 +196,11 @@ export function MerchantPage() {
   const [submitting, setSubmitting] = useState(false);
 
   // Onboarding Profile Gate state
-  const [obOwnerName, setObOwnerName] = useState('');
   const [obWa, setObWa] = useState('');
   const [obShopName, setObShopName] = useState('');
   const [obGov, setObGov] = useState('القاهرة');
-  const [obAddress, setObAddress] = useState('');
-  const [obMapsUrl, setObMapsUrl] = useState('');
   const [submittingOnboarding, setSubmittingOnboarding] = useState(false);
+  const [obError, setObError] = useState<string | null>(null);
 
   // CRM add customer form state
   const [crmName, setCrmName] = useState('');
@@ -291,8 +308,7 @@ export function MerchantPage() {
   }, [merchantStorageKey, activeShop?.id, sec, invFilter]);
 
   useEffect(() => {
-    if (!activeShop) return;
-    setObOwnerName(activeShop.ownerName || '');
+    if (!activeShop || !activeShop.id) return;
     setObWa(activeShop.wa || '');
     const isPlaceholderShopName =
       !activeShop.onboardingCompleted &&
@@ -301,8 +317,6 @@ export function MerchantPage() {
         (activeShop.ownerName && activeShop.name.trim() === `متجر ${activeShop.ownerName.trim()}`));
     setObShopName(isPlaceholderShopName ? '' : activeShop.name || '');
     setObGov(activeShop.governorate || activeShop.city || 'القاهرة');
-    setObAddress(activeShop.address || '');
-    setObMapsUrl(activeShop.mapsUrl || '');
   }, [activeShop?.id]);
 
   // Never allow Super Admin / Admin accounts to get stuck in Merchant Dashboard or Onboarding
@@ -371,17 +385,23 @@ export function MerchantPage() {
     }
 
     if (authMode === 'signup') {
-      if (!shopName.trim()) {
-        setAuthErr('اكتب اسم المحل');
+      const trimmedShop = shopName.trim();
+      if (trimmedShop.length < 2 || trimmedShop.length > 80) {
+        setAuthErr('اسم المحل يجب أن يكون بين حرفين و80 حرفاً');
+        return;
+      }
+      const normalizedWa = toLatinDigits(waPhone.trim()).replace(/\D/g, '');
+      if (!/^\d{10,15}$/.test(normalizedWa)) {
+        setAuthErr('يرجى إدخال رقم موبايل/واتساب صحيح من 10 إلى 15 رقماً');
         return;
       }
       setSubmitting(true);
       const res = await registerMerchant({
-        email: email.trim() || `merchant-${Date.now()}@optiverse.app`,
-        password: password || 'Merchant123!',
+        email: email.trim(),
+        password,
         ownerName: ownerName.trim() || undefined,
-        shopName: shopName.trim(),
-        wa: waPhone.trim() || '01001234567',
+        shopName: trimmedShop,
+        wa: normalizedWa,
         city: city.trim() || 'القاهرة',
       });
       setSubmitting(false);
@@ -389,7 +409,11 @@ export function MerchantPage() {
         setAuthErr(res.error || 'تعذر إنشاء المتجر');
         return;
       }
-      toast('تم إنشاء متجرك وتفعيل 14 يوماً تجربة مجانية 🎉');
+      if (res.error) {
+        toast(res.error);
+      } else {
+        toast('تم إنشاء متجرك بنجاح 🎉');
+      }
       return;
     }
 
@@ -648,57 +672,74 @@ export function MerchantPage() {
     );
   }
 
-  // Mandatory Merchant Onboarding Profile Gate (never shown to Admin accounts)
-  if (!activeShop || (!activeShop.onboardingCompleted && !activeShop.isDemoAdminStore && !isAdminRole(session.role))) {
+  // Mandatory Merchant Onboarding Gate: shown when user has no shop and is not an Admin
+  if (!isAdminRole(session.role) && !activeShop?.isDemoAdminStore && !userHasShop) {
     const handleCompleteOnboarding = async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!obOwnerName.trim() || !obWa.trim() || !obShopName.trim() || !obAddress.trim() || !obGov.trim()) {
-        toast('يرجى استكمال جميع الحقول الإجبارية (اسم المالك، رقم الواتساب، اسم المحل، المحافظة، والعنوان)');
+      if (submittingOnboarding) return;
+      setObError(null);
+
+      const trimmedName = obShopName.trim();
+      if (trimmedName.length < 2 || trimmedName.length > 80) {
+        const msg = 'اسم المحل التجاري يجب أن يكون بين حرفين و80 حرفاً';
+        setObError(msg);
+        toast(msg);
         return;
       }
-      const cleanPhone = obWa.trim().replace(/\D/g, '');
-      if (!/^\d{10,15}$/.test(cleanPhone)) {
-        toast('رقم الهاتف غير صحيح (يجب أن يكون بين 10 و15 رقماً بدون فراغات افتراضية)');
+
+      const normalizedPhone = toLatinDigits(obWa.trim()).replace(/\D/g, '');
+      if (!/^\d{10,15}$/.test(normalizedPhone)) {
+        const msg = 'يرجى إدخال رقم موبايل/واتساب صحيح من 10 إلى 15 رقماً';
+        setObError(msg);
+        toast(msg);
         return;
       }
+
+      const trimmedGov = obGov.trim();
+      if (!trimmedGov) {
+        const msg = 'يرجى اختيار المحافظة';
+        setObError(msg);
+        toast(msg);
+        return;
+      }
+
       setSubmittingOnboarding(true);
       try {
-        if (supabase) {
-          if (!activeShop) {
-            const { data, error } = await supabase.rpc('create_my_shop', {
-              p_name: obShopName.trim(),
-              p_phone: cleanPhone,
-              p_governorate: obGov.trim(),
-            });
-            if (error) {
-              throw new Error(error.message || 'تعذر إنشاء المحل عبر النظام');
-            }
-            const newShopId = typeof data === 'object' && data !== null ? (data as any).id || (data as any) : data;
-            if (newShopId) {
-              await updateShop(String(newShopId), {
-                ownerName: obOwnerName.trim(),
-                address: obAddress.trim(),
-                mapsUrl: obMapsUrl.trim() || undefined,
-                onboardingCompleted: true,
-              });
-            }
-          } else {
-            await updateShop(activeShop.id, {
-              ownerName: obOwnerName.trim(),
-              wa: cleanPhone,
-              name: obShopName.trim(),
-              governorate: obGov,
-              city: obGov,
-              address: obAddress.trim(),
-              mapsUrl: obMapsUrl.trim() || undefined,
-              onboardingCompleted: true,
-            });
-          }
+        if (!supabase) {
+          setObError('تعذّر الاتصال بقاعدة البيانات، يرجى المحاولة لاحقاً');
+          return;
         }
-        toast('تم تفعيل ملف محلك بنجاح! مرحباً بك في لوحة التحكم 🎉');
-        window.location.reload();
+
+        const { error } = await supabase.rpc('create_my_shop', {
+          p_name: trimmedName,
+          p_phone: normalizedPhone,
+          p_governorate: trimmedGov,
+        });
+
+        if (error) {
+          console.error('[create_my_shop] RPC error:', error);
+          const friendly = mapCreateMyShopError(error.message);
+          setObError(friendly);
+          toast(friendly);
+          return;
+        }
+
+        const loadedShop = await refreshUserSessionAndShop();
+        if (!loadedShop) {
+          console.error('[create_my_shop] Shop created but could not be reloaded for current user');
+          const msg = 'تم إنشاء المحل، يرجى إعادة تحميل الصفحة للدخول للوحة التحكم';
+          setObError(msg);
+          toast(msg);
+          return;
+        }
+
+        toast('تم تسجيل بيانات محلك بنجاح 🎉');
+        navigate('/merchant');
       } catch (err: any) {
-        toast(err.message || 'حدث خطأ أثناء إنشاء المحل');
+        console.error('[create_my_shop] unexpected error:', err);
+        const friendly = mapCreateMyShopError(err?.message);
+        setObError(friendly);
+        toast(friendly);
       } finally {
         setSubmittingOnboarding(false);
       }
@@ -720,46 +761,40 @@ export function MerchantPage() {
             </button>
           </div>
 
-          <form onSubmit={handleCompleteOnboarding} className="space-y-3">
-            <div className="grid sm:grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-bold text-slate-700">اسم صاحب المحل *</label>
-                <input
-                  type="text"
-                  dir="rtl"
-                  autoComplete="name"
-                  className="inp mt-1 text-right"
-                  placeholder="مثال: أحمد محمد"
-                  value={obOwnerName}
-                  onChange={(e) => setObOwnerName(e.target.value)}
-                  required
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-slate-700">رقم واتساب الطلبات *</label>
-                <input
-                  type="tel"
-                  className="inp mt-1"
-                  dir="ltr"
-                  placeholder="010xxxxxxxxx"
-                  value={obWa}
-                  onChange={(e) => setObWa(e.target.value)}
-                  required
-                />
-              </div>
+          <form onSubmit={handleCompleteOnboarding} className="space-y-3.5">
+            <div>
+              <label className="text-xs font-bold text-slate-700">اسم المحل التجاري *</label>
+              <input
+                type="text"
+                dir="rtl"
+                autoComplete="organization"
+                minLength={2}
+                maxLength={80}
+                className="inp mt-1 text-right"
+                placeholder="مثال: بصريات النور"
+                value={obShopName}
+                onChange={(e) => {
+                  setObShopName(e.target.value);
+                  if (obError) setObError(null);
+                }}
+                required
+              />
             </div>
 
             <div className="grid sm:grid-cols-2 gap-3">
               <div>
-                <label className="text-xs font-bold text-slate-700">اسم المحل التجاري *</label>
+                <label className="text-xs font-bold text-slate-700">رقم الموبايل / واتساب الطلبات *</label>
                 <input
-                  type="text"
-                  dir="rtl"
-                  autoComplete="organization"
-                  className="inp mt-1 text-right"
-                  placeholder="مثال: بصريات النور"
-                  value={obShopName}
-                  onChange={(e) => setObShopName(e.target.value)}
+                  type="tel"
+                  inputMode="tel"
+                  className="inp mt-1"
+                  dir="ltr"
+                  placeholder="010xxxxxxxxx"
+                  value={obWa}
+                  onChange={(e) => {
+                    setObWa(e.target.value);
+                    if (obError) setObError(null);
+                  }}
                   required
                 />
               </div>
@@ -768,7 +803,11 @@ export function MerchantPage() {
                 <select
                   className="inp mt-1"
                   value={obGov}
-                  onChange={(e) => setObGov(e.target.value)}
+                  onChange={(e) => {
+                    setObGov(e.target.value);
+                    if (obError) setObError(null);
+                  }}
+                  required
                 >
                   {EGYPT_GOVERNORATES.map((g) => (
                     <option key={g} value={g}>
@@ -779,34 +818,18 @@ export function MerchantPage() {
               </div>
             </div>
 
-            <div>
-              <label className="text-xs font-bold text-slate-700">العنوان التفصيلي *</label>
-              <input
-                className="inp mt-1"
-                placeholder="الشارع والمنطقة وأقرب علامة مميزة"
-                value={obAddress}
-                onChange={(e) => setObAddress(e.target.value)}
-                required
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-bold text-slate-700">رابط الموقع على Google Maps (اختياري)</label>
-              <input
-                className="inp mt-1"
-                dir="ltr"
-                placeholder="https://maps.google.com/?q=..."
-                value={obMapsUrl}
-                onChange={(e) => setObMapsUrl(e.target.value)}
-              />
-            </div>
+            {obError && (
+              <div className="rounded-xl p-3 bg-rose-50 border border-rose-200 text-xs font-bold text-rose-700">
+                {obError}
+              </div>
+            )}
 
             <button
               type="submit"
               disabled={submittingOnboarding}
-              className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white w-full !py-3 font-extrabold disabled:opacity-50 cursor-pointer"
+              className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white w-full !py-3 font-extrabold disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
-              {submittingOnboarding ? 'جاري إنشاء وتفعيل المحل...' : 'حفظ وبدء استخدام لوحة التاجر'}
+              {submittingOnboarding ? 'جاري إنشاء المحل...' : 'حفظ وبدء استخدام لوحة التاجر'}
             </button>
           </form>
         </div>
@@ -1435,6 +1458,23 @@ export function MerchantPage() {
         </div>
       }
     >
+      {activeShop.status === 'pending' && (
+        <div className="mb-4 rounded-2xl p-4 bg-amber-50 border-2 border-amber-300 shadow-sm flex flex-wrap items-center justify-between gap-3">
+          <div className="font-extrabold text-amber-950 text-sm sm:text-base">
+            ⏳ حسابك بانتظار تأكيد الإدارة — هنتواصل معاك قريبًا
+          </div>
+          <a
+            className="btn !bg-[#059669] hover:!bg-[#047857] !text-white btn-sm shrink-0"
+            href={`https://wa.me/${import.meta.env.VITE_ADMIN_WA || '201000000000'}?text=${encodeURIComponent(
+              `مرحباً إدارة OptiVerse، تم تسجيل متجر "${activeShop.name}" وهو بانتظار تأكيد التفعيل.`
+            )}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <I n="msg" s={14} /> تواصل مع الإدارة عبر واتساب
+          </a>
+        </div>
+      )}
       {sec === 'home' && (
         <>
           {expiredOrPaused ? (

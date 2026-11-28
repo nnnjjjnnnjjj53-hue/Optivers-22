@@ -4185,74 +4185,46 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
   );
 
   const switchToAdminDemoStore = useCallback(async () => {
-    // 1-Click Super Admin Demo Store testing (zero AI credit deduction)
-    let demoShop = shops.find((s) => s.isDemoAdminStore) || shops.find((s) => s.id === DEFAULT_SHOP_ID);
-    if (supabase) {
-      try {
-        const token = await getAccessToken();
-        const res = await fetch('/api/auth/bootstrap', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({ action: 'ensure_demo_store' }),
-        });
-        const data = (await res.json().catch(() => ({}))) as { shopId?: string; slug?: string };
-        if (res.ok && data.shopId) {
-          if (data.slug) setActiveShopSlug(data.slug);
-          const nextSess: AuthSession = {
-            userId: session?.userId || 'super-admin-demo',
-            email: session?.email || getAdminOwnerEmail() || 'merchant@optiverse.local',
-            role: 'super_admin',
-            shopId: data.shopId,
-          };
-          sessionRef.current = nextSess;
-          setSession(nextSess);
-          await loadShopAdminContext(data.shopId);
-          navigate('/merchant');
-          toast('دخلت لمتجر الديمو التجريبي (معالجة AI غير محدودة بدون خصم رصيد) ⭐');
-          return;
-        }
-      } catch {
-        // fallback cleanly to local demo store
+    if (!supabase) {
+      const demoShop = shops.find((s) => s.isDemoAdminStore) || shops[0];
+      if (demoShop?.slug) {
+        navigate(`/${demoShop.slug}`);
+        return;
       }
+      toast('لا يوجد متجر ديمو');
+      return;
     }
 
-    if (!demoShop) {
-      demoShop = {
-        ...SHOPS0[0],
-        id: 'admin-demo-store',
-        name: 'متجر OptiVerse التجريبي (أدمن)',
-        slug: 'admin-demo-store',
-        isDemoAdminStore: true,
-        onboardingCompleted: true,
-        planTier: 'premium',
-        plan: 'بريميوم',
-        aiCreditsLimit: 999999,
-      };
-      setShops((prev) => [demoShop!, ...prev]);
-    } else if (!demoShop.isDemoAdminStore || Number(demoShop.aiCreditsLimit ?? 0) < 99999) {
-      await updateShop(demoShop.id, {
-        isDemoAdminStore: true,
-        onboardingCompleted: true,
-        aiCreditsLimit: 999999,
-      });
-    }
+    try {
+      const { data, error } = await supabase
+        .from('shops')
+        .select('id, slug')
+        .eq('is_demo_admin_store', true)
+        .maybeSingle();
 
-    setActiveShopSlug(demoShop.slug);
-    const fallbackSess: AuthSession = {
-      userId: session?.userId || 'super-admin-demo',
-      email: session?.email || getAdminOwnerEmail() || 'merchant@optiverse.local',
-      role: 'super_admin',
-      shopId: demoShop.id,
-    };
-    sessionRef.current = fallbackSess;
-    setSession(fallbackSess);
-    await loadShopAdminContext(demoShop.id);
-    navigate('/merchant');
-    toast('دخلت لمتجر الديمو الخاص بالأدمن (بدون خصم رصيد) ⭐');
-  }, [getAccessToken, loadShopAdminContext, navigate, session?.email, session?.userId, shops, toast, updateShop]);
+      if (error) {
+        console.error('Error fetching demo store:', error);
+        toast('حدث خطأ أثناء البحث عن متجر الديمو');
+        return;
+      }
+
+      if (data?.slug) {
+        navigate(`/${data.slug}`);
+        return;
+      }
+
+      const localDemo = shops.find((s) => s.isDemoAdminStore);
+      if (localDemo?.slug) {
+        navigate(`/${localDemo.slug}`);
+        return;
+      }
+
+      toast('لا يوجد متجر ديمو');
+    } catch (err) {
+      console.error('Unexpected error fetching demo store:', err);
+      toast('حدث خطأ، حاول مرة أخرى');
+    }
+  }, [navigate, shops, toast]);
 
   const exportFullBackup = useCallback(async () => {
     let payload: any = null;

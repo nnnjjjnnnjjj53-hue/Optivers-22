@@ -168,6 +168,7 @@ export function AdminPage() {
   const [password, setPassword] = useState('');
   const [authErr, setAuthErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
 
   // Shop Permanent Deletion Modal state
   const [shopToDelete, setShopToDelete] = useState<Shop | null>(null);
@@ -1297,10 +1298,18 @@ export function AdminPage() {
       headerAction={
         <button
           type="button"
-          className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white btn-sm whitespace-nowrap shrink-0"
-          onClick={switchToAdminDemoStore}
+          disabled={demoLoading}
+          className="btn !bg-[#D97706] hover:!bg-[#B45309] !text-white btn-sm whitespace-nowrap shrink-0 disabled:opacity-50"
+          onClick={async () => {
+            setDemoLoading(true);
+            try {
+              await switchToAdminDemoStore();
+            } finally {
+              setDemoLoading(false);
+            }
+          }}
         >
-          <I n="store" s={14} /> معاينة متجر الديمو
+          <I n="store" s={14} /> {demoLoading ? 'جاري المعاينة...' : 'معاينة متجر الديمو'}
         </button>
       }
     >

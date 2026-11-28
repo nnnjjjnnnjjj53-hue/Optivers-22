@@ -561,6 +561,8 @@ export interface StoreCtxValue {
   fetchAdminAuditLogsPage: (opts: { page: number; pageSize?: number }) => Promise<PaginatedResult<AuditLog>>;
   fetchAdminStatsSummary: () => Promise<AdminStatsSummary>;
   loadShopAdminContext: (shopId: string) => Promise<void>;
+  adminPreviewShopId: string | null;
+  exitAdminPreview: () => void;
 }
 
 const Ctx = createContext<StoreCtxValue | null>(null);
@@ -577,6 +579,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
   const [modal, setModal] = useState<ModalState>(null);
   const [tst, setTst] = useState<string | null>(null);
   const [session, setSession] = useState<AuthSession | null>(null);
+  const [adminPreviewShopId, setAdminPreviewShopId] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(isSupabaseConfigured);
 
   const [shops, setShops] = useState<Shop[]>(initial.shops);
@@ -827,7 +830,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
   };
 
   const userMerchantShop =
-    session && session.role === 'merchant'
+    session && session.role === 'merchant' && !adminPreviewShopId
       ? shops.find(
           (s) =>
             (session.shopId && s.id === session.shopId) ||
@@ -837,13 +840,15 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
   const userHasShop = Boolean(userMerchantShop && userMerchantShop.id);
 
   const activeShop: Shop =
-    (routeSlug ? shops.find((s) => s.slug === routeSlug) : undefined) ||
-    (session && session.role === 'merchant'
-      ? userMerchantShop || fallbackShop
-      : shops.find((s) => s.slug === activeShopSlug) ||
-        (session?.shopId ? shops.find((s) => s.id === session.shopId) : undefined) ||
-        shops[0] ||
-        fallbackShop);
+    adminPreviewShopId
+      ? shops.find((s) => s.id === adminPreviewShopId) || fallbackShop
+      : (routeSlug ? shops.find((s) => s.slug === routeSlug) : undefined) ||
+        (session && session.role === 'merchant'
+          ? userMerchantShop || fallbackShop
+          : shops.find((s) => s.slug === activeShopSlug) ||
+            (session?.shopId ? shops.find((s) => s.id === session.shopId) : undefined) ||
+            shops[0] ||
+            fallbackShop);
 
   const currentShopKey = activeShop?.slug || 'optivibe';
   const fav = favByShop[currentShopKey] ?? (activeShop?.id === DEFAULT_SHOP_ID ? ['p-1001'] : []);
@@ -981,7 +986,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       slug: r.slug,
       plan: r.plan_name || 'الأساسية',
       price: typeof r.price === 'number' ? r.price : 0,
-      status: r.status || 'active',
+      status: Boolean(r.is_demo_admin_store) ? 'active' : (r.status || 'active'),
       days: typeof r.days_left === 'number' ? r.days_left : 14,
       trialEndsAt: r.trial_ends_at || undefined,
       exp: r.expires_label || '',
@@ -4187,8 +4192,11 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
   const switchToAdminDemoStore = useCallback(async () => {
     if (!supabase) {
       const demoShop = shops.find((s) => s.isDemoAdminStore) || shops[0];
-      if (demoShop?.slug) {
-        navigate(`/${demoShop.slug}`);
+      if (demoShop) {
+        setAdminPreviewShopId(demoShop.id);
+        setActiveShopSlug(demoShop.slug);
+        navigate('/merchant');
+        toast('🧪 تم الدخول لوضع معاينة متجر الديمو');
         return;
       }
       toast('لا يوجد متجر ديمو');
@@ -4198,7 +4206,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     try {
       const { data, error } = await supabase
         .from('shops')
-        .select('id, slug')
+        .select('id, slug, name, status, is_demo_admin_store')
         .eq('is_demo_admin_store', true)
         .maybeSingle();
 
@@ -4208,14 +4216,23 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      if (data?.slug) {
-        navigate(`/${data.slug}`);
+      if (data) {
+        const mapped = mapDbShopRow(data);
+        setShops((prev) => [mapped, ...prev.filter((s) => s.id !== mapped.id)]);
+        setAdminPreviewShopId(mapped.id);
+        setActiveShopSlug(mapped.slug);
+        await loadShopAdminContext(mapped.id);
+        navigate('/merchant');
+        toast('🧪 تم الدخول لوضع معاينة متجر الديمو');
         return;
       }
 
       const localDemo = shops.find((s) => s.isDemoAdminStore);
-      if (localDemo?.slug) {
-        navigate(`/${localDemo.slug}`);
+      if (localDemo) {
+        setAdminPreviewShopId(localDemo.id);
+        setActiveShopSlug(localDemo.slug);
+        navigate('/merchant');
+        toast('🧪 تم الدخول لوضع معاينة متجر الديمو');
         return;
       }
 
@@ -4224,7 +4241,13 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       console.error('Unexpected error fetching demo store:', err);
       toast('حدث خطأ، حاول مرة أخرى');
     }
-  }, [navigate, shops, toast]);
+  }, [loadShopAdminContext, navigate, shops, toast]);
+
+  const exitAdminPreview = useCallback(() => {
+    setAdminPreviewShopId(null);
+    navigate('/admin');
+    toast('تمت العودة للوحة الإدارة العليا');
+  }, [navigate, toast]);
 
   const exportFullBackup = useCallback(async () => {
     let payload: any = null;
@@ -4358,6 +4381,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         fetchAdminAuditLogsPage,
         fetchAdminStatsSummary,
         loadShopAdminContext,
+        adminPreviewShopId,
+        exitAdminPreview,
       }}
     >
       {children}

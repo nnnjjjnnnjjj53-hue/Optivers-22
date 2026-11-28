@@ -1,12 +1,14 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
+import { PageSuspendFallback } from './components/AsyncStateViews';
 import { Modals } from './components/Modals';
 import { OfflineIndicator } from './components/PWAInstallPrompt';
-import { AdminPage } from './pages/AdminPage';
-import { DirectoryPage } from './pages/DirectoryPage';
 import { LandingPage } from './pages/LandingPage';
-import { MerchantPage } from './pages/MerchantPage';
-import { StorefrontPage } from './pages/StorefrontPage';
 import { OptiVerseProvider, useOptiVerse } from './services/optiverseStore';
+
+const AdminPage = lazy(() => import('./pages/AdminPage').then((m) => ({ default: m.AdminPage })));
+const DirectoryPage = lazy(() => import('./pages/DirectoryPage').then((m) => ({ default: m.DirectoryPage })));
+const MerchantPage = lazy(() => import('./pages/MerchantPage').then((m) => ({ default: m.MerchantPage })));
+const StorefrontPage = lazy(() => import('./pages/StorefrontPage').then((m) => ({ default: m.StorefrontPage })));
 
 function AdminFloatingReturnBar() {
   const { session, route, navigate } = useOptiVerse();
@@ -205,7 +207,9 @@ export default function App() {
     <ErrorBoundary>
       <OptiVerseProvider>
         <AdminFloatingReturnBar />
-        <RouterView />
+        <Suspense fallback={<PageSuspendFallback />}>
+          <RouterView />
+        </Suspense>
         <OfflineIndicator />
         <Modals />
       </OptiVerseProvider>

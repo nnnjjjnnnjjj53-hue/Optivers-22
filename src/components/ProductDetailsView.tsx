@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { CATS, SHAPES, TYPES } from '../data/seed';
 import { useOptiVerse } from '../services/optiverseStore';
 import { FrameSize, Product } from '../types';
@@ -8,11 +8,14 @@ import {
   resolveClipOnSideUrl,
   resolveStoreFrontUrl,
 } from '../utils/bulkFrameProcessor';
-import { CustomerPhotoTryOn } from './CustomerPhotoTryOn';
 import { MiniGlasses } from './GlassesGraphics';
 import { I, ICON_PATHS } from './Icons';
 import { fmt } from './UiShared';
 import { formatOpticalDimensions, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
+
+const CustomerPhotoTryOn = lazy(() =>
+  import('./CustomerPhotoTryOn').then((m) => ({ default: m.CustomerPhotoTryOn }))
+);
 
 interface ProductDetailsViewProps {
   product: Product;
@@ -55,8 +58,22 @@ export function ProductDetailsView({
   onGoCheckout,
   autoFocusReview = false,
 }: ProductDetailsViewProps) {
-  const { reviews, addProductReview, shops, toast } = useOptiVerse();
+  const { reviews, addProductReview, shops, toast, fetchProductDetails } = useOptiVerse();
   const productShop = shops.find((s) => s.id === product.shopId) || shops[0];
+  const [detailsLoading, setDetailsLoading] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setDetailsLoading(true);
+    fetchProductDetails(product.id, product.shopId)
+      .catch(() => {})
+      .finally(() => {
+        if (active) setDetailsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [fetchProductDetails, product.id, product.shopId]);
 
   const colors =
     product.frameColors && product.frameColors.length > 0
@@ -346,6 +363,8 @@ export function ProductDetailsView({
                 <img
                   src={activeImage.imageUrl}
                   alt={product.name}
+                  width={440}
+                  height={260}
                   loading="lazy"
                   decoding="async"
                   referrerPolicy="no-referrer"
@@ -394,6 +413,8 @@ export function ProductDetailsView({
                   <img
                     src={im.imageUrl}
                     alt={im.label || `${product.name} ${idx + 1}`}
+                    width={64}
+                    height={40}
                     loading="lazy"
                     decoding="async"
                     referrerPolicy="no-referrer"
@@ -584,14 +605,22 @@ export function ProductDetailsView({
       {/* Inline Interactive 2D Portrait Try-On & Prescription Upload Drawer */}
       {activeCanvasPanel && (
         <div className="mt-6">
-          <CustomerPhotoTryOn
-            product={product}
-            initialSubMode={activeCanvasPanel}
-            initialRxUrl={initialRxUrl}
-            onRxAttached={onRxAttached}
-            onOrderProduct={() => onGoCheckout(selectedColor, selectedSize)}
-            onClose={() => setActiveCanvasPanel(null)}
-          />
+          <Suspense
+            fallback={
+              <div className="rounded-2xl bg-white border border-slate-200 p-8 text-center text-xs font-bold text-slate-600">
+                جاري تحميل أداة التجربة الافتراضية...
+              </div>
+            }
+          >
+            <CustomerPhotoTryOn
+              product={product}
+              initialSubMode={activeCanvasPanel}
+              initialRxUrl={initialRxUrl}
+              onRxAttached={onRxAttached}
+              onOrderProduct={() => onGoCheckout(selectedColor, selectedSize)}
+              onClose={() => setActiveCanvasPanel(null)}
+            />
+          </Suspense>
         </div>
       )}
 
@@ -679,7 +708,11 @@ export function ProductDetailsView({
             تقييمات العملاء ({productReviews.length})
           </h2>
 
-          {productReviews.length === 0 ? (
+          {detailsLoading && productReviews.length === 0 ? (
+            <div className="rounded-2xl bg-white border border-slate-200 p-6 text-center text-xs text-slate-500 animate-pulse">
+              جاري تحميل التقييمات...
+            </div>
+          ) : productReviews.length === 0 ? (
             <div className="rounded-2xl bg-white border border-slate-200 p-6 text-center text-xs text-slate-500">
               لا توجد تقييمات لهذه النظارة بعد — كن أول من يشارك تجربته!
             </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { CATS, DEFAULT_SHOP_ID, FRAME_COLORS, LENS_COLORS, TYPES, faceMatch, resolveStoreTheme } from '../data/seed';
 import {
   CUSTOM_LAB_DESIGNS,
@@ -24,15 +24,28 @@ import {
   PhotoVariant,
   Product,
 } from '../types';
-import { FaceTryOnStage } from '../components/FaceTryOnStage';
+import {
+  ArabicEmptyState,
+  AsyncErrorBanner,
+  LoadMoreBar,
+  PageSuspendFallback,
+  ProductGridSkeleton,
+} from '../components/AsyncStateViews';
 import { Glasses, MiniGlasses, getCoatingStyle } from '../components/GlassesGraphics';
 import { I, ICON_PATHS } from '../components/Icons';
-import { ProductDetailsView } from '../components/ProductDetailsView';
 import { D, Egp, Empty, Modal, Pr, Stages, fmt, qBadge, waNum } from '../components/UiShared';
-import { canvasToBlob, loadImageToCanvas } from '../utils/visionPipeline';
+import { optimizeImageForUpload } from '../utils/imageUploadOptimizer';
+import { useDebouncedValue } from '../utils/queryCache';
 import { resolveAngled45Url, resolveStoreFrontUrl } from '../utils/bulkFrameProcessor';
 import { formatOpticalDimensions, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
 import { recordStoreFriendShare, recordStoreVisit } from '../utils/storeAnalytics';
+
+const FaceTryOnStage = lazy(() =>
+  import('../components/FaceTryOnStage').then((m) => ({ default: m.FaceTryOnStage }))
+);
+const ProductDetailsView = lazy(() =>
+  import('../components/ProductDetailsView').then((m) => ({ default: m.ProductDetailsView }))
+);
 
 const STORE_PAGE_SIZE = 24;
 
@@ -83,6 +96,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     toast,
     setModal,
     uploadRxPrescriptionToStorage,
+    fetchStorefrontProductsPage,
   } = useOptiVerse();
 
   const rxEnabled = Boolean(
@@ -241,7 +255,16 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
 
   const [fc, setFc] = useState(cur?.frame || '#C9A24B');
   const [lc, setLc] = useState(cur?.lens || '#475569');
-  const [storeVisibleCount, setStoreVisibleCount] = useState(STORE_PAGE_SIZE);
+  const debouncedSearch = useDebouncedValue(searchQuery, 300);
+  const serverCat = cat === 'best_fit' || cat === 'best_selling' ? 'all' : cat;
+  const [pagedRows, setPagedRows] = useState<Product[]>([]);
+  const [pagedPage, setPagedPage] = useState(0);
+  const [pagedTotalCount, setPagedTotalCount] = useState<number | null>(null);
+  const [pagedHasMore, setPagedHasMore] = useState(false);
+  const [pagedLoading, setPagedLoading] = useState<boolean>(Boolean(shop?.id));
+  const [pagedLoadingMore, setPagedLoadingMore] = useState(false);
+  const [pagedError, setPagedError] = useState<string | null>(null);
+  const [pagedRetryNonce, setPagedRetryNonce] = useState(0);
   const pollHandledRef = useRef<string>('');
   const tryOnHandledRef = useRef<string>('');
 
@@ -276,8 +299,69 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   }, [autoTryOn, tryProductParam, route, products]);
 
   useEffect(() => {
-    setStoreVisibleCount(STORE_PAGE_SIZE);
-  }, [cat, shapeFilter, colorFilter, searchQuery, shop?.id]);
+    const targetShopId = shop?.id;
+    if (!targetShopId || isPendingBlocked) return;
+    let cancelled = false;
+    setPagedLoading(true);
+    setPagedError(null);
+    fetchStorefrontProductsPage({
+      shopId: targetShopId,
+      page: 0,
+      pageSize: STORE_PAGE_SIZE,
+      search: debouncedSearch,
+      cat: serverCat,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setPagedRows(res.rows);
+        setPagedPage(0);
+        setPagedTotalCount(res.totalCount);
+        setPagedHasMore(res.hasMore);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setPagedError(err instanceof Error ? err.message : 'تعذّر تحميل النظارات حالياً');
+      })
+      .finally(() => {
+        if (!cancelled) setPagedLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [shop?.id, isPendingBlocked, debouncedSearch, serverCat, pagedRetryNonce, fetchStorefrontProductsPage]);
+
+  const handleLoadMoreStoreProducts = useCallback(async () => {
+    if (!shop?.id || pagedLoadingMore || !pagedHasMore) return;
+    const nextPage = pagedPage + 1;
+    setPagedLoadingMore(true);
+    setPagedError(null);
+    try {
+      const res = await fetchStorefrontProductsPage({
+        shopId: shop.id,
+        page: nextPage,
+        pageSize: STORE_PAGE_SIZE,
+        search: debouncedSearch,
+        cat: serverCat,
+      });
+      setPagedRows((prev) => {
+        const seen = new Set(prev.map((x) => x.id));
+        const merged = [...prev];
+        for (const r of res.rows) {
+          if (!seen.has(r.id)) {
+            seen.add(r.id);
+            merged.push(r);
+          }
+        }
+        return merged;
+      });
+      setPagedPage(nextPage);
+      setPagedHasMore(res.hasMore);
+    } catch (err) {
+      setPagedError(err instanceof Error ? err.message : 'تعذّر تحميل المزيد من النظارات');
+    } finally {
+      setPagedLoadingMore(false);
+    }
+  }, [shop?.id, pagedLoadingMore, pagedHasMore, pagedPage, debouncedSearch, serverCat, fetchStorefrontProductsPage]);
 
   useEffect(() => {
     if (shop?.id && !isMerchantPreview) {
@@ -557,6 +641,19 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   }
 
   if (!cur) {
+    if (pagedLoading) {
+      return (
+        <div
+          className="min-h-[100dvh] p-4 sm:p-8"
+          style={{ '--acc': theme.accent, backgroundColor: theme.pageBg, color: theme.text } as React.CSSProperties}
+        >
+          <div className="max-w-7xl mx-auto space-y-6">
+            <div className="h-48 rounded-3xl bg-slate-200/70 animate-pulse" />
+            <ProductGridSkeleton count={6} />
+          </div>
+        </div>
+      );
+    }
     return (
       <div
         className="min-h-[100dvh] flex items-center justify-center p-4"
@@ -568,7 +665,15 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
             style={{ backgroundColor: theme.primary }}
           >
             {isImageLogo ? (
-              <img src={shop.logo} alt={storeTradeName} className="w-full h-full object-contain bg-white p-1" />
+              <img
+                src={shop.logo}
+                alt={storeTradeName}
+                width={56}
+                height={56}
+                loading="lazy"
+                decoding="async"
+                className="w-full h-full object-contain bg-white p-1"
+              />
             ) : (
               shop.logo
             )}
@@ -668,7 +773,18 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     }
     return true;
   };
-  const filteredProducts = products.filter((p) => matchesFilter(p, cat));
+  const catalogSourceProducts = (pagedRows.length > 0 || debouncedSearch || serverCat !== 'all' || !pagedLoading)
+    ? pagedRows
+        .filter(
+          (p) =>
+            !p.isDeleted &&
+            (isMerchantPreview || p.isPublished !== false) &&
+            (!shop?.hideOutOfStockToCustomer || (p.stock ?? 1) > 0)
+        )
+        .map(D)
+    : products;
+
+  const filteredProducts = catalogSourceProducts.filter((p) => matchesFilter(p, cat));
   const inquiryOrderCount = (p: Product) => {
     const pName = p.name.trim().toLowerCase();
     return inq.filter(
@@ -746,6 +862,11 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
       return;
     }
 
+    if (f.size > 15 * 1024 * 1024 || (isPdf && f.size > 5 * 1024 * 1024)) {
+      toast('حجم الملف يتجاوز الحد المسموح (5 ميجابايت)');
+      return;
+    }
+
     const previewReader = new FileReader();
     previewReader.onload = () => {
       if (!isPdf) setRxLocalPreview(String(previewReader.result || ''));
@@ -753,32 +874,17 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     if (!isPdf) previewReader.readAsDataURL(f);
 
     try {
-      if (isPdf) {
-        if (f.size > 5 * 1024 * 1024) {
-          toast('حجم ملف الـ PDF يتجاوز الحد المسموح (5 ميجابايت)');
-          return;
-        }
-        const storageRef = await uploadRxPrescriptionToStorage(shop.id, f, 'pdf');
-        setRxLocalPreview('pdf');
-        setImg(storageRef);
-        toast('تم رفع ملف الكشف الطبي (PDF) بأمان ✓');
-        return;
-      }
-
-      const c = await loadImageToCanvas(f, 1600);
-      let blob = await canvasToBlob(c, 'image/jpeg', 0.85);
-      if (blob.size > 4_800_000) {
-        blob = await canvasToBlob(c, 'image/jpeg', 0.65);
-      }
-      if (blob.size > 5 * 1024 * 1024) {
-        toast('حجم صورة الكشف كبير جداً — الحد الأقصى 5 ميجابايت');
-        return;
-      }
-      const storageRef = await uploadRxPrescriptionToStorage(shop.id, blob, 'jpg');
+      const optimized = await optimizeImageForUpload(f, {
+        extHint: isPdf ? 'pdf' : undefined,
+        maxWidth: 1600,
+        quality: 0.8,
+      });
+      const storageRef = await uploadRxPrescriptionToStorage(shop.id, optimized.blob, optimized.ext);
+      if (isPdf) setRxLocalPreview('pdf');
       setImg(storageRef);
-      toast('تم رفع وضغط صورة الكشف بأمان ✓');
-    } catch {
-      toast('تعذر رفع ملف الكشف — تأكد من الحجم (حد أقصى 5 ميجابايت)');
+      toast(isPdf ? 'تم رفع ملف الكشف الطبي (PDF) بأمان ✓' : 'تم رفع وضغط صورة الكشف بأمان ✓');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'تعذر رفع ملف الكشف — تأكد من الحجم (حد أقصى 5 ميجابايت)');
     }
   };
 
@@ -996,7 +1102,15 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
               style={{ backgroundColor: theme.primary }}
             >
               {isImageLogo ? (
-                <img src={shop.logo} alt={storeTradeName} className="w-full h-full object-contain bg-white p-0.5" />
+                <img
+                  src={shop.logo}
+                  alt={storeTradeName}
+                  width={36}
+                  height={36}
+                  loading="lazy"
+                  decoding="async"
+                  className="w-full h-full object-contain bg-white p-0.5"
+                />
               ) : (
                 shop.logo
               )}
@@ -1128,6 +1242,10 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
               <img
                 src={shop.bannerImageUrl}
                 alt={storeTradeName}
+                width={1280}
+                height={320}
+                loading="lazy"
+                decoding="async"
                 className="absolute inset-0 w-full h-full object-cover"
               />
             ) : (
@@ -1136,6 +1254,10 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                   <img
                     src={shop.logo}
                     alt=""
+                    width={208}
+                    height={208}
+                    loading="lazy"
+                    decoding="async"
                     className="w-40 h-40 sm:w-52 sm:h-52 object-contain rounded-3xl bg-white/95 p-3 shadow-2xl"
                   />
                 ) : (
@@ -1157,7 +1279,15 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                 <div className="flex items-center gap-3 mb-3 flex-wrap">
                   <span className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-white/95 text-[#0F172A] text-2xl sm:text-3xl flex items-center justify-center shadow-md shrink-0 overflow-hidden border border-white/40">
                     {isImageLogo ? (
-                      <img src={shop.logo} alt={storeTradeName} className="w-full h-full object-contain p-1" />
+                      <img
+                        src={shop.logo}
+                        alt={storeTradeName}
+                        width={56}
+                        height={56}
+                        loading="lazy"
+                        decoding="async"
+                        className="w-full h-full object-contain p-1"
+                      />
                     ) : (
                       shop.logo
                     )}
@@ -1208,13 +1338,88 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
 
         {tab === 'shop' && detailProduct && (
           <div className="mb-6 pb-28">
-            <ProductDetailsView
-              product={detailProduct}
-              relatedProducts={products.filter((p) => p.id !== detailProduct.id)}
-              initialColor={detailProduct.id === cur.id ? fc : detailProduct.frame}
-              initialSize={selectedSize}
-              isFavorite={fav.includes(detailProduct.id)}
-              autoFocusReview={autoFocusReview}
+            <Suspense fallback={<ProductGridSkeleton count={3} />}>
+              <ProductDetailsView
+                product={detailProduct}
+                relatedProducts={products.filter((p) => p.id !== detailProduct.id)}
+                initialColor={detailProduct.id === cur.id ? fc : detailProduct.frame}
+                initialSize={selectedSize}
+                isFavorite={fav.includes(detailProduct.id)}
+                autoFocusReview={autoFocusReview}
+                initialRxUrl={rxLocalPreview && rxLocalPreview !== 'pdf' ? rxLocalPreview : img}
+                onRxAttached={async (rxUrl) => {
+                  if (!rxUrl) {
+                    setRxLocalPreview(null);
+                    setImg(null);
+                    return;
+                  }
+                  setRxLocalPreview(rxUrl);
+                  if (rxUrl.startsWith('data:')) {
+                    try {
+                      const stored = await uploadDataUrlToRxBucket(rxUrl, shop.id);
+                      setImg(stored);
+                    } catch {
+                      setImg(rxUrl);
+                    }
+                  } else {
+                    setImg(rxUrl);
+                  }
+                  toast('تم حفظ صورة الكشف للخطوة الأخيرة ✓');
+                }}
+                onToggleFavorite={() =>
+                  setFav((f) =>
+                    f.includes(detailProduct.id) ? f.filter((x) => x !== detailProduct.id) : [...f, detailProduct.id]
+                  )
+                }
+                onBack={closeFrameDetail}
+                onSelectRelated={(rid) => openFrameDetail(rid)}
+                onTryOn={(color, size) => {
+                  setCurId(detailProduct.id);
+                  setFc(color);
+                  setSelectedSize(size);
+                  closeFrameDetail();
+                  setCamOn(true);
+                }}
+                onAddToCart={(color, size) => {
+                  addCart({
+                    productId: detailProduct.id,
+                    name: detailProduct.name,
+                    desc: `إطار فقط · مقاس ${size}`,
+                    price: detailProduct.price,
+                    type: detailProduct.type,
+                    frame: color,
+                    lens: detailProduct.lens,
+                    size,
+                  });
+                }}
+                onGoCheckout={(color, size) => {
+                  setCurId(detailProduct.id);
+                  setFc(color);
+                  setSelectedSize(size);
+                  setDirectLensMode('specialist');
+                  setDirectLensChoiceId('');
+                  setDirectOrder({ product: detailProduct, color, size });
+                }}
+              />
+            </Suspense>
+          </div>
+        )}
+
+        {/* Headless Live 3D Camera / Customer Photo Try-On Controller (lazy loaded only when activated) */}
+        {camOn && cur && (
+          <Suspense fallback={<PageSuspendFallback label="جاري تشغيل تجربة الكاميرا 3D..." />}>
+            <FaceTryOnStage
+              product={cur}
+              products={products}
+              onSelectProduct={setCurId}
+              onOrderProduct={(pid) => {
+                const targetProd = products.find((p) => p.id === pid) || cur;
+                setCurId(pid);
+                setCamOn(false);
+                setDirectLensMode('specialist');
+                setDirectLensChoiceId('');
+                setDirectOrder({ product: targetProd, color: fc, size: selectedSize });
+              }}
               initialRxUrl={rxLocalPreview && rxLocalPreview !== 'pdf' ? rxLocalPreview : img}
               onRxAttached={async (rxUrl) => {
                 if (!rxUrl) {
@@ -1233,91 +1438,22 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                 } else {
                   setImg(rxUrl);
                 }
-                toast('تم حفظ صورة الكشف للخطوة الأخيرة ✓');
+                toast('تم إرفاق روشتة كشف النظر ✓');
               }}
-              onToggleFavorite={() =>
-                setFav((f) =>
-                  f.includes(detailProduct.id) ? f.filter((x) => x !== detailProduct.id) : [...f, detailProduct.id]
-                )
-              }
-              onBack={closeFrameDetail}
-              onSelectRelated={(rid) => openFrameDetail(rid)}
-              onTryOn={(color, size) => {
-                setCurId(detailProduct.id);
-                setFc(color);
-                setSelectedSize(size);
-                closeFrameDetail();
-                setCamOn(true);
-              }}
-              onAddToCart={(color, size) => {
-                addCart({
-                  productId: detailProduct.id,
-                  name: detailProduct.name,
-                  desc: `إطار فقط · مقاس ${size}`,
-                  price: detailProduct.price,
-                  type: detailProduct.type,
-                  frame: color,
-                  lens: detailProduct.lens,
-                  size,
-                });
-              }}
-              onGoCheckout={(color, size) => {
-                setCurId(detailProduct.id);
-                setFc(color);
-                setSelectedSize(size);
-                setDirectLensMode('specialist');
-                setDirectLensChoiceId('');
-                setDirectOrder({ product: detailProduct, color, size });
+              frameColor={fc}
+              lensColor={lc}
+              frameSize={selectedSize}
+              coatingId={activeCatMeta.coatingPreviewId}
+              faceShape={face}
+              onFaceShapeDetected={setFace}
+              camOn={camOn}
+              onStartCam={() => setCamOn(true)}
+              onModeChange={(m) => {
+                if (m === 'photo') setCamOn(false);
               }}
             />
-          </div>
+          </Suspense>
         )}
-
-        {/* Headless Live 3D Camera / Customer Photo Try-On Controller (Zero dummy portrait inline) */}
-        <FaceTryOnStage
-          product={cur}
-          products={products}
-          onSelectProduct={setCurId}
-          onOrderProduct={(pid) => {
-            const targetProd = products.find((p) => p.id === pid) || cur;
-            setCurId(pid);
-            setCamOn(false);
-            setDirectLensMode('specialist');
-            setDirectLensChoiceId('');
-            setDirectOrder({ product: targetProd, color: fc, size: selectedSize });
-          }}
-          initialRxUrl={rxLocalPreview && rxLocalPreview !== 'pdf' ? rxLocalPreview : img}
-          onRxAttached={async (rxUrl) => {
-            if (!rxUrl) {
-              setRxLocalPreview(null);
-              setImg(null);
-              return;
-            }
-            setRxLocalPreview(rxUrl);
-            if (rxUrl.startsWith('data:')) {
-              try {
-                const stored = await uploadDataUrlToRxBucket(rxUrl, shop.id);
-                setImg(stored);
-              } catch {
-                setImg(rxUrl);
-              }
-            } else {
-              setImg(rxUrl);
-            }
-            toast('تم إرفاق روشتة كشف النظر ✓');
-          }}
-          frameColor={fc}
-          lensColor={lc}
-          frameSize={selectedSize}
-          coatingId={activeCatMeta.coatingPreviewId}
-          faceShape={face}
-          onFaceShapeDetected={setFace}
-          camOn={camOn}
-          onStartCam={() => setCamOn(true)}
-          onModeChange={(m) => {
-            if (m === 'photo') setCamOn(false);
-          }}
-        />
 
         {tab === 'shop' && !detailProduct && (
           <div className="space-y-8 fade">
@@ -1385,100 +1521,114 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
-                {list.slice(0, storeVisibleCount).map((p) => {
-                  const modelKey = (p.modelCode || '').trim().toLowerCase();
-                  const groupVariants = shop.groupColorsInStore && modelKey ? groupedVariantMap.get(modelKey) || [p] : [p];
-                  const mergedSwatches = Array.from(
-                    new Set(
-                      groupVariants.flatMap((gp) =>
-                        gp.frameColors && gp.frameColors.length > 0
-                          ? gp.frameColors
-                          : gp.availableColors && gp.availableColors.length > 0
-                          ? gp.availableColors
-                          : [gp.frameHexColor || gp.frame]
-                      )
-                    )
-                  );
-                  const swatches =
-                    mergedSwatches.length > 0
-                      ? mergedSwatches
-                      : [p.frame, '#0F172A', '#7A4A2B', '#CBD5E1'].filter((c, i, arr) => arr.indexOf(c) === i);
-                  const activeSwatch = cardSelectedColors[p.id] || swatches[0];
-                  const activeVariant =
-                    groupVariants.find((gp) => (gp.frameHexColor || gp.frame) === activeSwatch) || p;
-                  const storeImg = resolveStoreFrontUrl(activeVariant);
+              {pagedError ? (
+                <AsyncErrorBanner
+                  message={pagedError}
+                  retrying={pagedLoading}
+                  onRetry={() => setPagedRetryNonce((n) => n + 1)}
+                />
+              ) : pagedLoading && list.length === 0 ? (
+                <ProductGridSkeleton count={6} />
+              ) : list.length > 0 ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
+                    {list.map((p) => {
+                      const modelKey = (p.modelCode || '').trim().toLowerCase();
+                      const groupVariants = shop.groupColorsInStore && modelKey ? groupedVariantMap.get(modelKey) || [p] : [p];
+                      const mergedSwatches = Array.from(
+                        new Set(
+                          groupVariants.flatMap((gp) =>
+                            gp.frameColors && gp.frameColors.length > 0
+                              ? gp.frameColors
+                              : gp.availableColors && gp.availableColors.length > 0
+                              ? gp.availableColors
+                              : [gp.frameHexColor || gp.frame]
+                          )
+                        )
+                      );
+                      const swatches =
+                        mergedSwatches.length > 0
+                          ? mergedSwatches
+                          : [p.frame, '#0F172A', '#7A4A2B', '#CBD5E1'].filter((c, i, arr) => arr.indexOf(c) === i);
+                      const activeSwatch = cardSelectedColors[p.id] || swatches[0];
+                      const activeVariant =
+                        groupVariants.find((gp) => (gp.frameHexColor || gp.frame) === activeSwatch) || p;
+                      const storeImg = resolveStoreFrontUrl(activeVariant);
 
-                  return (
-                    <div
-                      key={p.id}
-                      onClick={() => openFrameDetail(activeVariant.id)}
-                      className="rounded-2xl bg-[#FAF8F5] border border-stone-200/85 p-3 sm:p-4 cursor-pointer transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.97] text-[#0F172A] flex flex-col"
-                    >
-                      <div className="relative rounded-xl bg-white/85 border border-stone-100/90 px-3 py-5 flex items-center justify-center min-h-[170px] sm:min-h-[205px]">
-                        <MiniGlasses
-                          type={activeVariant.type}
-                          frame={activeSwatch}
-                          lens={activeVariant.lens}
-                          w={155}
-                          imageUrl={storeImg}
-                        />
+                      return (
+                        <div
+                          key={p.id}
+                          onClick={() => openFrameDetail(activeVariant.id)}
+                          className="rounded-2xl bg-[#FAF8F5] border border-stone-200/85 p-3 sm:p-4 cursor-pointer transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.97] text-[#0F172A] flex flex-col"
+                        >
+                          <div className="relative rounded-xl bg-white/85 border border-stone-100/90 px-3 py-5 flex items-center justify-center min-h-[170px] sm:min-h-[205px]">
+                            <MiniGlasses
+                              type={activeVariant.type}
+                              frame={activeSwatch}
+                              lens={activeVariant.lens}
+                              w={155}
+                              imageUrl={storeImg}
+                            />
 
-                        {/* Clean Wishlist Heart */}
-                        <span className="absolute top-2.5 start-2.5 z-10">
-                          <Heart p={activeVariant} />
-                        </span>
-                      </div>
+                            {/* Clean Wishlist Heart */}
+                            <span className="absolute top-2.5 start-2.5 z-10">
+                              <Heart p={activeVariant} />
+                            </span>
+                          </div>
 
-                      <div className="mt-3 font-extrabold text-sm sm:text-base text-[#0F172A] truncate">
-                        {activeVariant.name}
-                      </div>
+                          <div className="mt-3 font-extrabold text-sm sm:text-base text-[#0F172A] truncate">
+                            {activeVariant.name}
+                          </div>
 
-                      <div className="mt-1 text-sm font-extrabold text-[#0F172A] tabular-nums">
-                        <Pr x={activeVariant} />
-                      </div>
+                          <div className="mt-1 text-sm font-extrabold text-[#0F172A] tabular-nums">
+                            <Pr x={activeVariant} />
+                          </div>
 
-                      {/* Quiet Luxury Primary Try-On CTA */}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setCurId(activeVariant.id);
-                          setFc(activeSwatch);
-                          setDetailId(null);
-                          setCamOn(true);
-                        }}
-                        className="mt-3 w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#FAF8F5] text-xs font-extrabold shadow-xs cursor-pointer transition-all duration-150 active:scale-[0.97] flex items-center justify-center gap-1.5"
-                      >
-                        <I n="camera" s={14} />
-                        <span>جرّب على وجهك</span>
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
+                          {/* Quiet Luxury Primary Try-On CTA */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCurId(activeVariant.id);
+                              setFc(activeSwatch);
+                              setDetailId(null);
+                              setCamOn(true);
+                            }}
+                            className="mt-3 w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#FAF8F5] text-xs font-extrabold shadow-xs cursor-pointer transition-all duration-150 active:scale-[0.97] flex items-center justify-center gap-1.5"
+                          >
+                            <I n="camera" s={14} />
+                            <span>جرّب على وجهك</span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
 
-              {list.length > STORE_PAGE_SIZE && (
-                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-[#FAF8F5] border border-stone-200/85 px-4 py-3 text-xs text-slate-700">
-                  <span>
-                    عرض <b>{Math.min(storeVisibleCount, list.length)}</b> من <b>{list.length}</b> نظارة
-                  </span>
-                  {list.length > storeVisibleCount && (
-                    <button
-                      type="button"
-                      className="min-h-[44px] px-4 py-2 rounded-xl bg-[#0F172A] text-[#FAF8F5] font-bold cursor-pointer transition-transform duration-150 active:scale-[0.97]"
-                      onClick={() => setStoreVisibleCount((c) => c + STORE_PAGE_SIZE)}
-                    >
-                      عرض المزيد (+{Math.min(STORE_PAGE_SIZE, list.length - storeVisibleCount)})
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {!list.length && (
-                <div className="rounded-2xl bg-[#FAF8F5] border border-stone-200/85 text-center text-slate-500 py-10 text-sm">
-                  لا توجد نظارات مطابقة لهذا التصنيف حالياً
-                </div>
+                  <LoadMoreBar
+                    loadedCount={list.length}
+                    totalCount={pagedTotalCount}
+                    hasMore={pagedHasMore}
+                    loadingMore={pagedLoadingMore}
+                    onLoadMore={handleLoadMoreStoreProducts}
+                    itemLabel="نظارة"
+                  />
+                </>
+              ) : (
+                <ArabicEmptyState
+                  title="لا توجد نتائج"
+                  subtitle="لا توجد نظارات مطابقة لبحثك أو هذا التصنيف حالياً."
+                  actionLabel={
+                    cat !== 'all' || shapeFilter !== 'all' || colorFilter !== 'all' || searchQuery.trim() !== ''
+                      ? 'إظهار جميع النظارات'
+                      : undefined
+                  }
+                  onAction={() => {
+                    setCat('all');
+                    setShapeFilter('all');
+                    setColorFilter('all');
+                    setSearchQuery('');
+                  }}
+                />
               )}
             </section>
 
@@ -1831,7 +1981,15 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                           ) : rxLocalPreview === 'pdf' || img.endsWith('.pdf') ? (
                             <div className="text-xs p-2.5 bg-white text-[#0F172A] font-bold text-center">ملف PDF</div>
                           ) : (
-                            <img src={rxLocalPreview || img} alt="كشف" className="w-full h-20 object-cover" />
+                            <img
+                              src={rxLocalPreview || img}
+                              alt="كشف"
+                              width={80}
+                              height={80}
+                              loading="lazy"
+                              decoding="async"
+                              className="w-full h-20 object-cover"
+                            />
                           )}
                         </div>
                         <div className="flex-1 text-xs">
@@ -2292,7 +2450,15 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                               ملف PDF
                             </div>
                           ) : (
-                            <img src={rxLocalPreview || img} alt="كشف" className="w-full h-24 object-cover" />
+                            <img
+                              src={rxLocalPreview || img}
+                              alt="كشف"
+                              width={96}
+                              height={96}
+                              loading="lazy"
+                              decoding="async"
+                              className="w-full h-24 object-cover"
+                            />
                           )}
                         </div>
                         <div className="flex-1 text-sm">
@@ -2669,23 +2835,25 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
 
             {cmpSplitLive && (
               <div className="rounded-2xl overflow-hidden border border-[#E2E8F0]">
-                <FaceTryOnStage
-                  product={cmpA}
-                  products={products}
-                  compareProduct={cmpB}
-                  splitMode={true}
-                  frameColor={cmpA.frame}
-                  lensColor={cmpA.lens}
-                  frameSize={selectedSize}
-                  coatingId={activeCatMeta.coatingPreviewId}
-                  faceShape={face}
-                  onFaceShapeDetected={setFace}
-                  camOn={false}
-                  onStartCam={() => {}}
-                  yawManual={yaw}
-                  onYawManualChange={setYaw}
-                  showLauncherWhenIdle={true}
-                />
+                <Suspense fallback={<ProductGridSkeleton count={1} />}>
+                  <FaceTryOnStage
+                    product={cmpA}
+                    products={products}
+                    compareProduct={cmpB}
+                    splitMode={true}
+                    frameColor={cmpA.frame}
+                    lensColor={cmpA.lens}
+                    frameSize={selectedSize}
+                    coatingId={activeCatMeta.coatingPreviewId}
+                    faceShape={face}
+                    onFaceShapeDetected={setFace}
+                    camOn={false}
+                    onStartCam={() => {}}
+                    yawManual={yaw}
+                    onYawManualChange={setYaw}
+                    showLauncherWhenIdle={true}
+                  />
+                </Suspense>
               </div>
             )}
 
@@ -2933,7 +3101,15 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                   ) : rxLocalPreview === 'pdf' || img.endsWith('.pdf') ? (
                     <span className="text-[0.65rem] font-bold">ملف PDF</span>
                   ) : (
-                    <img src={rxLocalPreview || img} alt="الكشف الطبي" className="w-full h-full object-cover" />
+                    <img
+                      src={rxLocalPreview || img}
+                      alt="الكشف الطبي"
+                      width={64}
+                      height={64}
+                      loading="lazy"
+                      decoding="async"
+                      className="w-full h-full object-cover"
+                    />
                   )}
                 </div>
                 <div className="flex-1 text-xs">

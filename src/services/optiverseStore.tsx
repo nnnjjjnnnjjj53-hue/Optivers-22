@@ -17,6 +17,8 @@ import {
 import { DEFAULT_OFFICIAL_LENS_BRANDS } from '../data/opticalLensMatrix';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { idbLoadSnapshot, idbSaveSnapshot } from '../utils/indexedDbStore';
+import { cachedQuery, clearAllQueryCache, invalidateCache } from '../utils/queryCache';
+import { optimizeImageForUpload } from '../utils/imageUploadOptimizer';
 import {
   AuditLog,
   AuthSession,
@@ -324,6 +326,67 @@ function addMyInquiryId(id: string) {
   }
 }
 
+export interface PaginatedResult<T> {
+  rows: T[];
+  totalCount: number | null;
+  hasMore: boolean;
+}
+
+export interface AdminStatsSummary {
+  totalShops: number;
+  pendingShops: number;
+  activeShops: number;
+  trialShops: number;
+  pausedOrExpiredShops: number;
+  totalProducts: number;
+  totalInquiries: number;
+  totalCrmCustomers: number;
+  paidRevenue: number;
+}
+
+const SHOP_LIST_CORE_COLS =
+  'id, owner_id, owner_name, owner_email, name, city, governorate, address, maps_url, onboarding_completed, enable_delivery_service, delivery_fee, delivery_areas, is_featured, ai_credits_limit, ai_credits_used, topup_credits, is_demo_admin_store, plan_tier, billing_cycle, slug, plan_name, price, status, days_left, trial_ends_at, expires_label, logo, color, wa_phone, created_at';
+
+const SHOP_LIST_COLS = `${SHOP_LIST_CORE_COLS}, theme_key`;
+
+const SHOP_DETAIL_COLS = `${SHOP_LIST_COLS}, tagline, banner_image_url, video_url, ai_logo_generations, merchant_lens_configs, group_colors_in_store, show_color_swatches_to_customer, show_stock_count_to_customer, hide_out_of_stock_to_customer, show_business_hours_bar, working_hours_start, working_hours_end, reminder_review_hours, reminder_maintenance_months, reminder_exam_months, reminder_mode, reminder_notifications_enabled, promo_banner_enabled, promo_banner_text, recall_6m_enabled, recall_12m_enabled`;
+
+const PRODUCT_LIST_CORE_COLS =
+  'id, shop_id, code, name, description, type, cat, price, sale_price, discount_pct, frame_color, lens_color, tryon_mode, processed_image, model_3d_url, glb_url, model_calibration, frame_colors, available_colors, available_sizes, shapes, is_published, is_deleted, created_at';
+
+const PRODUCT_LIST_COLS = `${PRODUCT_LIST_CORE_COLS}, frame_type, sub_category, image_path, front_catalog_path, side_image_path, clip_on_image_path, clip_on_front_catalog_path, clip_on_side_image_path, aspect_ratio, lens_width_mm, bridge_width_mm, temple_length_mm, total_frame_width_mm, frame_hex_color, frame_opacity, stock, is_new_collection, new_collection_until`;
+
+const PRODUCT_IMAGE_COLS =
+  'id, product_id, shop_id, angle_yaw, label, image_url, original_image_url, lens_mask_url, kind, sort_order';
+
+const INQUIRY_COLS =
+  'id, ref_code, shop_id, kind, customer_name, phone, frame_name, frame_type, frame_color, lens_color, lens_name, brand_name, extras_txt, frame_price, lens_price, add_price, initial_price, final_price, rx_image_url, pd, notes, status, alt_to, alt_from, stage, payment_method, rxn, created_at';
+
+const CRM_CORE_COLS =
+  'id, shop_id, customer_name, phone, product_id, product_name, lens_summary, pd, order_date, notes';
+
+const CRM_COLS = `${CRM_CORE_COLS}, price_paid, rating, review_comment, recall_review_sent_at, recall_6m_sent_at, recall_12m_sent_at`;
+
+const PAYMENT_COLS = 'id, invoice_no, shop_id, shop_name, amount, method, reference_no, status, created_at';
+
+const AUDIT_COLS = 'id, actor_role, shop_id, action, details, created_at';
+
+const REVIEW_COLS = 'id, product_id, shop_id, author_name, rating, comment, created_at';
+
+const LENS_TYPE_COLS = 'id, shop_id, name_ar, name_en, description, icon, price, discount_pct, is_active, sort_order';
+
+const BRAND_COLS = 'id, shop_id, name_ar, name_en, origin, logo, warranty_years, price, discount_pct, is_active, sort_order';
+
+const EXTRA_COLS = 'id, shop_id, name_ar, description, price, discount_pct, icon, is_active, sort_order';
+
+const PLATFORM_SETTINGS_CORE_COLS =
+  'id, enable_prescription_lenses, allow_merchant_lens_branding_toggle, enable_sponsored_suppliers, plans, annual_discount_months, trial_days, trial_max_products, trial_ai_credits, topup_pack_frames, topup_pack_price, sponsored_suppliers';
+
+const PLATFORM_SETTINGS_COLS = `${PLATFORM_SETTINGS_CORE_COLS}, enable_lenses_system, enable_stores_directory, landing_preview_frames, official_lens_brands`;
+
+const PLAN_COLS =
+  'id, tier_key, name, price, max_products, monthly_ai_credits, turbo_upload_enabled, camera_pd_ruler_enabled, featured_boost_enabled, is_active, features, sort_order';
+
 export interface StoreCtxValue {
   route: string;
   navigate: (path: string) => void;
@@ -441,12 +504,63 @@ export interface StoreCtxValue {
   setFav: React.Dispatch<React.SetStateAction<string[]>>;
   cart: CartItem[];
   setCart: React.Dispatch<React.SetStateAction<CartItem[]>>;
-  enterShopAsMerchant: (s: Shop) => void;
+  enterShopAsMerchant: (s: Shop) => Promise<void> | void;
   switchToAdminDemoStore: () => Promise<void>;
   exportFullBackup: () => Promise<void>;
   uploadAssetToStorage: (blob: Blob, folder: string, ext: string) => Promise<string>;
   uploadRxPrescriptionToStorage: (shopId: string, blob: Blob, ext: string) => Promise<string>;
-  hydrateFromSupabase: () => Promise<void>;
+  hydrateFromSupabase: (opts?: {
+    role?: AuthSession['role'];
+    shopId?: string;
+    routeOverride?: string;
+    force?: boolean;
+  }) => Promise<void>;
+  fetchStorefrontProductsPage: (opts: {
+    shopId: string;
+    page: number;
+    pageSize?: number;
+    search?: string;
+    cat?: string;
+  }) => Promise<PaginatedResult<Product>>;
+  fetchProductDetails: (
+    productId: string,
+    shopId?: string
+  ) => Promise<{ images: ProductImage[]; reviews: ProductReview[] }>;
+  fetchDirectoryShopsPage: (opts: {
+    page: number;
+    pageSize?: number;
+    search?: string;
+    gov?: string;
+  }) => Promise<PaginatedResult<Shop>>;
+  fetchMerchantProductsPage: (opts: {
+    shopId: string;
+    page: number;
+    pageSize?: number;
+    search?: string;
+    invFilter?: 'all' | 'in_stock' | 'low' | 'out' | 'hidden';
+  }) => Promise<PaginatedResult<Product>>;
+  fetchMerchantInquiriesPage: (opts: {
+    shopId: string;
+    page: number;
+    pageSize?: number;
+    search?: string;
+  }) => Promise<PaginatedResult<Inquiry>>;
+  fetchMerchantCrmPage: (opts: {
+    shopId: string;
+    page: number;
+    pageSize?: number;
+    search?: string;
+  }) => Promise<PaginatedResult<CrmCustomer>>;
+  fetchAdminShopsPage: (opts: {
+    page: number;
+    pageSize?: number;
+    search?: string;
+    statusFilter?: string;
+  }) => Promise<PaginatedResult<Shop>>;
+  fetchAdminPaymentsPage: (opts: { page: number; pageSize?: number }) => Promise<PaginatedResult<PaymentRecord>>;
+  fetchAdminAuditLogsPage: (opts: { page: number; pageSize?: number }) => Promise<PaginatedResult<AuditLog>>;
+  fetchAdminStatsSummary: () => Promise<AdminStatsSummary>;
+  loadShopAdminContext: (shopId: string) => Promise<void>;
 }
 
 const Ctx = createContext<StoreCtxValue | null>(null);
@@ -499,6 +613,20 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
   const hasMutatedBeforeIdbRef = useRef(false);
   const productsRef = useRef<Product[]>(products);
   productsRef.current = products;
+  const sessionRef = useRef<AuthSession | null>(session);
+  sessionRef.current = session;
+  const shopsRef = useRef<Shop[]>(shops);
+  shopsRef.current = shops;
+  const inqRef = useRef<Inquiry[]>(inq);
+  inqRef.current = inq;
+  const crmRef = useRef<CrmCustomer[]>(crmCustomers);
+  crmRef.current = crmCustomers;
+  const paymentsRef = useRef<PaymentRecord[]>(payments);
+  paymentsRef.current = payments;
+  const auditRef = useRef<AuditLog[]>(auditLogs);
+  auditRef.current = auditLogs;
+  const reviewsRef = useRef<ProductReview[]>(reviews);
+  reviewsRef.current = reviews;
 
   const toast = useCallback((m: string) => {
     setTst(m);
@@ -987,374 +1115,1058 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
-  // Hydrate & Subscribe from Supabase when configured
-  const hydrateFromSupabase = useCallback(async () => {
-    if (!supabase) return;
-    try {
-      const curPath = typeof window !== 'undefined' ? window.location.pathname : '';
-      const slugMatch = curPath.match(/^\/s\/([^/?#]+)/);
-      const {
-        data: { session: sbSess },
-      } = await supabase.auth.getSession();
-      const hasPrivilegedSession = Boolean(
-        (session && (session.role === 'merchant' || session.role === 'admin' || session.role === 'super_admin')) ||
-        sbSess?.user
+  const mapDbInquiryRow = (r: any, mineIds: string[]): Inquiry => ({
+    id: r.ref_code || r.id,
+    shopId: r.shop_id,
+    kind: r.kind,
+    cust: r.customer_name,
+    phone: r.phone,
+    frameName: r.frame_name,
+    type: r.frame_type,
+    frame: r.frame_color,
+    lens: r.lens_color,
+    lensName: r.lens_name,
+    brandName: r.brand_name,
+    extrasTxt: r.extras_txt,
+    fp: r.frame_price,
+    lensPrice: r.lens_price,
+    add: r.add_price,
+    price: r.initial_price,
+    final: r.final_price || undefined,
+    img: r.rx_image_url,
+    pd: r.pd || '',
+    notes: r.notes || '',
+    status: r.status,
+    alt: r.alt_to || undefined,
+    altFrom: r.alt_from || undefined,
+    stage: r.stage,
+    pay: r.payment_method || undefined,
+    rxn: Number(r.rxn || 0),
+    time: r.created_at
+      ? new Date(r.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
+      : 'الآن',
+    mine: mineIds.includes(r.ref_code || r.id),
+  });
+
+  const mapDbCrmRow = (c: any): CrmCustomer => ({
+    id: c.id,
+    shopId: c.shop_id,
+    customerName: c.customer_name,
+    phone: c.phone,
+    productId: c.product_id || undefined,
+    productName: c.product_name || 'نظارة',
+    lensSummary: c.lens_summary || '',
+    pd: c.pd || '',
+    orderDate: c.order_date,
+    pricePaid: typeof c.price_paid === 'number' ? c.price_paid : undefined,
+    rating: typeof c.rating === 'number' ? c.rating : undefined,
+    reviewComment: c.review_comment || undefined,
+    recallReviewSentAt: c.recall_review_sent_at || undefined,
+    recall6mSentAt: c.recall_6m_sent_at || undefined,
+    recall12mSentAt: c.recall_12m_sent_at || undefined,
+    notes: c.notes || '',
+  });
+
+  const mapDbPaymentRow = (r: any): PaymentRecord => ({
+    id: r.invoice_no || r.id,
+    shopId: r.shop_id || undefined,
+    shopName: r.shop_name,
+    amount: r.amount,
+    method: r.method,
+    referenceNo: r.reference_no || undefined,
+    status: r.status,
+    date: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+  });
+
+  const mapDbAuditRow = (a: any): AuditLog => ({
+    id: a.id,
+    actorRole: a.actor_role || 'merchant',
+    shopId: a.shop_id || undefined,
+    action: a.action,
+    details: a.details || '',
+    createdAt: a.created_at
+      ? new Date(a.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
+      : 'الآن',
+  });
+
+  const mapDbReviewRow = (rv: any): ProductReview => ({
+    id: rv.id,
+    productId: rv.product_id,
+    shopId: rv.shop_id,
+    authorName: rv.author_name,
+    rating: Number(rv.rating || 5),
+    comment: rv.comment,
+    createdAt: rv.created_at,
+  });
+
+  const applyPlatformSettingsAndPlans = useCallback((settingsData: any, plansData?: any[]) => {
+    if (settingsData) {
+      const sRow = settingsData as any;
+      const dbPlans: Plan[] = Array.isArray(sRow.plans) && sRow.plans.length ? sRow.plans : PLANS0;
+      const lensesFlag = Boolean(sRow.enable_lenses_system ?? sRow.enable_prescription_lenses);
+      setPlatformSettings({
+        enablePrescriptionLenses: lensesFlag,
+        enableLensesSystem: lensesFlag,
+        allowMerchantLensBrandingToggle: Boolean(sRow.allow_merchant_lens_branding_toggle),
+        enableSponsoredSuppliers: Boolean(sRow.enable_sponsored_suppliers),
+        enableStoresDirectory: Boolean(sRow.enable_stores_directory),
+        landingPreviewFrames: (
+          Array.isArray(sRow.landing_preview_frames) && sRow.landing_preview_frames.length
+            ? sRow.landing_preview_frames
+            : DEFAULT_LANDING_PREVIEW_FRAMES
+        ).map((f: any) => ({
+          ...f,
+          dimensions: typeof f.dimensions === 'string' ? f.dimensions.replace(/□/g, '-') : f.dimensions,
+        })),
+        officialLensBrands:
+          Array.isArray(sRow.official_lens_brands) && sRow.official_lens_brands.length
+            ? sRow.official_lens_brands
+            : DEFAULT_OFFICIAL_LENS_BRANDS,
+        plans: dbPlans,
+        annualDiscountMonths: Number(sRow.annual_discount_months ?? 2),
+        trialDays: Number(sRow.trial_days ?? 14),
+        trialMaxProducts: Number(sRow.trial_max_products ?? 20),
+        trialAiCredits: Number(sRow.trial_ai_credits ?? 25),
+        topupPackFrames: Number(sRow.topup_pack_frames ?? 50),
+        topupPackPrice: Number(sRow.topup_pack_price ?? 300),
+        sponsoredSuppliers: Array.isArray(sRow.sponsored_suppliers) ? sRow.sponsored_suppliers : [],
+      });
+      setPlans(dbPlans);
+    } else if (plansData?.length) {
+      setPlans(
+        plansData.map((r: any, idx: number) => ({
+          id: r.id,
+          tierKey: r.tier_key || (idx === 0 ? 'basic' : idx === 1 ? 'pro' : 'premium'),
+          name: r.name,
+          price: r.price,
+          maxProducts: r.max_products || (idx === 0 ? 100 : idx === 1 ? 200 : 300),
+          monthlyAiCredits: r.monthly_ai_credits || (idx === 0 ? 110 : idx === 1 ? 220 : 330),
+          turboUploadEnabled: Boolean(r.turbo_upload_enabled ?? idx > 0),
+          cameraPdRulerEnabled: Boolean(r.camera_pd_ruler_enabled ?? idx > 0),
+          featuredBoostEnabled: Boolean(r.featured_boost_enabled ?? idx > 1),
+          on: r.is_active,
+          feats: r.features || [],
+        }))
       );
+    }
+  }, []);
 
-      // Store Isolation: On a public storefront with no logged-in merchant/admin session,
-      // fetch ONLY the matching shop, its published non-deleted products, and its reviews.
-      // Do NOT fetch inquiries, payments, or crm_customers.
-      if (slugMatch && !hasPrivilegedSession) {
-        const storefrontSlug = decodeURIComponent(slugMatch[1]);
-        const { data: matchedShopRow } = await supabase
-          .from('shops_public')
-          .select('*')
-          .eq('slug', storefrontSlug)
+  const fetchSettingsAndPlans = useCallback(async (force = false) => {
+    if (!supabase) return;
+    if (force) {
+      invalidateCache('settings:');
+      invalidateCache('plans:');
+    }
+    const [settingsRes, plansRes] = await Promise.all([
+      cachedQuery('settings:default', async () => {
+        const res = await supabase!
+          .from('platform_settings')
+          .select(PLATFORM_SETTINGS_COLS)
+          .eq('id', 'default')
           .maybeSingle();
+        if (res.error) {
+          return supabase!
+            .from('platform_settings')
+            .select(PLATFORM_SETTINGS_CORE_COLS)
+            .eq('id', 'default')
+            .maybeSingle();
+        }
+        return res;
+      }),
+      cachedQuery('plans:all', async () =>
+        supabase!.from('plans').select(PLAN_COLS).order('sort_order', { ascending: true })
+      ),
+    ]);
+    applyPlatformSettingsAndPlans(settingsRes.data, plansRes.data || undefined);
+  }, [applyPlatformSettingsAndPlans]);
 
-        if (matchedShopRow) {
-          const targetShopId = matchedShopRow.id;
-          const [prodsRes, imgsRes, revRes, ltRes, brRes, exRes, settingsRes] = await Promise.all([
-            supabase
-              .from('products')
-              .select('*')
-              .eq('shop_id', targetShopId)
-              .eq('is_deleted', false)
-              .eq('is_published', true)
-              .order('created_at', { ascending: true }),
-            supabase
-              .from('product_images')
-              .select('*')
-              .eq('shop_id', targetShopId)
-              .order('sort_order', { ascending: true }),
-            supabase
-              .from('frame_reviews')
-              .select('*')
-              .eq('shop_id', targetShopId)
-              .order('created_at', { ascending: false }),
-            supabase.from('lens_types').select('*').order('sort_order', { ascending: true }),
-            supabase.from('brands').select('*').order('sort_order', { ascending: true }),
-            supabase.from('extras').select('*').order('sort_order', { ascending: true }),
-            supabase.from('platform_settings').select('*').eq('id', 'default').maybeSingle(),
+  const fetchScopedCatalog = useCallback(async (shopId: string, force = false) => {
+    if (!supabase || !shopId) return;
+    if (force) invalidateCache(`catalog:${shopId}`);
+    const [ltRes, brRes, exRes] = await cachedQuery(`catalog:${shopId}`, async () =>
+      Promise.all([
+        supabase!.from('lens_types').select(LENS_TYPE_COLS).eq('shop_id', shopId).order('sort_order', { ascending: true }),
+        supabase!.from('brands').select(BRAND_COLS).eq('shop_id', shopId).order('sort_order', { ascending: true }),
+        supabase!.from('extras').select(EXTRA_COLS).eq('shop_id', shopId).order('sort_order', { ascending: true }),
+      ])
+    );
+    if (ltRes.data?.length) {
+      setLensTypes((prev) => [
+        ...prev.filter((x) => x.shopId !== shopId),
+        ...ltRes.data!.map((r: any) => ({
+          id: r.id,
+          shopId: r.shop_id,
+          name: r.name_ar,
+          en: r.name_en,
+          desc: r.description,
+          icon: r.icon,
+          price: r.price,
+          disc: r.discount_pct || 0,
+          on: r.is_active ?? true,
+        })),
+      ]);
+    }
+    if (brRes.data?.length) {
+      setBrands((prev) => [
+        ...prev.filter((x) => x.shopId !== shopId),
+        ...brRes.data!.map((r: any) => ({
+          id: r.id,
+          shopId: r.shop_id,
+          name: r.name_ar,
+          en: r.name_en,
+          origin: r.origin,
+          logo: r.logo,
+          warrantyYears: r.warranty_years,
+          price: r.price,
+          disc: r.discount_pct || 0,
+          on: r.is_active ?? true,
+        })),
+      ]);
+    }
+    if (exRes.data?.length) {
+      setExtras((prev) => [
+        ...prev.filter((x) => x.shopId !== shopId),
+        ...exRes.data!.map((r: any) => ({
+          id: r.id,
+          shopId: r.shop_id,
+          name: r.name_ar,
+          desc: r.description,
+          price: r.price,
+          disc: r.discount_pct || 0,
+          icon: r.icon,
+          on: r.is_active ?? true,
+        })),
+      ]);
+    }
+  }, []);
+
+  const mergeProductsState = useCallback((incoming: Product[]) => {
+    if (!incoming.length) return;
+    setProducts((prev) => {
+      const map = new Map<string, Product>();
+      for (const p of prev) map.set(p.id, p);
+      for (const p of incoming) {
+        const existing = map.get(p.id);
+        map.set(
+          p.id,
+          existing && existing.images?.length && !p.images?.length
+            ? { ...p, images: existing.images, additionalImages: existing.additionalImages }
+            : p
+        );
+      }
+      return Array.from(map.values());
+    });
+  }, []);
+
+  // Paginated Fetchers (range + deterministic ordering + count on page 0 only + 60s cache)
+  const fetchStorefrontProductsPage = useCallback(
+    async ({
+      shopId,
+      page,
+      pageSize = 24,
+      search = '',
+      cat = 'all',
+    }: {
+      shopId: string;
+      page: number;
+      pageSize?: number;
+      search?: string;
+      cat?: string;
+    }): Promise<PaginatedResult<Product>> => {
+      const cleanSearch = search.trim();
+      if (!supabase) {
+        const filtered = productsRef.current
+          .filter((p) => p.shopId === shopId && !p.isDeleted && p.isPublished !== false)
+          .filter((p) => {
+            if (cleanSearch) {
+              const q = cleanSearch.toLowerCase();
+              if (!p.name.toLowerCase().includes(q) && !(p.code || '').toLowerCase().includes(q)) return false;
+            }
+            if (cat && cat !== 'all') {
+              const catStr = String(cat);
+              const rawCat = String(p.cat || '');
+              const rawSub = String(p.subCategory || '');
+              if (catStr === 'offers') return (p.disc || 0) > 0 || (typeof p.salePrice === 'number' && p.salePrice > 0 && p.salePrice < p.price);
+              if (catStr === 'new_arrivals') return Boolean(p.isNewCollection);
+              if (catStr === 'reading') return rawCat === 'reading' || rawSub === 'reading' || rawSub === 'optical';
+              if (catStr === 'kids') return rawCat === 'kids' || rawSub === 'kids_optical' || rawSub === 'kids_sun' || p.frameType === 'kids';
+              if (catStr === 'metal') return p.frameType === 'metal' || p.modelCalibration?.material === 'metal' || p.type === 'rimless' || (p.type || '').includes('معدن');
+              if (catStr === 'plastic') return (p.type || '').includes('بلاستيك');
+              if (catStr === 'titanium') return (p.type || '').includes('تيتانيوم');
+              if (catStr === 'rimless') return p.type === 'rimless' || (p.type || '').includes('بدون إطار');
+              if (catStr === 'prescription') return p.frameType === 'prescription' || rawCat === 'prescription' || ((p.cat === 'med' || p.cat === 'safe') && p.type !== 'rimless');
+              if (catStr === 'sunglasses') return p.frameType === 'sunglasses' || rawCat === 'sunglasses' || p.cat === 'sun';
+              if (catStr === 'clip_on') return p.frameType === 'clip_on' || rawCat === 'clip_on';
+            }
+            return true;
+          });
+        const from = page * pageSize;
+        const rows = filtered.slice(from, from + pageSize);
+        return {
+          rows,
+          totalCount: page === 0 ? filtered.length : null,
+          hasMore: from + pageSize < filtered.length,
+        };
+      }
+
+      const key = `products:storefront:${shopId}:p=${page}:s=${pageSize}:q=${cleanSearch}:c=${cat}`;
+      return cachedQuery(key, async () => {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const buildQuery = (cols: string) => {
+          let q = supabase!
+            .from('products')
+            .select(cols, page === 0 ? { count: 'exact' } : undefined)
+            .eq('shop_id', shopId)
+            .eq('is_deleted', false)
+            .eq('is_published', true);
+          if (cleanSearch) {
+            const safeQ = cleanSearch.replace(/[,()]/g, ' ').trim();
+            if (safeQ) q = q.or(`name.ilike.%${safeQ}%,code.ilike.%${safeQ}%,model_code.ilike.%${safeQ}%`);
+          }
+          if (cat && cat !== 'all') {
+            if (cat === 'offers') q = q.gt('discount_pct', 0);
+            else if (cat === 'new_arrivals') q = q.eq('is_new_collection', true);
+            else if (cat === 'reading') q = q.or('cat.eq.reading,sub_category.eq.reading');
+            else if (cat === 'kids') q = q.or('cat.eq.kids,sub_category.eq.kids,frame_type.eq.kids');
+            else if (cat === 'metal') q = q.or('frame_type.eq.metal,type.eq.rimless,type.ilike.%معدن%');
+            else if (cat === 'plastic') q = q.ilike('type', '%بلاستيك%');
+            else if (cat === 'titanium') q = q.ilike('type', '%تيتانيوم%');
+            else if (cat === 'rimless') q = q.or('type.eq.rimless,type.ilike.%بدون إطار%');
+            else if (cat === 'prescription') q = q.or('frame_type.eq.prescription,cat.eq.prescription,cat.eq.med,cat.eq.safe');
+            else if (cat === 'sunglasses') q = q.or('frame_type.eq.sunglasses,cat.eq.sunglasses,cat.eq.sun');
+            else if (cat === 'clip_on') q = q.or('frame_type.eq.clip_on,cat.eq.clip_on');
+          }
+          return q
+            .order('created_at', { ascending: false })
+            .order('id', { ascending: false })
+            .range(from, to);
+        };
+
+        let res = await buildQuery(PRODUCT_LIST_COLS);
+        if (res.error) {
+          res = await buildQuery(PRODUCT_LIST_CORE_COLS);
+        }
+        if (res.error) {
+          throw new Error(res.error.message || 'تعذر تحميل المنتجات');
+        }
+        const rows = mapDbProductRows(res.data || [], []);
+        mergeProductsState(rows);
+        const totalCount = page === 0 ? res.count ?? rows.length : null;
+        return {
+          rows,
+          totalCount,
+          hasMore: rows.length === pageSize,
+        };
+      });
+    },
+    [mergeProductsState]
+  );
+
+  const fetchProductDetails = useCallback(async (productId: string, shopId?: string) => {
+    if (!supabase || !productId) {
+      const existing = productsRef.current.find((p) => p.id === productId);
+      return {
+        images: existing?.images || [],
+        reviews: reviewsRef.current.filter((r) => r.productId === productId),
+      };
+    }
+    return cachedQuery(`products:detail:${productId}`, async () => {
+      const [imgsRes, revRes] = await Promise.all([
+        supabase!
+          .from('product_images')
+          .select(PRODUCT_IMAGE_COLS)
+          .eq('product_id', productId)
+          .order('sort_order', { ascending: true }),
+        supabase!
+          .from('frame_reviews')
+          .select(REVIEW_COLS)
+          .eq('product_id', productId)
+          .order('created_at', { ascending: false }),
+      ]);
+      const mappedImgs: ProductImage[] = (imgsRes.data || []).map((im: any) => ({
+        id: im.id,
+        productId: im.product_id,
+        angleYaw: im.angle_yaw,
+        label: im.label,
+        imageUrl: im.image_url,
+        originalImageUrl: im.original_image_url || undefined,
+        lensMaskUrl: im.lens_mask_url || undefined,
+        kind: im.kind === 'gallery' ? 'gallery' : 'front_tryon',
+        sortOrder: im.sort_order,
+      }));
+      const mappedRevs = (revRes.data || []).map(mapDbReviewRow);
+      if (mappedImgs.length > 0) {
+        setProducts((prev) =>
+          prev.map((p) => {
+            if (p.id !== productId) return p;
+            const galleryUrls = mappedImgs.filter((im) => im.kind === 'gallery').map((im) => im.imageUrl);
+            return {
+              ...p,
+              images: mappedImgs,
+              additionalImages: galleryUrls.length ? galleryUrls : p.additionalImages,
+            };
+          })
+        );
+      }
+      if (mappedRevs.length > 0 || shopId) {
+        setReviews((prev) => [...mappedRevs, ...prev.filter((r) => r.productId !== productId)]);
+      }
+      return { images: mappedImgs, reviews: mappedRevs };
+    });
+  }, []);
+
+  const fetchDirectoryShopsPage = useCallback(
+    async ({
+      page,
+      pageSize = 25,
+      search = '',
+      gov = 'الكل',
+    }: {
+      page: number;
+      pageSize?: number;
+      search?: string;
+      gov?: string;
+    }): Promise<PaginatedResult<Shop>> => {
+      const cleanSearch = search.trim();
+      if (!supabase) {
+        const eligible = shopsRef.current
+          .filter((s) => s.status !== 'paused' && s.status !== 'expired' && s.status !== 'pending' && !s.isDemoAdminStore)
+          .filter((s) => {
+            if (gov !== 'الكل' && (s.governorate || s.city) !== gov) return false;
+            if (cleanSearch) {
+              const q = cleanSearch.toLowerCase();
+              return (
+                s.name.toLowerCase().includes(q) ||
+                (s.governorate || '').toLowerCase().includes(q) ||
+                (s.city || '').toLowerCase().includes(q) ||
+                (s.address || '').toLowerCase().includes(q)
+              );
+            }
+            return true;
+          });
+        const from = page * pageSize;
+        const rows = eligible.slice(from, from + pageSize);
+        return { rows, totalCount: page === 0 ? eligible.length : null, hasMore: from + pageSize < eligible.length };
+      }
+
+      const key = `shops:directory:p=${page}:s=${pageSize}:q=${cleanSearch}:g=${gov}`;
+      return cachedQuery(key, async () => {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const buildQuery = (cols: string) => {
+          let q = supabase!
+            .from('shops_public')
+            .select(cols, page === 0 ? { count: 'exact' } : undefined)
+            .in('status', ['active', 'trial', 'soon'])
+            .eq('is_demo_admin_store', false);
+          if (gov && gov !== 'الكل') {
+            q = q.or(`governorate.eq.${gov},city.eq.${gov}`);
+          }
+          if (cleanSearch) {
+            const safeQ = cleanSearch.replace(/[,()]/g, ' ').trim();
+            if (safeQ) {
+              q = q.or(`name.ilike.%${safeQ}%,city.ilike.%${safeQ}%,governorate.ilike.%${safeQ}%,address.ilike.%${safeQ}%`);
+            }
+          }
+          return q
+            .order('is_featured', { ascending: false })
+            .order('name', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to);
+        };
+
+        let res = await buildQuery(SHOP_LIST_COLS);
+        if (res.error) {
+          res = await buildQuery(SHOP_LIST_CORE_COLS);
+        }
+        if (res.error) {
+          throw new Error(res.error.message || 'تعذر تحميل دليل المحلات');
+        }
+        const rows = (res.data || []).map(mapDbShopRow);
+        return {
+          rows,
+          totalCount: page === 0 ? res.count ?? rows.length : null,
+          hasMore: rows.length === pageSize,
+        };
+      });
+    },
+    []
+  );
+
+  const fetchMerchantProductsPage = useCallback(
+    async ({
+      shopId,
+      page,
+      pageSize = 24,
+      search = '',
+      invFilter = 'all',
+    }: {
+      shopId: string;
+      page: number;
+      pageSize?: number;
+      search?: string;
+      invFilter?: 'all' | 'in_stock' | 'low' | 'out' | 'hidden';
+    }): Promise<PaginatedResult<Product>> => {
+      const cleanSearch = search.trim();
+      if (!supabase) {
+        const filtered = productsRef.current
+          .filter((p) => p.shopId === shopId && !p.isDeleted)
+          .filter((p) => {
+            if (cleanSearch) {
+              const q = cleanSearch.toLowerCase();
+              if (!p.name.toLowerCase().includes(q) && !(p.code || '').toLowerCase().includes(q)) return false;
+            }
+            const qty = p.stock !== undefined ? p.stock : 1;
+            if (invFilter === 'in_stock') return qty > 2;
+            if (invFilter === 'low') return qty > 0 && qty <= 2;
+            if (invFilter === 'out') return qty === 0;
+            if (invFilter === 'hidden') return p.isPublished === false;
+            return true;
+          });
+        const from = page * pageSize;
+        const rows = filtered.slice(from, from + pageSize);
+        return { rows, totalCount: page === 0 ? filtered.length : null, hasMore: from + pageSize < filtered.length };
+      }
+
+      const key = `products:merchant:${shopId}:p=${page}:s=${pageSize}:q=${cleanSearch}:f=${invFilter}`;
+      return cachedQuery(key, async () => {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const buildQuery = (cols: string) => {
+          let q = supabase!
+            .from('products')
+            .select(cols, page === 0 ? { count: 'exact' } : undefined)
+            .eq('shop_id', shopId)
+            .eq('is_deleted', false);
+          if (cleanSearch) {
+            const safeQ = cleanSearch.replace(/[,()]/g, ' ').trim();
+            if (safeQ) q = q.or(`name.ilike.%${safeQ}%,code.ilike.%${safeQ}%`);
+          }
+          if (invFilter === 'hidden') q = q.eq('is_published', false);
+          else if (invFilter === 'out') q = q.eq('stock', 0);
+          else if (invFilter === 'low') q = q.gt('stock', 0).lte('stock', 2);
+          else if (invFilter === 'in_stock') q = q.gt('stock', 2);
+          return q
+            .order('created_at', { ascending: false })
+            .order('id', { ascending: false })
+            .range(from, to);
+        };
+
+        let res = await buildQuery(PRODUCT_LIST_COLS);
+        if (res.error) {
+          res = await buildQuery(PRODUCT_LIST_CORE_COLS);
+        }
+        if (res.error) {
+          throw new Error(res.error.message || 'تعذر تحميل نظارات المتجر');
+        }
+        const rows = mapDbProductRows(res.data || [], []);
+        mergeProductsState(rows);
+        return {
+          rows,
+          totalCount: page === 0 ? res.count ?? rows.length : null,
+          hasMore: rows.length === pageSize,
+        };
+      });
+    },
+    [mergeProductsState]
+  );
+
+  const fetchMerchantInquiriesPage = useCallback(
+    async ({
+      shopId,
+      page,
+      pageSize = 25,
+      search = '',
+    }: {
+      shopId: string;
+      page: number;
+      pageSize?: number;
+      search?: string;
+    }): Promise<PaginatedResult<Inquiry>> => {
+      const cleanSearch = search.trim();
+      if (!supabase) {
+        const filtered = inqRef.current
+          .filter((x) => x.shopId === shopId)
+          .filter((x) => {
+            if (!cleanSearch) return true;
+            const q = cleanSearch.toLowerCase();
+            return (
+              x.cust.toLowerCase().includes(q) ||
+              (x.phone || '').includes(cleanSearch) ||
+              (x.id || '').toLowerCase().includes(q)
+            );
+          });
+        const from = page * pageSize;
+        const rows = filtered.slice(from, from + pageSize);
+        return { rows, totalCount: page === 0 ? filtered.length : null, hasMore: from + pageSize < filtered.length };
+      }
+
+      const key = `inquiries:merchant:${shopId}:p=${page}:s=${pageSize}:q=${cleanSearch}`;
+      return cachedQuery(key, async () => {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        let q = supabase!
+          .from('inquiries')
+          .select(INQUIRY_COLS, page === 0 ? { count: 'exact' } : undefined)
+          .eq('shop_id', shopId);
+        if (cleanSearch) {
+          const safeQ = cleanSearch.replace(/[,()]/g, ' ').trim();
+          if (safeQ) q = q.or(`customer_name.ilike.%${safeQ}%,phone.ilike.%${safeQ}%,ref_code.ilike.%${safeQ}%`);
+        }
+        const res = await q
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(from, to);
+        if (res.error) throw new Error(res.error.message || 'تعذر تحميل الطلبات');
+        const mineIds = getMyInquiryIds();
+        const rows = (res.data || []).map((r: any) => mapDbInquiryRow(r, mineIds));
+        return {
+          rows,
+          totalCount: page === 0 ? res.count ?? rows.length : null,
+          hasMore: rows.length === pageSize,
+        };
+      });
+    },
+    []
+  );
+
+  const fetchMerchantCrmPage = useCallback(
+    async ({
+      shopId,
+      page,
+      pageSize = 25,
+      search = '',
+    }: {
+      shopId: string;
+      page: number;
+      pageSize?: number;
+      search?: string;
+    }): Promise<PaginatedResult<CrmCustomer>> => {
+      const cleanSearch = search.trim();
+      if (!supabase) {
+        const filtered = crmRef.current
+          .filter((c) => c.shopId === shopId)
+          .filter((c) => {
+            if (!cleanSearch) return true;
+            const q = cleanSearch.toLowerCase();
+            return (
+              c.customerName.toLowerCase().includes(q) ||
+              (c.phone || '').includes(cleanSearch) ||
+              (c.productName || '').toLowerCase().includes(q)
+            );
+          });
+        const from = page * pageSize;
+        const rows = filtered.slice(from, from + pageSize);
+        return { rows, totalCount: page === 0 ? filtered.length : null, hasMore: from + pageSize < filtered.length };
+      }
+
+      const key = `crm:merchant:${shopId}:p=${page}:s=${pageSize}:q=${cleanSearch}`;
+      return cachedQuery(key, async () => {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const buildQuery = (cols: string) => {
+          let q = supabase!
+            .from('crm_customers')
+            .select(cols, page === 0 ? { count: 'exact' } : undefined)
+            .eq('shop_id', shopId);
+          if (cleanSearch) {
+            const safeQ = cleanSearch.replace(/[,()]/g, ' ').trim();
+            if (safeQ) q = q.or(`customer_name.ilike.%${safeQ}%,phone.ilike.%${safeQ}%,product_name.ilike.%${safeQ}%`);
+          }
+          return q
+            .order('order_date', { ascending: false })
+            .order('id', { ascending: false })
+            .range(from, to);
+        };
+        let res = await buildQuery(CRM_COLS);
+        if (res.error) res = await buildQuery(CRM_CORE_COLS);
+        if (res.error) throw new Error(res.error.message || 'تعذر تحميل سجل العملاء');
+        const rows = (res.data || []).map(mapDbCrmRow);
+        return {
+          rows,
+          totalCount: page === 0 ? res.count ?? rows.length : null,
+          hasMore: rows.length === pageSize,
+        };
+      });
+    },
+    []
+  );
+
+  const fetchAdminShopsPage = useCallback(
+    async ({
+      page,
+      pageSize = 25,
+      search = '',
+      statusFilter = 'all',
+    }: {
+      page: number;
+      pageSize?: number;
+      search?: string;
+      statusFilter?: string;
+    }): Promise<PaginatedResult<Shop>> => {
+      const cleanSearch = search.trim();
+      if (!supabase) {
+        const filtered = shopsRef.current.filter((s) => {
+          if (statusFilter !== 'all') {
+            if (statusFilter === 'pending' && s.status !== 'pending') return false;
+            if (statusFilter === 'paused' && s.status !== 'paused' && s.status !== 'expired') return false;
+            if (statusFilter === 'trial' && s.status !== 'trial') return false;
+            if (statusFilter === 'active' && s.status !== 'active') return false;
+            if (statusFilter === 'soon' && s.status !== 'soon') return false;
+          }
+          if (cleanSearch) {
+            const q = cleanSearch.toLowerCase();
+            return (
+              s.name.toLowerCase().includes(q) ||
+              (s.city || '').toLowerCase().includes(q) ||
+              (s.governorate || '').toLowerCase().includes(q) ||
+              (s.ownerName || '').toLowerCase().includes(q) ||
+              (s.slug || '').toLowerCase().includes(q)
+            );
+          }
+          return true;
+        });
+        const from = page * pageSize;
+        const rows = filtered.slice(from, from + pageSize);
+        return { rows, totalCount: page === 0 ? filtered.length : null, hasMore: from + pageSize < filtered.length };
+      }
+
+      const key = `shops:admin:p=${page}:s=${pageSize}:q=${cleanSearch}:f=${statusFilter}`;
+      return cachedQuery(key, async () => {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const buildQuery = (cols: string) => {
+          let q = supabase!
+            .from('shops')
+            .select(cols, page === 0 ? { count: 'exact' } : undefined);
+          if (statusFilter !== 'all') {
+            if (statusFilter === 'paused') q = q.in('status', ['paused', 'expired']);
+            else q = q.eq('status', statusFilter);
+          }
+          if (cleanSearch) {
+            const safeQ = cleanSearch.replace(/[,()]/g, ' ').trim();
+            if (safeQ) {
+              q = q.or(
+                `name.ilike.%${safeQ}%,city.ilike.%${safeQ}%,governorate.ilike.%${safeQ}%,owner_name.ilike.%${safeQ}%,slug.ilike.%${safeQ}%`
+              );
+            }
+          }
+          return q
+            .order('created_at', { ascending: false })
+            .order('id', { ascending: false })
+            .range(from, to);
+        };
+        let res = await buildQuery(SHOP_LIST_COLS);
+        if (res.error) res = await buildQuery(SHOP_LIST_CORE_COLS);
+        if (res.error) throw new Error(res.error.message || 'تعذر تحميل قائمة المحلات');
+        const rows = (res.data || []).map(mapDbShopRow);
+        setShops((prev) => {
+          const map = new Map(prev.map((s) => [s.id, s]));
+          for (const s of rows) map.set(s.id, { ...(map.get(s.id) || {}), ...s });
+          return Array.from(map.values());
+        });
+        return {
+          rows,
+          totalCount: page === 0 ? res.count ?? rows.length : null,
+          hasMore: rows.length === pageSize,
+        };
+      });
+    },
+    []
+  );
+
+  const fetchAdminPaymentsPage = useCallback(
+    async ({ page, pageSize = 25 }: { page: number; pageSize?: number }): Promise<PaginatedResult<PaymentRecord>> => {
+      if (!supabase) {
+        const from = page * pageSize;
+        const rows = paymentsRef.current.slice(from, from + pageSize);
+        return {
+          rows,
+          totalCount: page === 0 ? paymentsRef.current.length : null,
+          hasMore: from + pageSize < paymentsRef.current.length,
+        };
+      }
+      return cachedQuery(`payments:admin:p=${page}:s=${pageSize}`, async () => {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const res = await supabase!
+          .from('payments')
+          .select(PAYMENT_COLS, page === 0 ? { count: 'exact' } : undefined)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(from, to);
+        if (res.error) throw new Error(res.error.message || 'تعذر تحميل المدفوعات');
+        const rows = (res.data || []).map(mapDbPaymentRow);
+        return {
+          rows,
+          totalCount: page === 0 ? res.count ?? rows.length : null,
+          hasMore: rows.length === pageSize,
+        };
+      });
+    },
+    []
+  );
+
+  const fetchAdminAuditLogsPage = useCallback(
+    async ({ page, pageSize = 25 }: { page: number; pageSize?: number }): Promise<PaginatedResult<AuditLog>> => {
+      if (!supabase) {
+        const from = page * pageSize;
+        const rows = auditRef.current.slice(from, from + pageSize);
+        return {
+          rows,
+          totalCount: page === 0 ? auditRef.current.length : null,
+          hasMore: from + pageSize < auditRef.current.length,
+        };
+      }
+      return cachedQuery(`audit:admin:p=${page}:s=${pageSize}`, async () => {
+        const from = page * pageSize;
+        const to = from + pageSize - 1;
+        const res = await supabase!
+          .from('audit_logs')
+          .select(AUDIT_COLS, page === 0 ? { count: 'exact' } : undefined)
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(from, to);
+        if (res.error) throw new Error(res.error.message || 'تعذر تحميل سجل النشاط');
+        const rows = (res.data || []).map(mapDbAuditRow);
+        return {
+          rows,
+          totalCount: page === 0 ? res.count ?? rows.length : null,
+          hasMore: rows.length === pageSize,
+        };
+      });
+    },
+    []
+  );
+
+  const fetchAdminStatsSummary = useCallback(async (): Promise<AdminStatsSummary> => {
+    if (!supabase) {
+      const s = shopsRef.current;
+      return {
+        totalShops: s.length,
+        pendingShops: s.filter((x) => x.status === 'pending').length,
+        activeShops: s.filter((x) => x.status === 'active').length,
+        trialShops: s.filter((x) => x.status === 'trial').length,
+        pausedOrExpiredShops: s.filter((x) => x.status === 'paused' || x.status === 'expired').length,
+        totalProducts: productsRef.current.filter((p) => !p.isDeleted).length,
+        totalInquiries: inqRef.current.length,
+        totalCrmCustomers: crmRef.current.length,
+        paidRevenue: paymentsRef.current.filter((p) => p.status === 'ok').reduce((sum, p) => sum + p.amount, 0),
+      };
+    }
+
+    return cachedQuery('admin-stats:summary', async () => {
+      const [
+        totalRes,
+        pendingRes,
+        activeRes,
+        trialRes,
+        pausedRes,
+        prodsRes,
+        inqRes,
+        crmRes,
+        paidRes,
+      ] = await Promise.all([
+        supabase!.from('shops').select('id', { count: 'exact', head: true }),
+        supabase!.from('shops').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+        supabase!.from('shops').select('id', { count: 'exact', head: true }).eq('status', 'active'),
+        supabase!.from('shops').select('id', { count: 'exact', head: true }).eq('status', 'trial'),
+        supabase!.from('shops').select('id', { count: 'exact', head: true }).in('status', ['paused', 'expired']),
+        supabase!.from('products').select('id', { count: 'exact', head: true }).eq('is_deleted', false),
+        supabase!.from('inquiries').select('id', { count: 'exact', head: true }),
+        supabase!.from('crm_customers').select('id', { count: 'exact', head: true }),
+        supabase!.from('payments').select('amount').eq('status', 'ok'),
+      ]);
+      const paidRevenue = (paidRes.data || []).reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
+      return {
+        totalShops: totalRes.count ?? shopsRef.current.length,
+        pendingShops: pendingRes.count ?? 0,
+        activeShops: activeRes.count ?? 0,
+        trialShops: trialRes.count ?? 0,
+        pausedOrExpiredShops: pausedRes.count ?? 0,
+        totalProducts: prodsRes.count ?? 0,
+        totalInquiries: inqRes.count ?? 0,
+        totalCrmCustomers: crmRes.count ?? 0,
+        paidRevenue,
+      };
+    });
+  }, []);
+
+  const loadShopAdminContext = useCallback(
+    async (shopId: string) => {
+      if (!supabase || !shopId) return;
+      const [shopRes, prodsRes, inqRes, crmRes] = await Promise.all([
+        cachedQuery(`shops:detail:${shopId}`, async () => {
+          const r = await supabase!.from('shops').select(SHOP_DETAIL_COLS).eq('id', shopId).maybeSingle();
+          return r.error ? supabase!.from('shops').select(SHOP_LIST_CORE_COLS).eq('id', shopId).maybeSingle() : r;
+        }),
+        fetchMerchantProductsPage({ shopId, page: 0, pageSize: 24 }),
+        fetchMerchantInquiriesPage({ shopId, page: 0, pageSize: 25 }),
+        fetchMerchantCrmPage({ shopId, page: 0, pageSize: 25 }),
+      ]);
+      await fetchScopedCatalog(shopId);
+      if (shopRes.data) {
+        const mapped = mapDbShopRow(shopRes.data);
+        setShops((prev) => [mapped, ...prev.filter((s) => s.id !== mapped.id)]);
+      }
+      if (prodsRes.rows.length) mergeProductsState(prodsRes.rows);
+      setInq((prev) => [...inqRes.rows, ...prev.filter((x) => x.shopId !== shopId)]);
+      setCrmCustomers((prev) => [...crmRes.rows, ...prev.filter((x) => x.shopId !== shopId)]);
+    },
+    [fetchMerchantCrmPage, fetchMerchantInquiriesPage, fetchMerchantProductsPage, fetchScopedCatalog, mergeProductsState]
+  );
+
+  // Route-scoped & Role-scoped Hydration (no global table dumps, zero select('*'))
+  const hydrateFromSupabase = useCallback(
+    async (opts?: { role?: AuthSession['role']; shopId?: string; routeOverride?: string; force?: boolean }) => {
+      if (!supabase) return;
+      try {
+        const curPath =
+          opts?.routeOverride ||
+          (typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/');
+        const pathOnly = curPath.split('?')[0];
+        const queryString = curPath.includes('?') ? curPath.split('?')[1] : '';
+        const queryShopSlug = new URLSearchParams(queryString).get('shop');
+        const isAdminPath = pathOnly.startsWith('/admin');
+        const isMerchantPath = pathOnly.startsWith('/merchant');
+        const isDirectoryPath = pathOnly.startsWith('/stores') || pathOnly.startsWith('/directory');
+        const isLandingPath = (pathOnly === '/' || pathOnly === '') && !queryShopSlug;
+        const isStorefrontPath = !isLandingPath && !isAdminPath && !isMerchantPath && !isDirectoryPath;
+
+        const storefrontSlug = pathOnly.startsWith('/s/')
+          ? decodeURIComponent(pathOnly.slice(3).replace(/^\/+|\/+$/g, '').split('/')[0])
+          : pathOnly.startsWith('/shop/')
+          ? decodeURIComponent(pathOnly.slice(6).replace(/^\/+|\/+$/g, '').split('/')[0])
+          : queryShopSlug
+          ? decodeURIComponent(queryShopSlug)
+          : isStorefrontPath
+          ? decodeURIComponent(pathOnly.slice(1).split('/')[0])
+          : '';
+
+        const activeRole = opts?.role ?? sessionRef.current?.role;
+        const activeShopId = opts?.shopId ?? sessionRef.current?.shopId;
+        const force = Boolean(opts?.force);
+
+        // 1. Public / Customer Storefront: fetch ONLY that shop, its catalog, and page 0 (24) of published products
+        if (isStorefrontPath && storefrontSlug) {
+          if (force) invalidateCache(`shops:public:${storefrontSlug}`);
+          const [shopRes] = await Promise.all([
+            cachedQuery(`shops:public:${storefrontSlug}`, async () => {
+              const r = await supabase!
+                .from('shops_public')
+                .select(SHOP_DETAIL_COLS)
+                .eq('slug', storefrontSlug)
+                .maybeSingle();
+              return r.error
+                ? supabase!.from('shops_public').select(SHOP_LIST_CORE_COLS).eq('slug', storefrontSlug).maybeSingle()
+                : r;
+            }),
+            fetchSettingsAndPlans(force),
           ]);
-
-          setShops([mapDbShopRow(matchedShopRow)]);
-          if (prodsRes.data) {
-            setProducts(mapDbProductRows(prodsRes.data, imgsRes.data || []));
-          }
-          if (revRes.data?.length) {
-            setReviews(
-              revRes.data.map((rv: any) => ({
-                id: rv.id,
-                productId: rv.product_id,
-                shopId: rv.shop_id,
-                authorName: rv.author_name,
-                rating: Number(rv.rating || 5),
-                comment: rv.comment,
-                createdAt: rv.created_at,
-              }))
-            );
-          }
-          if (ltRes.data?.length) {
-            setLensTypes(
-              ltRes.data.map((r: any) => ({
-                id: r.id,
-                shopId: r.shop_id,
-                name: r.name_ar,
-                en: r.name_en,
-                desc: r.description,
-                icon: r.icon,
-                price: r.price,
-                disc: r.discount_pct || 0,
-                on: r.is_active ?? true,
-              }))
-            );
-          }
-          if (brRes.data?.length) {
-            setBrands(
-              brRes.data.map((r: any) => ({
-                id: r.id,
-                shopId: r.shop_id,
-                name: r.name_ar,
-                en: r.name_en,
-                origin: r.origin,
-                logo: r.logo,
-                warrantyYears: r.warranty_years,
-                price: r.price,
-                disc: r.discount_pct || 0,
-                on: r.is_active ?? true,
-              }))
-            );
-          }
-          if (exRes.data?.length) {
-            setExtras(
-              exRes.data.map((r: any) => ({
-                id: r.id,
-                shopId: r.shop_id,
-                name: r.name_ar,
-                desc: r.description,
-                price: r.price,
-                disc: r.discount_pct || 0,
-                icon: r.icon,
-                on: r.is_active ?? true,
-              }))
-            );
-          }
-          if (settingsRes.data) {
-            const sRow = settingsRes.data as any;
-            const lensesFlag = Boolean(sRow.enable_lenses_system ?? sRow.enable_prescription_lenses);
-            setPlatformSettings((prev) => ({
-              ...prev,
-              enablePrescriptionLenses: lensesFlag,
-              enableLensesSystem: lensesFlag,
-              allowMerchantLensBrandingToggle: Boolean(sRow.allow_merchant_lens_branding_toggle),
-              enableStoresDirectory: Boolean(sRow.enable_stores_directory),
-              officialLensBrands:
-                Array.isArray(sRow.official_lens_brands) && sRow.official_lens_brands.length
-                  ? sRow.official_lens_brands
-                  : prev.officialLensBrands,
-            }));
+          if (shopRes.data) {
+            const mappedShop = mapDbShopRow(shopRes.data);
+            setShops([mappedShop]);
+            setActiveShopSlug(mappedShop.slug);
+            if (force) invalidateCache(`products:storefront:${mappedShop.id}`);
+            await Promise.all([
+              fetchScopedCatalog(mappedShop.id, force),
+              fetchStorefrontProductsPage({ shopId: mappedShop.id, page: 0, pageSize: 24 }),
+            ]);
           }
           return;
         }
-      }
 
-      const [shopsRes, plansRes, prodsRes, imgsRes, ltRes, brRes, exRes, inqRes, payRes] = await Promise.all([
-        hasPrivilegedSession
-          ? supabase.from('shops').select('*').order('created_at', { ascending: false })
-          : supabase.from('shops_public').select('*').order('name', { ascending: true }),
-        supabase.from('plans').select('*').order('sort_order', { ascending: true }),
-        hasPrivilegedSession
-          ? supabase.from('products').select('*').eq('is_deleted', false).order('created_at', { ascending: true })
-          : supabase
-              .from('products')
-              .select('*')
-              .eq('is_deleted', false)
-              .eq('is_published', true)
-              .order('created_at', { ascending: true }),
-        supabase.from('product_images').select('*').order('sort_order', { ascending: true }),
-        supabase.from('lens_types').select('*').order('sort_order', { ascending: true }),
-        supabase.from('brands').select('*').order('sort_order', { ascending: true }),
-        supabase.from('extras').select('*').order('sort_order', { ascending: true }),
-        hasPrivilegedSession
-          ? supabase.from('inquiries').select('*').order('created_at', { ascending: false })
-          : Promise.resolve({ data: null as any[] | null }),
-        hasPrivilegedSession
-          ? supabase.from('payments').select('*').order('created_at', { ascending: false })
-          : Promise.resolve({ data: null as any[] | null }),
-      ]);
+        // 2. Stores Directory: platform_settings + page 0 (25) of shops_public
+        if (isDirectoryPath) {
+          if (force) invalidateCache('shops:directory:');
+          const [, dirRes] = await Promise.all([
+            fetchSettingsAndPlans(force),
+            fetchDirectoryShopsPage({ page: 0, pageSize: 25 }),
+          ]);
+          if (dirRes.rows.length) {
+            setShops(dirRes.rows);
+          }
+          return;
+        }
 
-      if (Array.isArray(shopsRes.data)) {
-        setShops(shopsRes.data.map(mapDbShopRow));
-      }
+        // 3. Landing Page /: ONLY platform_settings + plans
+        if (isLandingPath) {
+          await fetchSettingsAndPlans(force);
+          return;
+        }
 
-      const [settingsRes, crmRes, auditRes] = await Promise.all([
-        supabase.from('platform_settings').select('*').eq('id', 'default').maybeSingle(),
-        hasPrivilegedSession
-          ? supabase.from('crm_customers').select('*').order('order_date', { ascending: false })
-          : Promise.resolve({ data: null as any[] | null }),
-        hasPrivilegedSession
-          ? supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(100)
-          : Promise.resolve({ data: null as any[] | null }),
-      ]);
-      if (settingsRes.data) {
-        const sRow = settingsRes.data as any;
-        const dbPlans: Plan[] = Array.isArray(sRow.plans) && sRow.plans.length ? sRow.plans : PLANS0;
-        const lensesFlag = Boolean(sRow.enable_lenses_system ?? sRow.enable_prescription_lenses);
-        setPlatformSettings({
-          enablePrescriptionLenses: lensesFlag,
-          enableLensesSystem: lensesFlag,
-          allowMerchantLensBrandingToggle: Boolean(sRow.allow_merchant_lens_branding_toggle),
-          enableSponsoredSuppliers: Boolean(sRow.enable_sponsored_suppliers),
-          enableStoresDirectory: Boolean(sRow.enable_stores_directory),
-          landingPreviewFrames: (
-            Array.isArray(sRow.landing_preview_frames) && sRow.landing_preview_frames.length
-              ? sRow.landing_preview_frames
-              : DEFAULT_LANDING_PREVIEW_FRAMES
-          ).map((f: any) => ({
-            ...f,
-            dimensions: typeof f.dimensions === 'string' ? f.dimensions.replace(/□/g, '-') : f.dimensions,
-          })),
-          officialLensBrands:
-            Array.isArray(sRow.official_lens_brands) && sRow.official_lens_brands.length
-              ? sRow.official_lens_brands
-              : DEFAULT_OFFICIAL_LENS_BRANDS,
-          plans: dbPlans,
-          annualDiscountMonths: Number(sRow.annual_discount_months ?? 2),
-          trialDays: Number(sRow.trial_days ?? 14),
-          trialMaxProducts: Number(sRow.trial_max_products ?? 20),
-          trialAiCredits: Number(sRow.trial_ai_credits ?? 25),
-          topupPackFrames: Number(sRow.topup_pack_frames ?? 50),
-          topupPackPrice: Number(sRow.topup_pack_price ?? 300),
-          sponsoredSuppliers: Array.isArray(sRow.sponsored_suppliers) ? sRow.sponsored_suppliers : [],
-        });
-        setPlans(dbPlans);
-      } else if (plansRes.data?.length) {
-        setPlans(
-          plansRes.data.map((r: any, idx: number) => ({
-            id: r.id,
-            tierKey: r.tier_key || (idx === 0 ? 'basic' : idx === 1 ? 'pro' : 'premium'),
-            name: r.name,
-            price: r.price,
-            maxProducts: r.max_products || (idx === 0 ? 100 : idx === 1 ? 200 : 300),
-            monthlyAiCredits: r.monthly_ai_credits || (idx === 0 ? 110 : idx === 1 ? 220 : 330),
-            turboUploadEnabled: Boolean(r.turbo_upload_enabled ?? idx > 0),
-            cameraPdRulerEnabled: Boolean(r.camera_pd_ruler_enabled ?? idx > 0),
-            featuredBoostEnabled: Boolean(r.featured_boost_enabled ?? idx > 1),
-            on: r.is_active,
-            feats: r.features || [],
-          }))
-        );
+        // 4. Admin Dashboard: settings + plans + page 0 shops (list cols) + page 0 payments & audit_logs
+        if (isAdminRole(activeRole) && !isMerchantPath) {
+          if (force) {
+            invalidateCache('shops:admin:');
+            invalidateCache('payments:admin:');
+            invalidateCache('audit:admin:');
+          }
+          const [, shopsRes, payRes, auditRes] = await Promise.all([
+            fetchSettingsAndPlans(force),
+            fetchAdminShopsPage({ page: 0, pageSize: 25 }),
+            fetchAdminPaymentsPage({ page: 0, pageSize: 25 }),
+            fetchAdminAuditLogsPage({ page: 0, pageSize: 25 }),
+          ]);
+          if (shopsRes.rows.length) setShops(shopsRes.rows);
+          if (payRes.rows.length) setPayments(payRes.rows);
+          if (auditRes.rows.length) setAuditLogs(auditRes.rows);
+          return;
+        }
+
+        // 5. Merchant Dashboard (or Admin impersonating a specific shop): ONLY activeShopId
+        if (activeShopId && (activeRole === 'merchant' || (isAdminRole(activeRole) && isMerchantPath))) {
+          if (force) {
+            invalidateCache(`shops:detail:${activeShopId}`);
+            invalidateCache(`products:merchant:${activeShopId}`);
+            invalidateCache(`inquiries:merchant:${activeShopId}`);
+            invalidateCache(`crm:merchant:${activeShopId}`);
+          }
+          const [shopRes, , prodsRes, inqRes, crmRes] = await Promise.all([
+            cachedQuery(`shops:detail:${activeShopId}`, async () => {
+              const r = await supabase!.from('shops').select(SHOP_DETAIL_COLS).eq('id', activeShopId).maybeSingle();
+              return r.error
+                ? supabase!.from('shops').select(SHOP_LIST_CORE_COLS).eq('id', activeShopId).maybeSingle()
+                : r;
+            }),
+            fetchSettingsAndPlans(force),
+            fetchMerchantProductsPage({ shopId: activeShopId, page: 0, pageSize: 24 }),
+            fetchMerchantInquiriesPage({ shopId: activeShopId, page: 0, pageSize: 25 }),
+            fetchMerchantCrmPage({ shopId: activeShopId, page: 0, pageSize: 25 }),
+            fetchScopedCatalog(activeShopId, force),
+          ]);
+          if (shopRes.data) {
+            const mappedOwn = mapDbShopRow(shopRes.data);
+            setShops((prev) => [mappedOwn, ...prev.filter((s) => s.id !== mappedOwn.id)]);
+            if (mappedOwn.slug) setActiveShopSlug(mappedOwn.slug);
+          }
+          if (prodsRes.rows.length) mergeProductsState(prodsRes.rows);
+          setInq(inqRes.rows);
+          setCrmCustomers(crmRes.rows);
+          return;
+        }
+
+        // 6. Unauthenticated login page (/merchant or /admin before sign-in)
+        await fetchSettingsAndPlans(force);
+      } catch {
+        // Keep graceful local state if schema isn't pushed yet
       }
-      if (Array.isArray(crmRes.data)) {
-        setCrmCustomers(
-          crmRes.data.map((c: any) => ({
-            id: c.id,
-            shopId: c.shop_id,
-            customerName: c.customer_name,
-            phone: c.phone,
-            productId: c.product_id || undefined,
-            productName: c.product_name || 'نظارة',
-            lensSummary: c.lens_summary || '',
-            pd: c.pd || '',
-            orderDate: c.order_date,
-            pricePaid: typeof c.price_paid === 'number' ? c.price_paid : undefined,
-            rating: typeof c.rating === 'number' ? c.rating : undefined,
-            reviewComment: c.review_comment || undefined,
-            recallReviewSentAt: c.recall_review_sent_at || undefined,
-            recall6mSentAt: c.recall_6m_sent_at || undefined,
-            recall12mSentAt: c.recall_12m_sent_at || undefined,
-            notes: c.notes || '',
-          }))
-        );
-      }
-      if (Array.isArray(auditRes.data)) {
-        setAuditLogs(
-          auditRes.data.map((a: any) => ({
-            id: a.id,
-            actorRole: a.actor_role || 'merchant',
-            shopId: a.shop_id || undefined,
-            action: a.action,
-            details: a.details || '',
-            createdAt: a.created_at
-              ? new Date(a.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
-              : 'الآن',
-          }))
-        );
-      }
-      if (prodsRes.data) {
-        setProducts(mapDbProductRows(prodsRes.data, imgsRes.data || []));
-      }
-      const revRes = await supabase
-        .from('frame_reviews')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (revRes.data?.length) {
-        setReviews(
-          revRes.data.map((rv: any) => ({
-            id: rv.id,
-            productId: rv.product_id,
-            shopId: rv.shop_id,
-            authorName: rv.author_name,
-            rating: Number(rv.rating || 5),
-            comment: rv.comment,
-            createdAt: rv.created_at,
-          }))
-        );
-      }
-      if (ltRes.data?.length) {
-        setLensTypes(
-          ltRes.data.map((r: any) => ({
-            id: r.id,
-            shopId: r.shop_id,
-            name: r.name_ar,
-            en: r.name_en,
-            desc: r.description,
-            icon: r.icon,
-            price: r.price,
-            disc: r.discount_pct || 0,
-            on: r.is_active,
-          }))
-        );
-      }
-      if (brRes.data?.length) {
-        setBrands(
-          brRes.data.map((r: any) => ({
-            id: r.id,
-            shopId: r.shop_id,
-            name: r.name_ar,
-            en: r.name_en,
-            price: r.price,
-            disc: r.discount_pct || 0,
-            on: r.is_active,
-          }))
-        );
-      }
-      if (exRes.data?.length) {
-        setExtras(
-          exRes.data.map((r: any) => ({
-            id: r.id,
-            shopId: r.shop_id,
-            name: r.name_ar,
-            price: r.price,
-            disc: r.discount_pct || 0,
-            on: r.is_active,
-          }))
-        );
-      }
-      if (Array.isArray(inqRes.data)) {
-        const mineIds = getMyInquiryIds();
-        setInq(
-          inqRes.data.map((r: any) => ({
-            id: r.ref_code || r.id,
-            shopId: r.shop_id,
-            kind: r.kind,
-            cust: r.customer_name,
-            phone: r.phone,
-            frameName: r.frame_name,
-            type: r.frame_type,
-            frame: r.frame_color,
-            lens: r.lens_color,
-            lensName: r.lens_name,
-            brandName: r.brand_name,
-            extrasTxt: r.extras_txt,
-            fp: r.frame_price,
-            lensPrice: r.lens_price,
-            add: r.add_price,
-            price: r.initial_price,
-            final: r.final_price || undefined,
-            img: r.rx_image_url,
-            pd: r.pd || '',
-            notes: r.notes || '',
-            status: r.status,
-            alt: r.alt_to || undefined,
-            altFrom: r.alt_from || undefined,
-            stage: r.stage,
-            pay: r.payment_method || undefined,
-            rxn: Number(r.rxn || 0),
-            time: new Date(r.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
-            mine: mineIds.includes(r.ref_code || r.id),
-          }))
-        );
-      }
-      if (Array.isArray(payRes.data)) {
-        setPayments(
-          payRes.data.map((r: any) => ({
-            id: r.invoice_no || r.id,
-            shopId: r.shop_id || undefined,
-            shopName: r.shop_name,
-            amount: r.amount,
-            method: r.method,
-            referenceNo: r.reference_no || undefined,
-            status: r.status,
-            date: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
-          }))
-        );
-      }
-    } catch {
-      // Keep graceful local state if schema isn't pushed yet
-    }
-  }, []);
+    },
+    [
+      fetchAdminAuditLogsPage,
+      fetchAdminPaymentsPage,
+      fetchAdminShopsPage,
+      fetchDirectoryShopsPage,
+      fetchMerchantCrmPage,
+      fetchMerchantInquiriesPage,
+      fetchMerchantProductsPage,
+      fetchScopedCatalog,
+      fetchSettingsAndPlans,
+      fetchStorefrontProductsPage,
+      mergeProductsState,
+    ]
+  );
 
   const resolveSupabaseUser = useCallback(
     async (user: { id: string; email?: string | null; user_metadata?: any }, shouldRedirect: boolean) => {
@@ -1397,33 +2209,28 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           role: 'super_admin',
           mfaVerified: !verifiedTotp,
         };
+        sessionRef.current = nextSess;
         setSession(nextSess);
         const curPath = typeof window !== 'undefined' ? window.location.pathname : '';
-        const isIntentionalPreviewOrNav =
-          curPath.startsWith('/s/') || curPath.startsWith('/shop/');
+        const isIntentionalPreviewOrNav = curPath.startsWith('/s/') || curPath.startsWith('/shop/');
         if (shouldRedirect && !isIntentionalPreviewOrNav && !curPath.startsWith('/admin')) {
           navigate('/admin');
+        } else {
+          await hydrateFromSupabase({ role: 'super_admin' });
         }
         return { role: 'super_admin' as const, needsMfa: Boolean(verifiedTotp) };
       }
 
-      // Regular merchant account
+      // Regular merchant account — query ONLY own shop
       let shopId = roleRow?.shop_id || undefined;
       let ownShopRow: any = null;
       if (shopId) {
-        const { data: byShopId } = await supabase
-          .from('shops')
-          .select('*')
-          .eq('id', shopId)
-          .maybeSingle();
-        ownShopRow = byShopId || null;
+        const r = await supabase.from('shops').select(SHOP_DETAIL_COLS).eq('id', shopId).maybeSingle();
+        ownShopRow = (r.error ? (await supabase.from('shops').select(SHOP_LIST_CORE_COLS).eq('id', shopId).maybeSingle()).data : r.data) || null;
       }
       if (!ownShopRow) {
-        const { data: existingShop } = await supabase
-          .from('shops')
-          .select('*')
-          .eq('owner_id', user.id)
-          .maybeSingle();
+        const r = await supabase.from('shops').select(SHOP_DETAIL_COLS).eq('owner_id', user.id).maybeSingle();
+        const existingShop = r.error ? (await supabase.from('shops').select(SHOP_LIST_CORE_COLS).eq('owner_id', user.id).maybeSingle()).data : r.data;
         if (existingShop) {
           ownShopRow = existingShop;
           shopId = existingShop.id;
@@ -1436,13 +2243,15 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         if (mappedOwn.slug) setActiveShopSlug(mappedOwn.slug);
       }
 
-      setSession({
+      const nextMerchantSess: AuthSession = {
         userId: user.id,
         email: user.email || '',
         role: 'merchant',
         shopId,
-      });
-      await hydrateFromSupabase();
+      };
+      sessionRef.current = nextMerchantSess;
+      setSession(nextMerchantSess);
+      await hydrateFromSupabase({ role: 'merchant', shopId });
       if (ownShopRow) {
         const mappedOwn = mapDbShopRow(ownShopRow);
         setShops((prev) => (prev.some((s) => s.id === mappedOwn.id) ? prev : [mappedOwn, ...prev]));
@@ -1475,31 +2284,26 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       (adminEmail && email === adminEmail);
 
     if (isAdmin) {
-      setSession({
+      const nextSess: AuthSession = {
         userId: user.id,
         email: user.email || adminEmail,
         role: 'super_admin',
-      });
-      await hydrateFromSupabase();
+      };
+      sessionRef.current = nextSess;
+      setSession(nextSess);
+      await hydrateFromSupabase({ role: 'super_admin', force: true });
       return null;
     }
 
     let shopId = roleRow?.shop_id || undefined;
     let shopRow: any = null;
     if (shopId) {
-      const { data: byShopId } = await supabase
-        .from('shops')
-        .select('*')
-        .eq('id', shopId)
-        .maybeSingle();
-      shopRow = byShopId || null;
+      const r = await supabase.from('shops').select(SHOP_DETAIL_COLS).eq('id', shopId).maybeSingle();
+      shopRow = (r.error ? (await supabase.from('shops').select(SHOP_LIST_CORE_COLS).eq('id', shopId).maybeSingle()).data : r.data) || null;
     }
     if (!shopRow) {
-      const { data: existingShop } = await supabase
-        .from('shops')
-        .select('*')
-        .eq('owner_id', user.id)
-        .maybeSingle();
+      const r = await supabase.from('shops').select(SHOP_DETAIL_COLS).eq('owner_id', user.id).maybeSingle();
+      const existingShop = r.error ? (await supabase.from('shops').select(SHOP_LIST_CORE_COLS).eq('owner_id', user.id).maybeSingle()).data : r.data;
       if (existingShop) {
         shopRow = existingShop;
         shopId = existingShop.id;
@@ -1513,19 +2317,22 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       if (mapped.slug) setActiveShopSlug(mapped.slug);
     }
 
-    setSession({
+    const nextSess: AuthSession = {
       userId: user.id,
       email: user.email || '',
       role: 'merchant',
       shopId,
-    });
-    await hydrateFromSupabase();
+    };
+    sessionRef.current = nextSess;
+    setSession(nextSess);
+    await hydrateFromSupabase({ role: 'merchant', shopId, force: true });
     if (mapped) {
       setShops((prev) => (prev.some((s) => s.id === mapped!.id) ? prev : [mapped!, ...prev]));
     }
     return mapped;
   }, [hydrateFromSupabase]);
 
+  // Auth initialization (no global realtime here)
   useEffect(() => {
     if (!supabase) {
       setAuthLoading(false);
@@ -1542,6 +2349,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           const curPath = window.location.pathname;
           const onAuthLanding = curPath === '/merchant' || curPath === '/admin';
           await resolveSupabaseUser(sbSess.user, onAuthLanding);
+        } else if (mounted) {
+          await hydrateFromSupabase();
         }
       } finally {
         if (mounted) setAuthLoading(false);
@@ -1549,41 +2358,82 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     };
 
     syncAuth();
-    hydrateFromSupabase();
 
     const { data: authSub } = supabase.auth.onAuthStateChange(async (event, sbSess) => {
       if (!mounted) return;
       if (event === 'SIGNED_IN' && sbSess?.user) {
         await resolveSupabaseUser(sbSess.user, true);
       } else if (event === 'SIGNED_OUT') {
+        sessionRef.current = null;
         setSession(null);
-      }
-    });
-
-    let channel: any = null;
-    supabase.auth.getSession().then(({ data: { session: sbSess } }) => {
-      if (!mounted) return;
-      if (sbSess?.user) {
-        channel = supabase!
-          .channel('optiverse-realtime-all')
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => hydrateFromSupabase())
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'product_images' }, () => hydrateFromSupabase())
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'lens_types' }, () => hydrateFromSupabase())
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'brands' }, () => hydrateFromSupabase())
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'extras' }, () => hydrateFromSupabase())
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'inquiries' }, () => hydrateFromSupabase())
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'shops' }, () => hydrateFromSupabase())
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, () => hydrateFromSupabase())
-          .subscribe();
+        clearAllQueryCache();
       }
     });
 
     return () => {
       mounted = false;
       authSub.subscription.unsubscribe();
-      if (channel) supabase?.removeChannel(channel);
     };
   }, [hydrateFromSupabase, resolveSupabaseUser]);
+
+  // Hydrate cleanly when navigating between routes (uses 60s queryCache so cached routes are instant)
+  useEffect(() => {
+    if (!supabase || authLoading) return;
+    hydrateFromSupabase({ routeOverride: route });
+  }, [route, authLoading, hydrateFromSupabase]);
+
+  // Scoped Realtime: ONLY when logged in as merchant with an active shopId
+  useEffect(() => {
+    if (!supabase || session?.role !== 'merchant' || !session.shopId) return;
+    const shopId = session.shopId;
+    const channel = supabase
+      .channel(`merchant-shop-${shopId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'products', filter: `shop_id=eq.${shopId}` },
+        () => {
+          invalidateCache(`products:merchant:${shopId}`);
+          hydrateFromSupabase({ role: 'merchant', shopId, force: true });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'inquiries', filter: `shop_id=eq.${shopId}` },
+        () => {
+          invalidateCache(`inquiries:merchant:${shopId}`);
+          hydrateFromSupabase({ role: 'merchant', shopId, force: true });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'lens_types', filter: `shop_id=eq.${shopId}` },
+        () => {
+          invalidateCache(`catalog:${shopId}`);
+          fetchScopedCatalog(shopId, true);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'brands', filter: `shop_id=eq.${shopId}` },
+        () => {
+          invalidateCache(`catalog:${shopId}`);
+          fetchScopedCatalog(shopId, true);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'extras', filter: `shop_id=eq.${shopId}` },
+        () => {
+          invalidateCache(`catalog:${shopId}`);
+          fetchScopedCatalog(shopId, true);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase?.removeChannel(channel);
+    };
+  }, [session?.role, session?.shopId, fetchScopedCatalog, hydrateFromSupabase]);
 
   const logAudit = useCallback(
     async (action: string, details: string, shopId?: string) => {
@@ -1603,6 +2453,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           action,
           details,
         });
+        invalidateCache('audit:');
       }
     },
     [session]
@@ -1915,20 +2766,25 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     if (supabase) await supabase.auth.signOut();
+    sessionRef.current = null;
     setSession(null);
+    clearAllQueryCache();
     navigate('/');
     toast('تم تسجيل الخروج ✓');
   }, [navigate, toast]);
 
   const uploadAssetToStorage = useCallback(
     async (blob: Blob, folder: string, ext: string): Promise<string> => {
+      const optimized = await optimizeImageForUpload(blob, { extHint: ext, maxWidth: 1600, quality: 0.8 });
+      const finalBlob = optimized.blob;
+      const finalExt = optimized.ext || ext;
       if (supabase && session) {
         const cleanFolder = folder.replace(/^\/+|\/+$/g, '');
-        const path = `${cleanFolder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-        const { error } = await supabase.storage.from('optiverse-assets').upload(path, blob, {
+        const path = `${cleanFolder}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${finalExt}`;
+        const { error } = await supabase.storage.from('optiverse-assets').upload(path, finalBlob, {
           cacheControl: '3600',
           upsert: false,
-          contentType: blob.type || (ext === 'glb' ? 'model/gltf-binary' : `image/${ext}`),
+          contentType: optimized.contentType || (finalExt === 'glb' ? 'model/gltf-binary' : `image/${finalExt}`),
         });
         if (!error) {
           const { data } = supabase.storage.from('optiverse-assets').getPublicUrl(path);
@@ -1938,7 +2794,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       return new Promise((resolve) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result));
-        reader.readAsDataURL(blob);
+        reader.readAsDataURL(finalBlob);
       });
     },
     [session]
@@ -1946,14 +2802,16 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
 
   const uploadRxPrescriptionToStorage = useCallback(
     async (shopId: string, blob: Blob, ext: string): Promise<string> => {
+      const optimized = await optimizeImageForUpload(blob, { extHint: ext, maxWidth: 1600, quality: 0.8 });
+      const finalBlob = optimized.blob;
+      const cleanExt = (optimized.ext || ext).replace(/[^a-z0-9]/gi, '').toLowerCase() || 'webp';
       if (supabase) {
-        const cleanExt = ext.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'jpg';
         const fileId = generateId('rx');
         const path = `${shopId}/${fileId}.${cleanExt}`;
         const contentType =
-          blob.type ||
+          optimized.contentType ||
           (cleanExt === 'pdf' ? 'application/pdf' : cleanExt === 'webp' ? 'image/webp' : `image/${cleanExt}`);
-        const { error } = await supabase.storage.from('optiverse-rx').upload(path, blob, {
+        const { error } = await supabase.storage.from('optiverse-rx').upload(path, finalBlob, {
           cacheControl: '3600',
           upsert: false,
           contentType,
@@ -1966,7 +2824,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       return new Promise((resolve) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result));
-        reader.readAsDataURL(blob);
+        reader.readAsDataURL(finalBlob);
       });
     },
     []
@@ -1988,6 +2846,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         });
       }
       setShops((a) => a.map((s) => (s.id === shopId ? { ...s, ...patch } : s)));
+      invalidateCache('shops:');
+      invalidateCache('admin-stats:');
       if (supabase) {
         const adminActing = isAdminRole(session?.role);
         const payload: Record<string, any> = {
@@ -2168,6 +3028,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       if (patch.plans) {
         setPlans(patch.plans);
       }
+      invalidateCache('settings:');
+      invalidateCache('plans:');
       await logAudit('تحديث إعدادات المنصة', 'تحديث الأسعار والصلاحيات العامة للمنصة');
       if (supabase) {
         await supabase.from('platform_settings').upsert({
@@ -2301,6 +3163,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       }
 
       setShops((a) => [finalShop, ...a]);
+      invalidateCache('shops:');
+      invalidateCache('admin-stats:');
       await seedCatalogForShop(finalShop.id, Boolean(supabase));
       setExtraShops((x) => x + 1);
       await logAudit('إضافة محل يدوياً', `المحل: ${finalShop.name} (${finalShop.plan})`, finalShop.id);
@@ -2376,6 +3240,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           reference_no: referenceNo?.trim() || null,
           status,
         });
+        invalidateCache('payments:');
+        invalidateCache('admin-stats:');
       }
     },
     [logAudit]
@@ -2431,6 +3297,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           } catch {
             // Optional column fallback
           }
+          invalidateCache('products:');
         }
         return mergedProduct;
       }
@@ -2581,8 +3448,12 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
               );
             }
           }
+          invalidateCache('products:');
+          invalidateCache('admin-stats:');
           return { ...fullProd, id: finalId, images: syncedImages };
         }
+        invalidateCache('products:');
+        invalidateCache('admin-stats:');
       }
       return fullProd;
     },
@@ -2726,6 +3597,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           const map = new Map(finalProducts.map((p) => [p.code + '|' + p.shopId, p]));
           return prev.map((p) => map.get(p.code + '|' + p.shopId) || p);
         });
+        invalidateCache('products:');
+        invalidateCache('admin-stats:');
         return finalProducts;
       }
 
@@ -2854,6 +3727,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             }
           }
         }
+        invalidateCache('products:');
       }
       return updated;
     },
@@ -2879,6 +3753,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         } catch {
           // Optional column fallback
         }
+        invalidateCache('products:');
       }
     },
     [products]
@@ -2912,6 +3787,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             )
           );
         }
+        invalidateCache('products:');
       }
     },
     []
@@ -2944,6 +3820,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           .from('products')
           .update({ is_deleted: true, deleted_at: new Date().toISOString() })
           .eq('id', found.id);
+        invalidateCache('products:');
+        invalidateCache('admin-stats:');
       }
       return { ok: true, product: found };
     },
@@ -2962,6 +3840,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           .from('products')
           .update({ is_deleted: true, deleted_at: new Date().toISOString() })
           .eq('id', productId);
+        invalidateCache('products:');
+        invalidateCache('admin-stats:');
       }
     },
     [products, logAudit]
@@ -2976,6 +3856,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       }
       if (supabase) {
         await supabase.from('products').update({ discount_pct: disc }).eq('id', productId);
+        invalidateCache('products:');
       }
     },
     [products, logAudit]
@@ -3036,7 +3917,9 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           } catch {
             // Optional columns fallback
           }
+          invalidateCache('crm:');
         }
+        invalidateCache(`products:detail:${review.productId}`);
       }
       return review;
     },
@@ -3066,6 +3949,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           is_active: item.on !== false,
         });
       }
+      invalidateCache(`catalog:${shopId}`);
     },
     [logAudit]
   );
@@ -3097,6 +3981,8 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
       if (res.error) {
         await supabase.from('crm_customers').insert(baseRow);
       }
+      invalidateCache('crm:');
+      invalidateCache('admin-stats:');
     }
     return rec;
   }, []);
@@ -3120,6 +4006,7 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             ? { recall_6m_sent_at: now }
             : { recall_12m_sent_at: now };
         await supabase.from('crm_customers').update(colPatch).eq('id', id);
+        invalidateCache('crm:');
       } catch {
         // Optional column fallback
       }
@@ -3211,6 +4098,9 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
           stage: q.stage || 'review',
           payment_method: q.pay || null,
         });
+        invalidateCache('inquiries:');
+        invalidateCache('products:');
+        invalidateCache('admin-stats:');
       }
     },
     [addCrmCustomer, products]
@@ -3247,24 +4137,29 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
             ...(patch.price !== undefined ? { initial_price: patch.price } : {}),
           })
           .eq('ref_code', id);
+        invalidateCache('inquiries:');
+        invalidateCache('crm:');
       }
     },
     [inq]
   );
 
   const enterShopAsMerchant = useCallback(
-    (s: Shop) => {
+    async (s: Shop) => {
       setActiveShopSlug(s.slug);
-      setSession({
+      const nextSess: AuthSession = {
         userId: session?.userId || 'admin-impersonate',
         email: session?.email || getAdminOwnerEmail() || 'merchant@optiverse.local',
         role: 'merchant',
         shopId: s.id,
-      });
+      };
+      sessionRef.current = nextSess;
+      setSession(nextSess);
+      await loadShopAdminContext(s.id);
       navigate('/merchant');
       toast(`دخلت كمتجر: ${s.name}`);
     },
-    [navigate, session, toast]
+    [loadShopAdminContext, navigate, session, toast]
   );
 
   const switchToAdminDemoStore = useCallback(async () => {
@@ -3283,14 +4178,16 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         });
         const data = (await res.json().catch(() => ({}))) as { shopId?: string; slug?: string };
         if (res.ok && data.shopId) {
-          await hydrateFromSupabase();
           if (data.slug) setActiveShopSlug(data.slug);
-          setSession({
+          const nextSess: AuthSession = {
             userId: session?.userId || 'super-admin-demo',
             email: session?.email || getAdminOwnerEmail() || 'merchant@optiverse.local',
             role: 'super_admin',
             shopId: data.shopId,
-          });
+          };
+          sessionRef.current = nextSess;
+          setSession(nextSess);
+          await loadShopAdminContext(data.shopId);
           navigate('/merchant');
           toast('دخلت لمتجر الديمو التجريبي (معالجة AI غير محدودة بدون خصم رصيد) ⭐');
           return;
@@ -3322,15 +4219,18 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     }
 
     setActiveShopSlug(demoShop.slug);
-    setSession({
+    const fallbackSess: AuthSession = {
       userId: session?.userId || 'super-admin-demo',
       email: session?.email || getAdminOwnerEmail() || 'merchant@optiverse.local',
       role: 'super_admin',
       shopId: demoShop.id,
-    });
+    };
+    sessionRef.current = fallbackSess;
+    setSession(fallbackSess);
+    await loadShopAdminContext(demoShop.id);
     navigate('/merchant');
     toast('دخلت لمتجر الديمو الخاص بالأدمن (بدون خصم رصيد) ⭐');
-  }, [getAccessToken, hydrateFromSupabase, navigate, session?.email, session?.userId, shops, toast, updateShop]);
+  }, [getAccessToken, loadShopAdminContext, navigate, session?.email, session?.userId, shops, toast, updateShop]);
 
   const exportFullBackup = useCallback(async () => {
     let payload: any = null;
@@ -3453,6 +4353,17 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
         uploadAssetToStorage,
         uploadRxPrescriptionToStorage,
         hydrateFromSupabase,
+        fetchStorefrontProductsPage,
+        fetchProductDetails,
+        fetchDirectoryShopsPage,
+        fetchMerchantProductsPage,
+        fetchMerchantInquiriesPage,
+        fetchMerchantCrmPage,
+        fetchAdminShopsPage,
+        fetchAdminPaymentsPage,
+        fetchAdminAuditLogsPage,
+        fetchAdminStatsSummary,
+        loadShopAdminContext,
       }}
     >
       {children}

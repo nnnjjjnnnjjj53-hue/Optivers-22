@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { DEFAULT_SHOP_ID, EGYPT_GOVERNORATES, STORE_THEMES, resolveStoreTheme } from '../data/seed';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
@@ -9,14 +9,28 @@ import {
   isShopExpiredOrPaused,
   useOptiVerse,
 } from '../services/optiverseStore';
-import { Inquiry, OrderStage, Product } from '../types';
-import { BulkFrameUploader } from '../components/BulkFrameUploader';
+import { CrmCustomer, Inquiry, OrderStage, Product } from '../types';
+import {
+  ArabicEmptyState,
+  AsyncErrorBanner,
+  ListCardsSkeleton,
+  LoadMoreBar,
+  PageSuspendFallback,
+  ProductGridSkeleton,
+} from '../components/AsyncStateViews';
 import { ExamThumb, MiniGlasses } from '../components/GlassesGraphics';
 import { I } from '../components/Icons';
 import { MerchantLensMatrixManager } from '../components/MerchantLensMatrixManager';
 import { PWAInstallButton } from '../components/PWAInstallPrompt';
-import { VipInStoreConsultantModal } from '../components/VipInStoreConsultantModal';
+import { useDebouncedValue } from '../utils/queryCache';
 import { resolveAngled45Url, resolveStoreFrontUrl } from '../utils/bulkFrameProcessor';
+
+const BulkFrameUploader = lazy(() =>
+  import('../components/BulkFrameUploader').then((m) => ({ default: m.BulkFrameUploader }))
+);
+const VipInStoreConsultantModal = lazy(() =>
+  import('../components/VipInStoreConsultantModal').then((m) => ({ default: m.VipInStoreConsultantModal }))
+);
 import { formatOpticalDimensions, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
 import {
   ScannedLedgerCustomer,
@@ -175,6 +189,9 @@ export function MerchantPage() {
     navigate,
     getAccessToken,
     uploadAssetToStorage,
+    fetchMerchantProductsPage,
+    fetchMerchantInquiriesPage,
+    fetchMerchantCrmPage,
   } = useOptiVerse();
 
   const [authMode, setAuthMode] = useState<'login' | 'signup' | 'phone'>(() =>
@@ -234,7 +251,7 @@ export function MerchantPage() {
   const [adDraftText, setAdDraftText] = useState('');
   const [showAdvancedStoreSettings, setShowAdvancedStoreSettings] = useState(false);
   const [aiLogoBusy, setAiLogoBusy] = useState(false);
-  const [visibleProdsCount, setVisibleProdsCount] = useState(MERCHANT_PAGE_SIZE);
+  const [hasVisitedProds, setHasVisitedProds] = useState(() => sec === 'prods');
   const [invFilter, setInvFilter] = useState<'all' | 'in_stock' | 'low' | 'out'>(() => {
     const f = initialMerchantState.invFilter;
     return f === 'in_stock' || f === 'low' || f === 'out' ? f : 'all';
@@ -243,6 +260,41 @@ export function MerchantPage() {
   const [newCollectionSignal, setNewCollectionSignal] = useState(0);
   const [vipModeOpen, setVipModeOpen] = useState(false);
   const qrWrapRef = useRef<HTMLDivElement | null>(null);
+
+  const debouncedProdSearch = useDebouncedValue(prodSearch, 300);
+  const debouncedCrmSearch = useDebouncedValue(crmSearch, 300);
+
+  // Server-paginated Products state (24 per page)
+  const [pagedProds, setPagedProds] = useState<Product[]>([]);
+  const [prodsPage, setProdsPage] = useState(0);
+  const [prodsTotalCount, setProdsTotalCount] = useState<number | null>(null);
+  const [prodsHasMore, setProdsHasMore] = useState(false);
+  const [prodsLoading, setProdsLoading] = useState(false);
+  const [prodsLoadingMore, setProdsLoadingMore] = useState(false);
+  const [prodsError, setProdsError] = useState<string | null>(null);
+  const [prodsRetryNonce, setProdsRetryNonce] = useState(0);
+
+  // Server-paginated Inquiries & CRM state (25 per page)
+  const [pagedInq, setPagedInq] = useState<Inquiry[]>([]);
+  const [inqPage, setInqPage] = useState(0);
+  const [inqTotalCount, setInqTotalCount] = useState<number | null>(null);
+  const [inqHasMore, setInqHasMore] = useState(false);
+  const [inqLoading, setInqLoading] = useState(false);
+  const [inqLoadingMore, setInqLoadingMore] = useState(false);
+  const [inqError, setInqError] = useState<string | null>(null);
+
+  const [pagedCrm, setPagedCrm] = useState<CrmCustomer[]>([]);
+  const [crmPage, setCrmPage] = useState(0);
+  const [crmTotalCount, setCrmTotalCount] = useState<number | null>(null);
+  const [crmHasMore, setCrmHasMore] = useState(false);
+  const [crmLoading, setCrmLoading] = useState(false);
+  const [crmLoadingMore, setCrmLoadingMore] = useState(false);
+  const [crmError, setCrmError] = useState<string | null>(null);
+  const [crmRetryNonce, setCrmRetryNonce] = useState(0);
+
+  useEffect(() => {
+    if (sec === 'prods') setHasVisitedProds(true);
+  }, [sec]);
 
   const [liveStats, setLiveStats] = useState<ShopLiveAnalyticsSummary>(() =>
     activeShop?.id
@@ -295,8 +347,187 @@ export function MerchantPage() {
   }, [activeShop?.id, refreshLiveStats]);
 
   useEffect(() => {
-    setVisibleProdsCount(MERCHANT_PAGE_SIZE);
-  }, [activeShop?.id]);
+    const shopId = activeShop?.id;
+    if (!shopId || sec !== 'prods') return;
+    let cancelled = false;
+    setProdsLoading(true);
+    setProdsError(null);
+    fetchMerchantProductsPage({
+      shopId,
+      page: 0,
+      pageSize: MERCHANT_PAGE_SIZE,
+      search: debouncedProdSearch,
+      invFilter,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setPagedProds(res.rows);
+        setProdsPage(0);
+        setProdsTotalCount(res.totalCount);
+        setProdsHasMore(res.hasMore);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setProdsError(err instanceof Error ? err.message : 'تعذّر تحميل النظارات');
+      })
+      .finally(() => {
+        if (!cancelled) setProdsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeShop?.id, sec, debouncedProdSearch, invFilter, prodsRetryNonce, fetchMerchantProductsPage]);
+
+  const loadMoreMerchantProds = useCallback(async () => {
+    if (!activeShop?.id || prodsLoadingMore || !prodsHasMore) return;
+    const nextPage = prodsPage + 1;
+    setProdsLoadingMore(true);
+    setProdsError(null);
+    try {
+      const res = await fetchMerchantProductsPage({
+        shopId: activeShop.id,
+        page: nextPage,
+        pageSize: MERCHANT_PAGE_SIZE,
+        search: debouncedProdSearch,
+        invFilter,
+      });
+      setPagedProds((prev) => {
+        const seen = new Set(prev.map((x) => x.id));
+        const merged = [...prev];
+        for (const r of res.rows) {
+          if (!seen.has(r.id)) {
+            seen.add(r.id);
+            merged.push(r);
+          }
+        }
+        return merged;
+      });
+      setProdsPage(nextPage);
+      setProdsHasMore(res.hasMore);
+    } catch (err) {
+      setProdsError(err instanceof Error ? err.message : 'تعذّر تحميل المزيد');
+    } finally {
+      setProdsLoadingMore(false);
+    }
+  }, [activeShop?.id, prodsLoadingMore, prodsHasMore, prodsPage, debouncedProdSearch, invFilter, fetchMerchantProductsPage]);
+
+  useEffect(() => {
+    const shopId = activeShop?.id;
+    if (!shopId || sec !== 'crm') return;
+    let cancelled = false;
+    setInqLoading(true);
+    setCrmLoading(true);
+    setInqError(null);
+    setCrmError(null);
+
+    fetchMerchantInquiriesPage({
+      shopId,
+      page: 0,
+      pageSize: 25,
+      search: debouncedCrmSearch,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setPagedInq(res.rows);
+        setInqPage(0);
+        setInqTotalCount(res.totalCount);
+        setInqHasMore(res.hasMore);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setInqError(err instanceof Error ? err.message : 'تعذّر تحميل الطلبات');
+      })
+      .finally(() => {
+        if (!cancelled) setInqLoading(false);
+      });
+
+    fetchMerchantCrmPage({
+      shopId,
+      page: 0,
+      pageSize: 25,
+      search: debouncedCrmSearch,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setPagedCrm(res.rows);
+        setCrmPage(0);
+        setCrmTotalCount(res.totalCount);
+        setCrmHasMore(res.hasMore);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setCrmError(err instanceof Error ? err.message : 'تعذّر تحميل سجل العملاء');
+      })
+      .finally(() => {
+        if (!cancelled) setCrmLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeShop?.id, sec, debouncedCrmSearch, crmRetryNonce, fetchMerchantInquiriesPage, fetchMerchantCrmPage]);
+
+  const loadMoreMerchantInq = useCallback(async () => {
+    if (!activeShop?.id || inqLoadingMore || !inqHasMore) return;
+    const nextPage = inqPage + 1;
+    setInqLoadingMore(true);
+    try {
+      const res = await fetchMerchantInquiriesPage({
+        shopId: activeShop.id,
+        page: nextPage,
+        pageSize: 25,
+        search: debouncedCrmSearch,
+      });
+      setPagedInq((prev) => {
+        const seen = new Set(prev.map((x) => x.id));
+        const merged = [...prev];
+        for (const r of res.rows) {
+          if (!seen.has(r.id)) {
+            seen.add(r.id);
+            merged.push(r);
+          }
+        }
+        return merged;
+      });
+      setInqPage(nextPage);
+      setInqHasMore(res.hasMore);
+    } catch (err) {
+      setInqError(err instanceof Error ? err.message : 'تعذّر تحميل المزيد من الطلبات');
+    } finally {
+      setInqLoadingMore(false);
+    }
+  }, [activeShop?.id, inqLoadingMore, inqHasMore, inqPage, debouncedCrmSearch, fetchMerchantInquiriesPage]);
+
+  const loadMoreMerchantCrm = useCallback(async () => {
+    if (!activeShop?.id || crmLoadingMore || !crmHasMore) return;
+    const nextPage = crmPage + 1;
+    setCrmLoadingMore(true);
+    try {
+      const res = await fetchMerchantCrmPage({
+        shopId: activeShop.id,
+        page: nextPage,
+        pageSize: 25,
+        search: debouncedCrmSearch,
+      });
+      setPagedCrm((prev) => {
+        const seen = new Set(prev.map((x) => x.id));
+        const merged = [...prev];
+        for (const r of res.rows) {
+          if (!seen.has(r.id)) {
+            seen.add(r.id);
+            merged.push(r);
+          }
+        }
+        return merged;
+      });
+      setCrmPage(nextPage);
+      setCrmHasMore(res.hasMore);
+    } catch (err) {
+      setCrmError(err instanceof Error ? err.message : 'تعذّر تحميل المزيد من العملاء');
+    } finally {
+      setCrmLoadingMore(false);
+    }
+  }, [activeShop?.id, crmLoadingMore, crmHasMore, crmPage, debouncedCrmSearch, fetchMerchantCrmPage]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !activeShop?.id) return;
@@ -1329,11 +1560,11 @@ export function MerchantPage() {
 
   const handleUploadDirectLogo = async (file: File) => {
     try {
-      const url = await uploadAssetToStorage(file, `${activeShop.id}/logos`, 'png');
+      const url = await uploadAssetToStorage(file, `${activeShop.id}/logos`, 'webp');
       await updateShop(activeShop.id, { logo: url });
       toast('تم رفع شعار المحل وتطبيقه فوراً ✓');
-    } catch {
-      toast('تعذر رفع صورة اللوجو');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'تعذر رفع صورة اللوجو');
     }
   };
 
@@ -1802,6 +2033,10 @@ export function MerchantPage() {
                         <img
                           src={liveStats.topTriedFrameToday.imageUrl}
                           alt={liveStats.topTriedFrameToday.name}
+                          width={64}
+                          height={44}
+                          loading="lazy"
+                          decoding="async"
                           className="max-w-full max-h-full object-contain"
                         />
                       ) : (
@@ -1931,13 +2166,17 @@ export function MerchantPage() {
         </Head>
       )}
 
-      {/* Keep BulkFrameUploader mounted across tabs so background AI/cutout batches never interrupt */}
-      <div className={sec === 'prods' ? 'block' : 'hidden'}>
-        <BulkFrameUploader
-          externalNewCollectionSignal={newCollectionSignal}
-          onNavigateToProds={() => setSec('prods')}
-        />
-      </div>
+      {/* Keep BulkFrameUploader mounted once prods tab is visited so background AI batches never interrupt */}
+      {hasVisitedProds && (
+        <div className={sec === 'prods' ? 'block' : 'hidden'}>
+          <Suspense fallback={<ProductGridSkeleton count={2} />}>
+            <BulkFrameUploader
+              externalNewCollectionSignal={newCollectionSignal}
+              onNavigateToProds={() => setSec('prods')}
+            />
+          </Suspense>
+        </div>
+      )}
 
       {sec === 'prods' && (
         <>
@@ -1948,10 +2187,7 @@ export function MerchantPage() {
                 <input
                   type="search"
                   value={prodSearch}
-                  onChange={(e) => {
-                    setProdSearch(e.target.value);
-                    setVisibleProdsCount(MERCHANT_PAGE_SIZE);
-                  }}
+                  onChange={(e) => setProdSearch(e.target.value)}
                   placeholder="بحث سريع باسم النظارة أو الكود..."
                   className="inp !ps-9"
                 />
@@ -1990,10 +2226,7 @@ export function MerchantPage() {
                   <button
                     key={f.id}
                     type="button"
-                    onClick={() => {
-                      setInvFilter(f.id);
-                      setVisibleProdsCount(MERCHANT_PAGE_SIZE);
-                    }}
+                    onClick={() => setInvFilter(f.id)}
                     className={
                       'px-3 py-1.5 rounded-xl text-xs font-extrabold border transition cursor-pointer ' +
                       (invFilter === f.id
@@ -2032,31 +2265,45 @@ export function MerchantPage() {
           </div>
 
           {(() => {
-            const qTerm = prodSearch.trim().toLowerCase();
-            const filteredProds = shopProducts.filter((p) => {
-              const st = getProdStock(p);
-              if (invFilter === 'in_stock' && st <= 0) return false;
-              if (invFilter === 'low' && st !== 1) return false;
-              if (invFilter === 'out' && st !== 0) return false;
-              if (qTerm) {
-                const hay = `${p.name} ${p.code} ${p.modelCode || ''}`.toLowerCase();
-                if (!hay.includes(qTerm)) return false;
-              }
-              return true;
-            });
+            const resolvedProds = (pagedProds.length > 0 || debouncedProdSearch || invFilter !== 'all' || !prodsLoading
+              ? pagedProds
+              : shopProducts
+            )
+              .map((row) => shopProducts.find((sp) => sp.id === row.id) || row)
+              .filter((p) => !p.isDeleted);
 
-            if (!filteredProds.length) {
+            if (prodsError) {
               return (
-                <div className="glass rounded-2xl p-10 text-center text-sm text-slate-500">
-                  لا توجد نظارات مطابقة للبحث أو فلتر المخزن حالياً
-                </div>
+                <AsyncErrorBanner
+                  message={prodsError}
+                  retrying={prodsLoading}
+                  onRetry={() => setProdsRetryNonce((n) => n + 1)}
+                />
+              );
+            }
+
+            if (prodsLoading && !resolvedProds.length) {
+              return <ProductGridSkeleton count={6} />;
+            }
+
+            if (!resolvedProds.length) {
+              return (
+                <ArabicEmptyState
+                  title="لا توجد نتائج"
+                  subtitle="لا توجد نظارات مطابقة للبحث أو فلتر المخزن حالياً"
+                  actionLabel={prodSearch.trim() || invFilter !== 'all' ? 'إظهار جميع النظارات' : undefined}
+                  onAction={() => {
+                    setProdSearch('');
+                    setInvFilter('all');
+                  }}
+                />
               );
             }
 
             return (
               <>
                 <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {filteredProds.slice(0, visibleProdsCount).map((p) => {
+                  {resolvedProds.map((p) => {
                     const published = p.isPublished !== false;
                     const st = getProdStock(p);
                     return (
@@ -2092,7 +2339,10 @@ export function MerchantPage() {
                                 <img
                                   src={resolveAngled45Url(p)}
                                   alt={`زاوية جانبية ${p.name}`}
+                                  width={160}
+                                  height={120}
                                   loading="lazy"
+                                  decoding="async"
                                   className="max-h-full max-w-full object-contain"
                                 />
                               ) : (
@@ -2223,33 +2473,14 @@ export function MerchantPage() {
                   })}
                 </div>
 
-                {filteredProds.length > MERCHANT_PAGE_SIZE && (
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-white border border-[#E2E8F0] px-4 py-3 text-xs">
-                    <span className="opacity-75">
-                      عرض <b>{Math.min(visibleProdsCount, filteredProds.length)}</b> من <b>{filteredProds.length}</b> نظارة
-                    </span>
-                    <div className="flex items-center gap-2">
-                      {visibleProdsCount > MERCHANT_PAGE_SIZE && (
-                        <button
-                          type="button"
-                          className="btn btn-g btn-sm"
-                          onClick={() => setVisibleProdsCount(MERCHANT_PAGE_SIZE)}
-                        >
-                          العودة لأول {MERCHANT_PAGE_SIZE}
-                        </button>
-                      )}
-                      {filteredProds.length > visibleProdsCount && (
-                        <button
-                          type="button"
-                          className="btn btn-p btn-sm"
-                          onClick={() => setVisibleProdsCount((c) => c + MERCHANT_PAGE_SIZE)}
-                        >
-                          عرض المزيد (+{Math.min(MERCHANT_PAGE_SIZE, filteredProds.length - visibleProdsCount)})
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
+                <LoadMoreBar
+                  loadedCount={resolvedProds.length}
+                  totalCount={prodsTotalCount}
+                  hasMore={prodsHasMore}
+                  loadingMore={prodsLoadingMore}
+                  onLoadMore={loadMoreMerchantProds}
+                  itemLabel="نظارة"
+                />
               </>
             );
           })()}
@@ -2568,8 +2799,10 @@ export function MerchantPage() {
                 return nameMatch || phoneMatch;
               };
 
-              const matchedInq = shopInq.filter((q) => matchesCustomer(q.cust, q.phone));
-              const matchedCrm = shopCrm.filter((c) => matchesCustomer(c.customerName, c.phone));
+              const matchedInqSource = pagedInq.length ? pagedInq : shopInq;
+              const matchedCrmSource = pagedCrm.length ? pagedCrm : shopCrm;
+              const matchedInq = matchedInqSource.filter((q) => matchesCustomer(q.cust, q.phone));
+              const matchedCrm = matchedCrmSource.filter((c) => matchesCustomer(c.customerName, c.phone));
 
               type CustomerArchiveProfile = {
                 key: string;
@@ -2797,12 +3030,24 @@ export function MerchantPage() {
             <div className="mb-6 space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="font-extrabold text-sm sm:text-base text-[#0F172A]">
-                  طلبات الواتساب والكشوفات الطبية ({shopInq.length})
+                  طلبات الواتساب والكشوفات الطبية ({inqTotalCount ?? shopInq.length})
                 </h3>
                 {newCount > 0 && <span className="badge b-warn">{newCount} جديدة بانتظار المراجعة</span>}
               </div>
 
-              {shopInq.map((q) => (
+              {inqError ? (
+                <AsyncErrorBanner
+                  message={inqError}
+                  retrying={inqLoading}
+                  onRetry={() => setCrmRetryNonce((n) => n + 1)}
+                />
+              ) : inqLoading && pagedInq.length === 0 ? (
+                <ListCardsSkeleton count={3} />
+              ) : (
+                <>
+                  {(pagedInq.length > 0 || debouncedCrmSearch ? pagedInq : shopInq).map((rawQ) => {
+                    const q = shopInq.find((x) => x.id === rawQ.id) || rawQ;
+                    return (
                 <div key={q.id} className="glass rounded-2xl p-4">
                   <div className="grid sm:grid-cols-[170px_1fr] gap-4">
                     <ExamThumb q={q} onZoom={() => setModal({ t: 'zoom', q })} />
@@ -2880,11 +3125,23 @@ export function MerchantPage() {
                     </div>
                   </div>
                 </div>
-              ))}
-              {!shopInq.length && (
-                <div className="glass rounded-2xl p-8 text-center text-sm text-slate-500">
-                  لا توجد طلبات واتساب أو كشوفات طبية مرسلة بعد
-                </div>
+                    );
+                  })}
+                  {!(pagedInq.length > 0 || debouncedCrmSearch ? pagedInq : shopInq).length && (
+                    <ArabicEmptyState
+                      title="لا توجد نتائج"
+                      subtitle="لا توجد طلبات واتساب أو كشوفات طبية مطابقة حالياً"
+                    />
+                  )}
+                  <LoadMoreBar
+                    loadedCount={(pagedInq.length > 0 || debouncedCrmSearch ? pagedInq : shopInq).length}
+                    totalCount={inqTotalCount}
+                    hasMore={inqHasMore}
+                    loadingMore={inqLoadingMore}
+                    onLoadMore={loadMoreMerchantInq}
+                    itemLabel="طلب"
+                  />
+                </>
               )}
             </div>
           )}
@@ -3147,7 +3404,23 @@ export function MerchantPage() {
               </form>
 
               <div className="space-y-3">
-                {dueCrmList.map((c) => {
+                {crmError ? (
+                  <AsyncErrorBanner
+                    message={crmError}
+                    retrying={crmLoading}
+                    onRetry={() => setCrmRetryNonce((n) => n + 1)}
+                  />
+                ) : crmLoading && pagedCrm.length === 0 ? (
+                  <ListCardsSkeleton count={4} />
+                ) : (
+                  <>
+                    {(pagedCrm.length > 0 || debouncedCrmSearch
+                      ? pagedCrm.map((row) => {
+                          const fresh = shopCrm.find((x) => x.id === row.id) || row;
+                          return { ...fresh, eval: evaluateCustomerReminders(fresh) };
+                        })
+                      : dueCrmList
+                    ).map((c) => {
                   const ev = c.eval;
                   const formattedDate = new Date(c.orderDate).toLocaleDateString('ar-EG');
                   const reviewMsg = encodeURIComponent(
@@ -3279,10 +3552,21 @@ export function MerchantPage() {
                     </div>
                   );
                 })}
-                {!dueCrmList.length && (
-                  <div className="glass rounded-2xl p-8 text-center text-sm text-slate-500">
-                    لا يوجد عملاء مسجلون بعد — أضف أول عميل لبدء التذكيرات التلقائية
-                  </div>
+                    {!(pagedCrm.length > 0 || debouncedCrmSearch ? pagedCrm : dueCrmList).length && (
+                      <ArabicEmptyState
+                        title="لا توجد نتائج"
+                        subtitle="لا يوجد عملاء مطابقون — أضف أول عميل لبدء التذكيرات التلقائية"
+                      />
+                    )}
+                    <LoadMoreBar
+                      loadedCount={(pagedCrm.length > 0 || debouncedCrmSearch ? pagedCrm : dueCrmList).length}
+                      totalCount={crmTotalCount}
+                      hasMore={crmHasMore}
+                      loadingMore={crmLoadingMore}
+                      onLoadMore={loadMoreMerchantCrm}
+                      itemLabel="عميل"
+                    />
+                  </>
                 )}
               </div>
             </div>
@@ -3502,6 +3786,10 @@ export function MerchantPage() {
                     <img
                       src={activeShop.logo}
                       alt={activeShop.name}
+                      width={48}
+                      height={48}
+                      loading="lazy"
+                      decoding="async"
                       className="w-12 h-12 rounded-xl object-contain bg-white border border-[#E2E8F0] p-1 shrink-0"
                     />
                   ) : (
@@ -3859,11 +4147,13 @@ export function MerchantPage() {
       )}
 
       {vipModeOpen && canShowStoreAccess && (
-        <VipInStoreConsultantModal
-          shop={activeShop}
-          products={shopProducts}
-          onClose={() => setVipModeOpen(false)}
-        />
+        <Suspense fallback={<PageSuspendFallback label="جاري فتح وضع المساعد VIP..." />}>
+          <VipInStoreConsultantModal
+            shop={activeShop}
+            products={shopProducts}
+            onClose={() => setVipModeOpen(false)}
+          />
+        </Suspense>
       )}
     </Shell>
   );

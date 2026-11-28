@@ -1,10 +1,30 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { DEFAULT_LANDING_PREVIEW_FRAMES, TYPES } from '../data/seed';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
-import { getShopDaysLeft, isAdminRole, useOptiVerse } from '../services/optiverseStore';
-import { FrameType, LandingPreviewFrame, Plan, Shop, SponsoredSupplier } from '../types';
+import {
+  AdminStatsSummary,
+  getShopDaysLeft,
+  isAdminRole,
+  useOptiVerse,
+} from '../services/optiverseStore';
+import {
+  AuditLog,
+  FrameType,
+  LandingPreviewFrame,
+  PaymentRecord,
+  Plan,
+  Shop,
+  SponsoredSupplier,
+} from '../types';
 import { AdminLensMatrixManager } from '../components/AdminLensMatrixManager';
+import {
+  ArabicEmptyState,
+  AsyncErrorBanner,
+  LoadMoreBar,
+  TableRowsSkeleton,
+} from '../components/AsyncStateViews';
 import { I } from '../components/Icons';
+import { useDebouncedValue } from '../utils/queryCache';
 import {
   Bars,
   Egp,
@@ -138,6 +158,10 @@ export function AdminPage() {
     exportFullBackup,
     uploadAssetToStorage,
     hydrateFromSupabase,
+    fetchAdminShopsPage,
+    fetchAdminPaymentsPage,
+    fetchAdminAuditLogsPage,
+    fetchAdminStatsSummary,
   } = useOptiVerse();
 
   const [email, setEmail] = useState('');
@@ -182,6 +206,37 @@ export function AdminPage() {
   const [range, setRange] = useState<6 | 12>(6);
   const [q, setQ] = useState('');
   const [flt, setFlt] = useState('all');
+  const debouncedShopQ = useDebouncedValue(q, 300);
+
+  // Server-paginated Admin data (25 per page)
+  const [adminSummary, setAdminSummary] = useState<AdminStatsSummary | null>(null);
+
+  const [pagedShops, setPagedShops] = useState<Shop[]>([]);
+  const [shopsPage, setShopsPage] = useState(0);
+  const [shopsTotalCount, setShopsTotalCount] = useState<number | null>(null);
+  const [shopsHasMore, setShopsHasMore] = useState(false);
+  const [shopsLoading, setShopsLoading] = useState(false);
+  const [shopsLoadingMore, setShopsLoadingMore] = useState(false);
+  const [shopsError, setShopsError] = useState<string | null>(null);
+  const [shopsRetryNonce, setShopsRetryNonce] = useState(0);
+
+  const [pagedPayments, setPagedPayments] = useState<PaymentRecord[]>([]);
+  const [payPage, setPayPage] = useState(0);
+  const [payTotalCount, setPayTotalCount] = useState<number | null>(null);
+  const [payHasMore, setPayHasMore] = useState(false);
+  const [payLoading, setPayLoading] = useState(false);
+  const [payLoadingMore, setPayLoadingMore] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
+  const [payRetryNonce, setPayRetryNonce] = useState(0);
+
+  const [pagedAuditLogs, setPagedAuditLogs] = useState<AuditLog[]>([]);
+  const [auditPage, setAuditPage] = useState(0);
+  const [auditTotalCount, setAuditTotalCount] = useState<number | null>(null);
+  const [auditHasMore, setAuditHasMore] = useState(false);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditLoadingMore, setAuditLoadingMore] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [auditRetryNonce, setAuditRetryNonce] = useState(0);
 
   const [draftPreviewFrames, setDraftPreviewFrames] = useState<LandingPreviewFrame[]>(() =>
     platformSettings.landingPreviewFrames?.length
@@ -253,6 +308,184 @@ export function AdminPage() {
       })
       .catch(() => {});
   }, [session?.role, session?.userId]);
+
+  useEffect(() => {
+    if (!isAdminRole(session?.role)) return;
+    let cancelled = false;
+    fetchAdminStatsSummary()
+      .then((res) => {
+        if (!cancelled) setAdminSummary(res);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.role, shopsRetryNonce, fetchAdminStatsSummary]);
+
+  useEffect(() => {
+    if (!isAdminRole(session?.role)) return;
+    let cancelled = false;
+    const activeSearch = sec === 'shops' ? debouncedShopQ : '';
+    const activeStatus = sec === 'shops' ? flt : 'all';
+    setShopsLoading(true);
+    setShopsError(null);
+    fetchAdminShopsPage({
+      page: 0,
+      pageSize: 25,
+      search: activeSearch,
+      statusFilter: activeStatus,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setPagedShops(res.rows);
+        setShopsPage(0);
+        setShopsTotalCount(res.totalCount);
+        setShopsHasMore(res.hasMore);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setShopsError(err instanceof Error ? err.message : 'تعذّر تحميل المحلات');
+      })
+      .finally(() => {
+        if (!cancelled) setShopsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.role, sec, debouncedShopQ, flt, shopsRetryNonce, fetchAdminShopsPage]);
+
+  const loadMoreAdminShops = useCallback(async () => {
+    if (shopsLoadingMore || !shopsHasMore) return;
+    const nextPage = shopsPage + 1;
+    setShopsLoadingMore(true);
+    try {
+      const res = await fetchAdminShopsPage({
+        page: nextPage,
+        pageSize: 25,
+        search: sec === 'shops' ? debouncedShopQ : '',
+        statusFilter: sec === 'shops' ? flt : 'all',
+      });
+      setPagedShops((prev) => {
+        const seen = new Set(prev.map((x) => x.id));
+        const merged = [...prev];
+        for (const r of res.rows) {
+          if (!seen.has(r.id)) {
+            seen.add(r.id);
+            merged.push(r);
+          }
+        }
+        return merged;
+      });
+      setShopsPage(nextPage);
+      setShopsHasMore(res.hasMore);
+    } catch (err) {
+      setShopsError(err instanceof Error ? err.message : 'تعذّر تحميل المزيد من المحلات');
+    } finally {
+      setShopsLoadingMore(false);
+    }
+  }, [shopsLoadingMore, shopsHasMore, shopsPage, sec, debouncedShopQ, flt, fetchAdminShopsPage]);
+
+  useEffect(() => {
+    if (!isAdminRole(session?.role) || (sec !== 'pay' && sec !== 'over')) return;
+    let cancelled = false;
+    setPayLoading(true);
+    setPayError(null);
+    fetchAdminPaymentsPage({ page: 0, pageSize: 25 })
+      .then((res) => {
+        if (cancelled) return;
+        setPagedPayments(res.rows);
+        setPayPage(0);
+        setPayTotalCount(res.totalCount);
+        setPayHasMore(res.hasMore);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setPayError(err instanceof Error ? err.message : 'تعذّر تحميل المدفوعات');
+      })
+      .finally(() => {
+        if (!cancelled) setPayLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.role, sec, payRetryNonce, fetchAdminPaymentsPage]);
+
+  const loadMoreAdminPayments = useCallback(async () => {
+    if (payLoadingMore || !payHasMore) return;
+    const nextPage = payPage + 1;
+    setPayLoadingMore(true);
+    try {
+      const res = await fetchAdminPaymentsPage({ page: nextPage, pageSize: 25 });
+      setPagedPayments((prev) => {
+        const seen = new Set(prev.map((x) => x.id));
+        const merged = [...prev];
+        for (const r of res.rows) {
+          if (!seen.has(r.id)) {
+            seen.add(r.id);
+            merged.push(r);
+          }
+        }
+        return merged;
+      });
+      setPayPage(nextPage);
+      setPayHasMore(res.hasMore);
+    } catch (err) {
+      setPayError(err instanceof Error ? err.message : 'تعذّر تحميل المزيد');
+    } finally {
+      setPayLoadingMore(false);
+    }
+  }, [payLoadingMore, payHasMore, payPage, fetchAdminPaymentsPage]);
+
+  useEffect(() => {
+    if (!isAdminRole(session?.role) || sec !== 'set') return;
+    let cancelled = false;
+    setAuditLoading(true);
+    setAuditError(null);
+    fetchAdminAuditLogsPage({ page: 0, pageSize: 25 })
+      .then((res) => {
+        if (cancelled) return;
+        setPagedAuditLogs(res.rows);
+        setAuditPage(0);
+        setAuditTotalCount(res.totalCount);
+        setAuditHasMore(res.hasMore);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setAuditError(err instanceof Error ? err.message : 'تعذّر تحميل سجل العمليات');
+      })
+      .finally(() => {
+        if (!cancelled) setAuditLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.role, sec, auditRetryNonce, fetchAdminAuditLogsPage]);
+
+  const loadMoreAdminAuditLogs = useCallback(async () => {
+    if (auditLoadingMore || !auditHasMore) return;
+    const nextPage = auditPage + 1;
+    setAuditLoadingMore(true);
+    try {
+      const res = await fetchAdminAuditLogsPage({ page: nextPage, pageSize: 25 });
+      setPagedAuditLogs((prev) => {
+        const seen = new Set(prev.map((x) => x.id));
+        const merged = [...prev];
+        for (const r of res.rows) {
+          if (!seen.has(r.id)) {
+            seen.add(r.id);
+            merged.push(r);
+          }
+        }
+        return merged;
+      });
+      setAuditPage(nextPage);
+      setAuditHasMore(res.hasMore);
+    } catch (err) {
+      setAuditError(err instanceof Error ? err.message : 'تعذّر تحميل المزيد');
+    } finally {
+      setAuditLoadingMore(false);
+    }
+  }, [auditLoadingMore, auditHasMore, auditPage, fetchAdminAuditLogsPage]);
 
   if (authLoading) {
     return (
@@ -498,10 +731,12 @@ export function AdminPage() {
       ? 100
       : 0;
 
-  const totalShopsCount = shops.length;
-  const pendingShopsCount = shops.filter((s) => s.status === 'pending').length;
-  const trialShopsCount = shops.filter((s) => s.status === 'trial').length;
-  const activeShopsCount = shops.filter((s) => s.status === 'active' || s.status === 'soon').length;
+  const totalShopsCount = adminSummary ? adminSummary.totalShops : shops.length;
+  const pendingShopsCount = adminSummary ? adminSummary.pendingShops : shops.filter((s) => s.status === 'pending').length;
+  const trialShopsCount = adminSummary ? adminSummary.trialShops : shops.filter((s) => s.status === 'trial').length;
+  const activeShopsCount = adminSummary
+    ? adminSummary.activeShops
+    : shops.filter((s) => s.status === 'active' || s.status === 'soon').length;
   const soon = shops.filter((s) => s.status === 'soon').length;
   const monthlyRevenue = shops
     .filter((s) => s.status === 'active' || s.status === 'soon')
@@ -518,23 +753,19 @@ export function AdminPage() {
     .reduce((sum, r) => sum + r.tryons_count, 0);
   const totalSharesCount = dailyAnalyticsRows.reduce((sum, r) => sum + r.shares_count, 0);
   const totalAiProcessedFrames = shops.reduce((sum, s) => sum + (s.aiCreditsUsed || 0), 0);
-  const totalWaOrdersCount = inq.length;
+  const totalWaOrdersCount = adminSummary ? adminSummary.totalInquiries : inq.length;
 
-  const searchLower = q.trim().toLowerCase();
-  const rows = shops.filter(
-    (s) =>
-      (flt === 'all' || s.status === flt) &&
-      (!searchLower ||
-        s.name.toLowerCase().includes(searchLower) ||
-        (s.ownerName || '').toLowerCase().includes(searchLower) ||
-        (s.ownerEmail || '').toLowerCase().includes(searchLower) ||
-        (s.governorate || s.city || '').toLowerCase().includes(searchLower) ||
-        s.slug.toLowerCase().includes(searchLower))
-  );
+  const activePagedShops = (pagedShops.length > 0 || debouncedShopQ || flt !== 'all' || !shopsLoading ? pagedShops : shops)
+    .map((row) => shops.find((s) => s.id === row.id) || row);
 
-  const collectedTotal = payments.filter((p) => p.status === 'ok').reduce((sum, p) => sum + p.amount, 0);
-  const pendingTotal = payments.filter((p) => p.status === 'wait').reduce((sum, p) => sum + p.amount, 0);
-  const lateTotal = payments.filter((p) => p.status === 'late').reduce((sum, p) => sum + p.amount, 0);
+  const rows = activePagedShops;
+
+  const activePayments = pagedPayments.length > 0 || !payLoading ? pagedPayments : payments;
+  const activeAuditLogs = pagedAuditLogs.length > 0 || !auditLoading ? pagedAuditLogs : auditLogs;
+
+  const collectedTotal = activePayments.filter((p) => p.status === 'ok').reduce((sum, p) => sum + p.amount, 0);
+  const pendingTotal = activePayments.filter((p) => p.status === 'wait').reduce((sum, p) => sum + p.amount, 0);
+  const lateTotal = activePayments.filter((p) => p.status === 'late').reduce((sum, p) => sum + p.amount, 0);
 
   const savePlanUpdate = async (updatedPlan: Plan) => {
     const nextList = draftPlans.map((p) => (p.id === updatedPlan.id ? updatedPlan : p));
@@ -618,9 +849,11 @@ export function AdminPage() {
 
       // 3) النجاح: حذف من القائمة وتحديث الواجهة
       setShops((prev) => prev.filter((s) => s.id !== shopToDelete.id));
+      setPagedShops((prev) => prev.filter((s) => s.id !== shopToDelete.id));
       await logAudit('حذف حساب محل نهائياً', `تم حذف المحل ${shopToDelete.name} (${shopToDelete.id}) نهائياً`);
       toast('تم حذف الحساب نهائيًا ✅');
-      await hydrateFromSupabase();
+      await hydrateFromSupabase({ force: true });
+      setShopsRetryNonce((n) => n + 1);
       setShopToDelete(null);
       setDeleteConfirmInput('');
     } catch (err) {
@@ -657,7 +890,8 @@ export function AdminPage() {
           return;
         }
       } else {
-        await hydrateFromSupabase();
+        await hydrateFromSupabase({ force: true });
+        setShopsRetryNonce((n) => n + 1);
       }
     } else {
       await updateShop(s.id, {
@@ -665,6 +899,7 @@ export function AdminPage() {
         days: Math.max(30, dLeft),
         exp: 'مفعل (شهر)',
       });
+      setShopsRetryNonce((n) => n + 1);
     }
     await logAudit('تفعيل الاشتراك', `تم تفعيل اشتراك ${s.name}`, s.id);
     toast(`تم تفعيل اشتراك ${s.name} ✓`);
@@ -1035,11 +1270,19 @@ export function AdminPage() {
           );
         })}
         {!list.length && (
-          <div className="sm:col-span-2 glass rounded-2xl p-8 text-center text-sm opacity-60">
-            لا توجد محلات مسجلة مطابقة للبحث
+          <div className="sm:col-span-2">
+            <ArabicEmptyState title="لا توجد نتائج" subtitle="لا توجد محلات مسجلة مطابقة للبحث أو الفلتر المحدد" />
           </div>
         )}
       </div>
+      <LoadMoreBar
+        loadedCount={list.length}
+        totalCount={shopsTotalCount}
+        hasMore={shopsHasMore}
+        loadingMore={shopsLoadingMore}
+        onLoadMore={loadMoreAdminShops}
+        itemLabel="محل"
+      />
     </>
   );
 
@@ -1180,7 +1423,17 @@ export function AdminPage() {
               عرض الكل ({totalShopsCount})
             </button>
           </div>
-          <Table list={shops} />
+          {shopsError ? (
+            <AsyncErrorBanner
+              message={shopsError}
+              retrying={shopsLoading}
+              onRetry={() => setShopsRetryNonce((n) => n + 1)}
+            />
+          ) : shopsLoading && !activePagedShops.length ? (
+            <TableRowsSkeleton rows={5} cols={6} />
+          ) : (
+            <Table list={activePagedShops} />
+          )}
         </>
       )}
 
@@ -1217,7 +1470,17 @@ export function AdminPage() {
               </button>
             ))}
           </div>
-          <Table list={rows} />
+          {shopsError ? (
+            <AsyncErrorBanner
+              message={shopsError}
+              retrying={shopsLoading}
+              onRetry={() => setShopsRetryNonce((n) => n + 1)}
+            />
+          ) : shopsLoading && !rows.length ? (
+            <TableRowsSkeleton rows={5} cols={6} />
+          ) : (
+            <Table list={rows} />
+          )}
         </>
       )}
 
@@ -1416,7 +1679,7 @@ export function AdminPage() {
               onClick={() => {
                 dlCsv('المدفوعات.csv', [
                   ['رقم الفاتورة', 'المحل', 'المبلغ', 'الطريقة', 'رقم المرجع', 'الحالة'],
-                  ...payments.map((r) => [r.id, r.shopName, r.amount, r.method, r.referenceNo || '', r.status]),
+                  ...activePayments.map((r) => [r.id, r.shopName, r.amount, r.method, r.referenceNo || '', r.status]),
                 ]);
                 toast('تم تصدير تقرير المدفوعات ✓');
               }}
@@ -1429,74 +1692,95 @@ export function AdminPage() {
             <Stat icon="bell" tone="b-warn" label="معلّق" value={<Egp v={pendingTotal} />} />
             <Stat icon="x" tone="b-bad" label="متأخر" value={<Egp v={lateTotal} />} />
           </div>
-          <div className="hidden lg:block glass rounded-2xl overflow-x-auto">
-            <table className="w-full text-sm min-w-[640px]">
-              <thead className="text-xs text-slate-500">
-                <tr className="border-b border-[#E2E8F0]">
-                  {['رقم الفاتورة', 'المحل', 'المبلغ', 'الطريقة', 'رقم المرجع', 'الحالة'].map((h) => (
-                    <th key={h} className="p-3 text-start">
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {payments.map((r) => (
-                  <tr key={r.id} className="border-b border-slate-100">
-                    <td className="p-3 font-mono text-xs">{r.id}</td>
-                    <td className="p-3 font-bold">{r.shopName}</td>
-                    <td className="p-3">
-                      <Egp v={r.amount} />
-                    </td>
-                    <td className="p-3 opacity-80">{r.method}</td>
-                    <td className="p-3 font-mono text-xs opacity-75" dir="ltr" style={{ textAlign: 'start' }}>
-                      {r.referenceNo || '—'}
-                    </td>
-                    <td className="p-3">
+          {payError ? (
+            <AsyncErrorBanner
+              message={payError}
+              retrying={payLoading}
+              onRetry={() => setPayRetryNonce((n) => n + 1)}
+            />
+          ) : payLoading && !activePayments.length ? (
+            <TableRowsSkeleton rows={5} cols={6} />
+          ) : (
+            <>
+              <div className="hidden lg:block glass rounded-2xl overflow-x-auto">
+                <table className="w-full text-sm min-w-[640px]">
+                  <thead className="text-xs text-slate-500">
+                    <tr className="border-b border-[#E2E8F0]">
+                      {['رقم الفاتورة', 'المحل', 'المبلغ', 'الطريقة', 'رقم المرجع', 'الحالة'].map((h) => (
+                        <th key={h} className="p-3 text-start">
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activePayments.map((r) => (
+                      <tr key={r.id} className="border-b border-slate-100">
+                        <td className="p-3 font-mono text-xs">{r.id}</td>
+                        <td className="p-3 font-bold">{r.shopName}</td>
+                        <td className="p-3">
+                          <Egp v={r.amount} />
+                        </td>
+                        <td className="p-3 opacity-80">{r.method}</td>
+                        <td className="p-3 font-mono text-xs opacity-75" dir="ltr" style={{ textAlign: 'start' }}>
+                          {r.referenceNo || '—'}
+                        </td>
+                        <td className="p-3">
+                          <span className={'badge ' + (r.status === 'ok' ? 'b-ok' : r.status === 'wait' ? 'b-warn' : 'b-bad')}>
+                            {r.status === 'ok' ? 'مدفوعة' : r.status === 'wait' ? 'بانتظار التأكيد' : 'متأخرة'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                    {!activePayments.length && (
+                      <tr>
+                        <td colSpan={6} className="p-8 text-center text-sm text-slate-500">
+                          لا توجد فواتير أو عمليات دفع مسجلة حتى الآن
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {activePayments.map((r) => (
+                  <div key={r.id} className="glass rounded-2xl p-3.5 border border-[#E2E8F0] space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-extrabold text-sm text-[#0F172A]">{r.shopName}</span>
                       <span className={'badge ' + (r.status === 'ok' ? 'b-ok' : r.status === 'wait' ? 'b-warn' : 'b-bad')}>
                         {r.status === 'ok' ? 'مدفوعة' : r.status === 'wait' ? 'بانتظار التأكيد' : 'متأخرة'}
                       </span>
-                    </td>
-                  </tr>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-slate-600">
+                      <span>{r.method}</span>
+                      <span className="font-extrabold text-[#D97706]">
+                        <Egp v={r.amount} />
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[0.7rem] text-slate-500 font-mono" dir="ltr">
+                      <span>{r.referenceNo || '—'}</span>
+                      <span>{r.id}</span>
+                    </div>
+                  </div>
                 ))}
-                {!payments.length && (
-                  <tr>
-                    <td colSpan={6} className="p-8 text-center text-sm text-slate-500">
-                      لا توجد فواتير أو عمليات دفع مسجلة حتى الآن
-                    </td>
-                  </tr>
+                {!activePayments.length && (
+                  <div className="sm:col-span-2">
+                    <ArabicEmptyState title="لا توجد نتائج" subtitle="لا توجد فواتير أو عمليات دفع مسجلة حتى الآن" />
+                  </div>
                 )}
-              </tbody>
-            </table>
-          </div>
+              </div>
 
-          <div className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            {payments.map((r) => (
-              <div key={r.id} className="glass rounded-2xl p-3.5 border border-[#E2E8F0] space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-extrabold text-sm text-[#0F172A]">{r.shopName}</span>
-                  <span className={'badge ' + (r.status === 'ok' ? 'b-ok' : r.status === 'wait' ? 'b-warn' : 'b-bad')}>
-                    {r.status === 'ok' ? 'مدفوعة' : r.status === 'wait' ? 'بانتظار التأكيد' : 'متأخرة'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-xs text-slate-600">
-                  <span>{r.method}</span>
-                  <span className="font-extrabold text-[#D97706]">
-                    <Egp v={r.amount} />
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-[0.7rem] text-slate-500 font-mono" dir="ltr">
-                  <span>{r.referenceNo || '—'}</span>
-                  <span>{r.id}</span>
-                </div>
-              </div>
-            ))}
-            {!payments.length && (
-              <div className="glass rounded-2xl p-8 text-center text-sm text-slate-500">
-                لا توجد فواتير أو عمليات دفع مسجلة حتى الآن
-              </div>
-            )}
-          </div>
+              <LoadMoreBar
+                loadedCount={activePayments.length}
+                totalCount={payTotalCount}
+                hasMore={payHasMore}
+                loadingMore={payLoadingMore}
+                onLoadMore={loadMoreAdminPayments}
+                itemLabel="عملية دفع"
+              />
+            </>
+          )}
         </>
       )}
 
@@ -1788,7 +2072,15 @@ export function AdminPage() {
 
                   {pf.imageUrl && (
                     <div className="rounded-xl bg-white border border-slate-200 p-2 flex items-center justify-center h-20">
-                      <img src={pf.imageUrl} alt={pf.name} className="max-h-16 object-contain" />
+                      <img
+                        src={pf.imageUrl}
+                        alt={pf.name}
+                        width={120}
+                        height={64}
+                        loading="lazy"
+                        decoding="async"
+                        className="max-h-16 object-contain"
+                      />
                     </div>
                   )}
 
@@ -1828,15 +2120,15 @@ export function AdminPage() {
                           e.target.value = '';
                           if (!file) return;
                           try {
-                            const url = await uploadAssetToStorage(file, 'landing-preview', 'png');
+                            const url = await uploadAssetToStorage(file, 'landing-preview', 'webp');
                             const next = draftPreviewFrames.map((x) =>
                               x.id === pf.id ? { ...x, imageUrl: url } : x
                             );
                             setDraftPreviewFrames(next);
                             await savePlatformSettings({ landingPreviewFrames: next });
                             toast(`تم رفع صورة "${pf.name}" ✓`);
-                          } catch {
-                            toast('تعذر رفع الصورة');
+                          } catch (err) {
+                            toast(err instanceof Error ? err.message : 'تعذر رفع الصورة');
                           }
                         }}
                       />
@@ -1986,7 +2278,15 @@ export function AdminPage() {
                 </button>
                 {enrollQr && (
                   <form onSubmit={handleConfirmEnroll2FA} className="mt-3 p-4 rounded-xl bg-white text-slate-900 text-center space-y-3">
-                    <img src={enrollQr.qrSvg} alt="2FA QR" className="mx-auto w-36 h-36" />
+                    <img
+                      src={enrollQr.qrSvg}
+                      alt="2FA QR"
+                      width={144}
+                      height={144}
+                      loading="lazy"
+                      decoding="async"
+                      className="mx-auto w-36 h-36"
+                    />
                     <div className="text-xs font-bold">امسح الكود بتطبيق Google Authenticator ثم أدخل الرمز للتفعيل</div>
                     <div className="flex gap-2">
                       <input
@@ -2063,21 +2363,39 @@ export function AdminPage() {
 
           <div className="glass rounded-2xl p-5">
             <h3 className="font-bold text-[#0F172A] mb-3">سجل العمليات الحساسة (Audit Log)</h3>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {auditLogs.map((log) => (
-                <div key={log.id} className="flex flex-wrap items-center justify-between text-xs p-2.5 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] gap-2">
-                  <div className="min-w-0 flex-1 break-words">
-                    <b className="text-[#0284C7]">{log.action}</b> — <span>{log.details}</span>
-                  </div>
-                  <span className="text-slate-500 whitespace-nowrap shrink-0">{log.createdAt}</span>
+            {auditError ? (
+              <AsyncErrorBanner
+                message={auditError}
+                retrying={auditLoading}
+                onRetry={() => setAuditRetryNonce((n) => n + 1)}
+              />
+            ) : auditLoading && !activeAuditLogs.length ? (
+              <TableRowsSkeleton rows={4} cols={2} />
+            ) : (
+              <>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {activeAuditLogs.map((log) => (
+                    <div key={log.id} className="flex flex-wrap items-center justify-between text-xs p-2.5 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] gap-2">
+                      <div className="min-w-0 flex-1 break-words">
+                        <b className="text-[#0284C7]">{log.action}</b> — <span>{log.details}</span>
+                      </div>
+                      <span className="text-slate-500 whitespace-nowrap shrink-0">{log.createdAt}</span>
+                    </div>
+                  ))}
+                  {!activeAuditLogs.length && (
+                    <ArabicEmptyState title="لا توجد نتائج" subtitle="لا توجد عمليات مسجلة في السجل حتى الآن" />
+                  )}
                 </div>
-              ))}
-              {!auditLogs.length && (
-                <div className="text-center text-xs text-slate-500 py-6">
-                  لا توجد عمليات مسجلة في السجل حتى الآن
-                </div>
-              )}
-            </div>
+                <LoadMoreBar
+                  loadedCount={activeAuditLogs.length}
+                  totalCount={auditTotalCount}
+                  hasMore={auditHasMore}
+                  loadingMore={auditLoadingMore}
+                  onLoadMore={loadMoreAdminAuditLogs}
+                  itemLabel="سجل"
+                />
+              </>
+            )}
           </div>
         </>
       )}

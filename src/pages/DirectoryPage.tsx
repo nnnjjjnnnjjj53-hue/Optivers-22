@@ -1,37 +1,69 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { EGYPT_GOVERNORATES } from '../data/seed';
-import { isShopExpiredOrPaused, useOptiVerse } from '../services/optiverseStore';
+import { useOptiVerse } from '../services/optiverseStore';
+import { Shop } from '../types';
+import { useDebouncedValue } from '../utils/queryCache';
+import {
+  ArabicEmptyState,
+  AsyncErrorBanner,
+  ListCardsSkeleton,
+  LoadMoreBar,
+} from '../components/AsyncStateViews';
 import { I } from '../components/Icons';
 import { waNum } from '../components/UiShared';
 
+const DIRECTORY_PAGE_SIZE = 25;
+
 export function DirectoryPage() {
-  const { shops, navigate, platformSettings } = useOptiVerse();
+  const { navigate, platformSettings, fetchDirectoryShopsPage } = useOptiVerse();
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [govFilter, setGovFilter] = useState('الكل');
   const directoryEnabled = Boolean(platformSettings.enableStoresDirectory);
 
-  const activeShops = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return shops
-      .filter((s) => !isShopExpiredOrPaused(s))
-      .filter((s) => {
-        const shopGov = (s.governorate || s.city || '').trim();
-        if (govFilter !== 'الكل' && shopGov !== govFilter) return false;
-        if (!q) return true;
-        return (
-          s.name.toLowerCase().includes(q) ||
-          shopGov.toLowerCase().includes(q) ||
-          (s.address || '').toLowerCase().includes(q) ||
-          s.slug.toLowerCase().includes(q)
-        );
-      })
-      .sort((a, b) => {
-        if (Boolean(b.isFeatured) !== Boolean(a.isFeatured)) {
-          return b.isFeatured ? 1 : -1;
+  const [dirShops, setDirShops] = useState<Shop[]>([]);
+  const [page, setPage] = useState(0);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadPage = useCallback(
+    async (targetPage: number, append: boolean) => {
+      if (!directoryEnabled) {
+        setLoading(false);
+        return;
+      }
+      setError(null);
+      if (append) setLoadingMore(true);
+      else setLoading(true);
+      try {
+        const res = await fetchDirectoryShopsPage({
+          page: targetPage,
+          pageSize: DIRECTORY_PAGE_SIZE,
+          search: debouncedSearch,
+          gov: govFilter,
+        });
+        setDirShops((prev) => (append ? [...prev, ...res.rows.filter((r) => !prev.some((x) => x.id === r.id))] : res.rows));
+        if (targetPage === 0) {
+          setTotalCount(res.totalCount);
         }
-        return a.name.localeCompare(b.name, 'ar');
-      });
-  }, [shops, search, govFilter]);
+        setHasMore(res.hasMore);
+        setPage(targetPage);
+      } catch (e: any) {
+        setError(e?.message || 'تعذر تحميل دليل المحلات');
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    },
+    [debouncedSearch, directoryEnabled, fetchDirectoryShopsPage, govFilter]
+  );
+
+  useEffect(() => {
+    void loadPage(0, false);
+  }, [loadPage]);
 
   return (
     <div dir="rtl" className="min-h-[100dvh] bg-[#F8F9FA] text-[#0F172A] overflow-x-hidden">
@@ -117,7 +149,8 @@ export function DirectoryPage() {
 
         <div className="flex items-center justify-between text-xs sm:text-sm text-slate-600 px-1">
           <span>
-            إجمالي المحلات المتاحة: <b className="text-[#0F172A] tabular-nums">{activeShops.length}</b> محل
+            إجمالي المحلات المتاحة:{' '}
+            <b className="text-[#0F172A] tabular-nums">{totalCount ?? dirShops.length}</b> محل
           </span>
           {govFilter !== 'الكل' && (
             <button
@@ -141,120 +174,135 @@ export function DirectoryPage() {
               العودة للرئيسية
             </button>
           </div>
-        ) : activeShops.length === 0 ? (
-          <div className="bg-white rounded-3xl border border-[#E2E8F0] p-12 text-center space-y-3">
-            <span className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-500 inline-flex items-center justify-center">
-              <I n="store" s={24} />
-            </span>
-            <div className="font-extrabold text-base text-[#0F172A]">لا توجد محلات مطابقة لبحثك حالياً</div>
-            <p className="text-xs text-slate-500">جرّب تغيير المحافظة أو مسح نص البحث</p>
-            <button
-              type="button"
-              className="btn btn-g btn-sm"
-              onClick={() => {
-                setSearch('');
-                setGovFilter('الكل');
-              }}
-            >
-              إعادة ضبط الفلاتر
-            </button>
-          </div>
+        ) : error ? (
+          <AsyncErrorBanner message={error} onRetry={() => void loadPage(0, false)} />
+        ) : loading ? (
+          <ListCardsSkeleton count={6} />
+        ) : dirShops.length === 0 ? (
+          <ArabicEmptyState
+            title="لا توجد نتائج"
+            subtitle="جرّب تغيير المحافظة أو مسح نص البحث"
+            actionLabel="إعادة ضبط الفلاتر"
+            onAction={() => {
+              setSearch('');
+              setGovFilter('الكل');
+            }}
+          />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {activeShops.map((s) => {
-              const gov = s.governorate || s.city || 'القاهرة';
-              const waHref = `https://wa.me/${waNum(s.wa)}?text=${encodeURIComponent(
-                `مرحباً ${s.name}، وجدت متجركم عبر دليل محلات OptiVerse وأرغب في الاستفسار عن النظارات.`
-              )}`;
-              const isImgLogo = Boolean(s.logo && /^(https?:|data:image\/|blob:|\/)/i.test(s.logo));
-              return (
-                <article
-                  key={s.id}
-                  className={
-                    'bg-white rounded-3xl border p-5 flex flex-col gap-4 transition hover:-translate-y-0.5 hover:shadow-md ' +
-                    (s.isFeatured
-                      ? 'border-[#D97706]/60 ring-1 ring-[#D97706]/25 shadow-sm'
-                      : 'border-[#E2E8F0] shadow-xs')
-                  }
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className="w-12 h-12 rounded-2xl bg-[#0F172A] text-white text-2xl flex items-center justify-center shrink-0 overflow-hidden">
-                        {isImgLogo ? (
-                          <img src={s.logo} alt={s.name} className="w-full h-full object-contain bg-white p-0.5" />
-                        ) : (
-                          s.logo || '👓'
-                        )}
-                      </span>
-                      <div className="min-w-0">
-                        <h2 className="font-extrabold text-base text-[#0F172A] truncate">{s.name}</h2>
-                        <div className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
-                          <I n="map" s={12} c="text-[#0284C7]" />
-                          <span>{gov}</span>
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {dirShops.map((s) => {
+                const gov = s.governorate || s.city || 'القاهرة';
+                const waHref = `https://wa.me/${waNum(s.wa)}?text=${encodeURIComponent(
+                  `مرحباً ${s.name}، وجدت متجركم عبر دليل محلات OptiVerse وأرغب في الاستفسار عن النظارات.`
+                )}`;
+                const isImgLogo = Boolean(s.logo && /^(https?:|data:image\/|blob:|\/)/i.test(s.logo));
+                return (
+                  <article
+                    key={s.id}
+                    className={
+                      'bg-white rounded-3xl border p-5 flex flex-col gap-4 transition hover:-translate-y-0.5 hover:shadow-md ' +
+                      (s.isFeatured
+                        ? 'border-[#D97706]/60 ring-1 ring-[#D97706]/25 shadow-sm'
+                        : 'border-[#E2E8F0] shadow-xs')
+                    }
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="w-12 h-12 rounded-2xl bg-[#0F172A] text-white text-2xl flex items-center justify-center shrink-0 overflow-hidden">
+                          {isImgLogo ? (
+                            <img
+                              src={s.logo}
+                              alt={s.name}
+                              width={48}
+                              height={48}
+                              loading="lazy"
+                              decoding="async"
+                              className="w-full h-full object-contain bg-white p-0.5"
+                            />
+                          ) : (
+                            s.logo || '👓'
+                          )}
+                        </span>
+                        <div className="min-w-0">
+                          <h2 className="font-extrabold text-base text-[#0F172A] truncate">{s.name}</h2>
+                          <div className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
+                            <I n="map" s={12} c="text-[#0284C7]" />
+                            <span>{gov}</span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    {s.isFeatured && (
-                      <span className="badge !bg-amber-50 !text-[#B45309] !border-amber-200 whitespace-nowrap shrink-0">
-                        متجر مميز ⭐
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="text-xs text-slate-600 bg-[#F8F9FA] border border-[#E2E8F0] rounded-2xl p-3 space-y-1.5 min-h-[74px]">
-                    <div className="font-semibold text-[#0F172A] line-clamp-2">
-                      {s.address?.trim() || `${gov} — فرع ${s.name}`}
-                    </div>
-                    <div className="flex items-center gap-2 flex-wrap pt-1">
-                      {s.enableDeliveryService && (
-                        <span className="inline-flex items-center gap-1 text-[0.7rem] font-bold text-[#059669] bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg">
-                          <I n="truck" s={12} /> خدمة التوصيل متاحة
+                      {s.isFeatured && (
+                        <span className="badge !bg-amber-50 !text-[#B45309] !border-amber-200 whitespace-nowrap shrink-0">
+                          متجر مميز ⭐
                         </span>
                       )}
-                      <span className="inline-flex items-center gap-1 text-[0.7rem] font-bold text-[#0284C7] bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-lg">
-                        AI + 3D Try-On
-                      </span>
                     </div>
-                  </div>
 
-                  <div className="mt-auto space-y-2">
-                    <button
-                      type="button"
-                      className="btn !bg-[#0284C7] hover:!bg-[#0369A1] !text-white w-full !py-2.5 text-sm shadow-xs"
-                      onClick={() => navigate(`/s/${s.slug}`)}
-                    >
-                      <I n="enter" s={16} /> دخول المتجر
-                    </button>
+                    <div className="text-xs text-slate-600 bg-[#F8F9FA] border border-[#E2E8F0] rounded-2xl p-3 space-y-1.5 min-h-[74px]">
+                      <div className="font-semibold text-[#0F172A] line-clamp-2">
+                        {s.address?.trim() || `${gov} — فرع ${s.name}`}
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap pt-1">
+                        {s.enableDeliveryService && (
+                          <span className="inline-flex items-center gap-1 text-[0.7rem] font-bold text-[#059669] bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg">
+                            <I n="truck" s={12} /> خدمة التوصيل متاحة
+                          </span>
+                        )}
+                        <span className="inline-flex items-center gap-1 text-[0.7rem] font-bold text-[#0284C7] bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-lg">
+                          AI + 3D Try-On
+                        </span>
+                      </div>
+                    </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {Boolean(s.mapsUrl && /^https?:\/\//i.test(s.mapsUrl)) ? (
+                    <div className="mt-auto space-y-2">
+                      <button
+                        type="button"
+                        className="btn !bg-[#0284C7] hover:!bg-[#0369A1] !text-white w-full !py-2.5 text-sm shadow-xs"
+                        onClick={() => navigate(`/s/${s.slug}`)}
+                      >
+                        <I n="enter" s={16} /> دخول المتجر
+                      </button>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {Boolean(s.mapsUrl && /^https?:\/\//i.test(s.mapsUrl)) ? (
+                          <a
+                            href={s.mapsUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="btn btn-g btn-sm justify-center text-xs"
+                          >
+                            <I n="map" s={14} /> الموقع على الخريطة
+                          </a>
+                        ) : (
+                          <span className="btn btn-g btn-sm justify-center text-xs opacity-50 pointer-events-none">
+                            <I n="map" s={14} /> {gov}
+                          </span>
+                        )}
                         <a
-                          href={s.mapsUrl}
+                          href={waHref}
                           target="_blank"
                           rel="noreferrer"
-                          className="btn btn-g btn-sm justify-center text-xs"
+                          className="btn btn-g btn-sm justify-center text-xs text-[#059669] hover:border-emerald-300"
                         >
-                          <I n="map" s={14} /> الموقع على الخريطة
+                          <I n="msg" s={14} /> واتساب
                         </a>
-                      ) : (
-                        <span className="btn btn-g btn-sm justify-center text-xs opacity-50 pointer-events-none">
-                          <I n="map" s={14} /> {gov}
-                        </span>
-                      )}
-                      <a
-                        href={waHref}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="btn btn-g btn-sm justify-center text-xs text-[#059669] hover:border-emerald-300"
-                      >
-                        <I n="msg" s={14} /> واتساب
-                      </a>
+                      </div>
                     </div>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            <LoadMoreBar
+              hasMore={hasMore}
+              loadingMore={loadingMore}
+              loadedCount={dirShops.length}
+              totalCount={totalCount}
+              onLoadMore={() => void loadPage(page + 1, true)}
+              itemLabel="متجر"
+            />
+          </>
         )}
       </main>
     </div>

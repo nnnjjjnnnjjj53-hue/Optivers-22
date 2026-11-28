@@ -1,16 +1,22 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { CATS, DEFAULT_SHOP_ID, EGYPT_GOVERNORATES, TYPES } from '../data/seed';
 import { useOptiVerse, useResolvedRxUrl } from '../services/optiverseStore';
 import { FrameCat, FrameShapeTag, Inquiry, Product } from '../types';
+import { PageSuspendFallback } from './AsyncStateViews';
 import { BeforeAfter, MiniGlasses, Rx } from './GlassesGraphics';
-import { Eyewear3DViewer } from './Eyewear3DARStage';
-import { GuidedCaptureWizard } from './GuidedCaptureWizard';
 import { I } from './Icons';
 import { Egp, Modal, Switch, fmt, waNum } from './UiShared';
 import { formatOpticalDimensions, resolveProductOpticalDimensions } from '../utils/opticalDimensions';
 import { resolveStoreFrontUrl } from '../utils/bulkFrameProcessor';
+import { optimizeImageForUpload } from '../utils/imageUploadOptimizer';
 import { recordStoreFriendShare } from '../utils/storeAnalytics';
-import { canvasToBlob, loadImageToCanvas } from '../utils/visionPipeline';
+
+const Eyewear3DViewer = lazy(() =>
+  import('./Eyewear3DARStage').then((m) => ({ default: m.Eyewear3DViewer }))
+);
+const GuidedCaptureWizard = lazy(() =>
+  import('./GuidedCaptureWizard').then((m) => ({ default: m.GuidedCaptureWizard }))
+);
 
 const SHAPE_TAG_OPTIONS: { key: FrameShapeTag; label: string }[] = [
   { key: 'round', label: 'دائري (Round)' },
@@ -40,7 +46,15 @@ function ZoomModal({ q, onClose }: { q: Inquiry; onClose: () => void }) {
               )}
             </div>
           ) : (
-            <img src={resolvedRxUrl || ''} alt="كشف" className="w-full" />
+            <img
+              src={resolvedRxUrl || ''}
+              alt="كشف"
+              width={560}
+              height={420}
+              loading="lazy"
+              decoding="async"
+              className="w-full h-auto"
+            />
           )}
         </div>
       </div>
@@ -306,9 +320,13 @@ function AltModal({ q, onClose }: { q: Inquiry; onClose: () => void }) {
 }
 
 function QuickEditProductModal({ p, onClose }: { p: Product; onClose: () => void }) {
-  const { activeShop, updateProduct, uploadAssetToStorage, toast } = useOptiVerse();
+  const { activeShop, updateProduct, uploadAssetToStorage, fetchProductDetails, toast } = useOptiVerse();
   const [name, setName] = useState(p.name);
   const [code, setCode] = useState(p.modelCode || p.code || '');
+
+  useEffect(() => {
+    void fetchProductDetails(p.id, p.shopId);
+  }, [p.id, p.shopId, fetchProductDetails]);
   const [price, setPrice] = useState(String(p.price || 0));
   const [disc, setDisc] = useState(String(p.disc || 0));
   const resolveInitialCategoryChoice = (): 'prescription' | 'sunglasses' | 'metal' | 'clip_on' | 'kids' => {
@@ -351,8 +369,8 @@ function QuickEditProductModal({ p, onClose }: { p: Product; onClose: () => void
       setPreviewImgUrl(uploadedUrl);
       setPhotoChanged(true);
       toast('تم رفع الصورة الجديدة — اضغط حفظ التعديلات للتأكيد ✓');
-    } catch {
-      toast('تعذر رفع الصورة');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'تعذر رفع الصورة');
     } finally {
       setUploadingPhoto(false);
     }
@@ -618,7 +636,11 @@ export function Modals() {
   const annualPaidMonths = Math.max(1, 12 - Math.min(6, Math.max(0, platformSettings.annualDiscountMonths ?? 2)));
 
   if (t === 'addprod') {
-    return <GuidedCaptureWizard onClose={close} />;
+    return (
+      <Suspense fallback={<PageSuspendFallback label="جاري فتح أداة إضافة النظارات..." />}>
+        <GuidedCaptureWizard onClose={close} />
+      </Suspense>
+    );
   }
 
   if (t === 'editprod' && typeof modal !== 'string' && modal.t === 'editprod') {
@@ -1000,7 +1022,9 @@ export function Modals() {
     const dims = resolveProductOpticalDimensions(p);
     return (
       <Modal title={p.name} onClose={close} w="max-w-lg">
-        <Eyewear3DViewer product={p} />
+        <Suspense fallback={<PageSuspendFallback label="جاري تحميل العرض ثلاثي الأبعاد..." />}>
+          <Eyewear3DViewer product={p} />
+        </Suspense>
         <div className="flex justify-between items-center mt-3">
           <span className="text-sm text-slate-600">
             {TYPES[p.type]} · {CATS[p.cat]} · <span className="font-mono">{p.code}</span> ·{' '}
@@ -1298,29 +1322,27 @@ export function Modals() {
       e.target.value = '';
       if (!file) return;
       const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+      if (file.size > 15 * 1024 * 1024 || (isPdf && file.size > 5 * 1024 * 1024)) {
+        toast('حجم الملف يتجاوز الحد المسموح (5 ميجابايت)');
+        return;
+      }
       try {
-        if (isPdf) {
-          if (file.size > 5 * 1024 * 1024) {
-            toast('حجم ملف الـ PDF يتجاوز الحد المسموح (5 ميجابايت)');
-            return;
-          }
-          const ref = await uploadRxPrescriptionToStorage(activeShop.id, file, 'pdf');
-          setCheckoutRxPreview('pdf');
-          setCheckoutRxRef(ref);
-          toast('تم إرفاق ملف الكشف الطبي ✓');
-          return;
+        if (!isPdf) {
+          const reader = new FileReader();
+          reader.onload = () => setCheckoutRxPreview(String(reader.result || ''));
+          reader.readAsDataURL(file);
         }
-        const reader = new FileReader();
-        reader.onload = () => setCheckoutRxPreview(String(reader.result || ''));
-        reader.readAsDataURL(file);
-        const canvas = await loadImageToCanvas(file, 1600);
-        let blob = await canvasToBlob(canvas, 'image/jpeg', 0.85);
-        if (blob.size > 4_800_000) blob = await canvasToBlob(canvas, 'image/jpeg', 0.65);
-        const ref = await uploadRxPrescriptionToStorage(activeShop.id, blob, 'jpg');
+        const optimized = await optimizeImageForUpload(file, {
+          extHint: isPdf ? 'pdf' : undefined,
+          maxWidth: 1600,
+          quality: 0.8,
+        });
+        const ref = await uploadRxPrescriptionToStorage(activeShop.id, optimized.blob, optimized.ext);
+        if (isPdf) setCheckoutRxPreview('pdf');
         setCheckoutRxRef(ref);
-        toast('تم رفع صورة الكشف الطبي ✓');
-      } catch {
-        toast('تعذر رفع ملف الكشف الطبي');
+        toast(isPdf ? 'تم إرفاق ملف الكشف الطبي ✓' : 'تم رفع وضغط صورة الكشف الطبي ✓');
+      } catch (err) {
+        toast(err instanceof Error ? err.message : 'تعذر رفع ملف الكشف الطبي');
       }
     };
 
@@ -1431,7 +1453,15 @@ export function Modals() {
                 {checkoutRxPreview === 'pdf' ? (
                   <span className="text-[0.65rem] font-bold">PDF</span>
                 ) : (
-                  <img src={checkoutRxPreview || ''} alt="كشف" className="w-full h-full object-cover" />
+                  <img
+                    src={checkoutRxPreview || ''}
+                    alt="كشف"
+                    width={48}
+                    height={48}
+                    loading="lazy"
+                    decoding="async"
+                    className="w-full h-full object-cover"
+                  />
                 )}
               </div>
               <div className="flex-1 text-xs font-bold text-[#059669]">✓ تم إرفاق صورة الكشف الطبي</div>

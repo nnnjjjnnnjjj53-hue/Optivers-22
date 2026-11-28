@@ -353,6 +353,8 @@ export function MiniGlasses({
       <img
         src={imageUrl}
         alt="صورة النظارة"
+        width={w}
+        height={Math.round(w * 0.48)}
         loading="lazy"
         decoding="async"
         style={{
@@ -514,6 +516,8 @@ export function Spin({ p, w = 120 }: { p: Product; w?: number }) {
         <img
           src={imgSrc}
           alt={p.name}
+          width={w * 2}
+          height={112}
           loading="lazy"
           decoding="async"
           className="max-h-full max-w-full object-contain"
@@ -623,7 +627,15 @@ export function ExamThumb({ q, onZoom }: { q: Inquiry; onZoom: () => void }) {
           <span className="mt-1">كشف طبي PDF</span>
         </div>
       ) : (
-        <img src={resolvedRxUrl || ''} alt="كشف" loading="lazy" decoding="async" className="w-full max-h-64 object-cover" />
+        <img
+          src={resolvedRxUrl || ''}
+          alt="كشف"
+          width={320}
+          height={240}
+          loading="lazy"
+          decoding="async"
+          className="w-full max-h-64 object-cover"
+        />
       )}
       <span className="absolute inset-x-0 bottom-0 bg-black/60 text-[.7rem] py-1 flex items-center justify-center gap-1">
         <I n="search" s={12} /> اضغط للتكبير

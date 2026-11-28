@@ -17,7 +17,7 @@ import {
 import { DEFAULT_OFFICIAL_LENS_BRANDS } from '../data/opticalLensMatrix';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { idbLoadSnapshot, idbSaveSnapshot } from '../utils/indexedDbStore';
-import { cachedQuery, clearAllQueryCache, invalidateCache } from '../utils/queryCache';
+import { cachedQuery, clearAllQueryCache, invalidateCache, isAbortError } from '../utils/queryCache';
 import { optimizeImageForUpload } from '../utils/imageUploadOptimizer';
 import {
   AuditLog,
@@ -2017,15 +2017,27 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     [fetchMerchantCrmPage, fetchMerchantInquiriesPage, fetchMerchantProductsPage, fetchScopedCatalog, mergeProductsState]
   );
 
+  const hydrateInflightRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
+
   // Route-scoped & Role-scoped Hydration (no global table dumps, zero select('*'))
   const hydrateFromSupabase = useCallback(
     async (opts?: { role?: AuthSession['role']; shopId?: string; routeOverride?: string; force?: boolean }) => {
       if (!supabase) return;
-      try {
-        const curPath =
-          opts?.routeOverride ||
-          (typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/');
-        const pathOnly = curPath.split('?')[0];
+      const curPath =
+        opts?.routeOverride ||
+        (typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/');
+      const activeRole = opts?.role ?? sessionRef.current?.role;
+      const activeShopId = opts?.shopId ?? sessionRef.current?.shopId;
+      const force = Boolean(opts?.force);
+      const inflightKey = `${curPath}|${activeRole || 'anon'}|${activeShopId || ''}`;
+
+      if (!force && hydrateInflightRef.current?.key === inflightKey) {
+        return hydrateInflightRef.current.promise;
+      }
+
+      const promise = (async () => {
+        try {
+          const pathOnly = curPath.split('?')[0];
         const queryString = curPath.includes('?') ? curPath.split('?')[1] : '';
         const queryShopSlug = new URLSearchParams(queryString).get('shop');
         const isAdminPath = pathOnly.startsWith('/admin');
@@ -2149,9 +2161,19 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
 
         // 6. Unauthenticated login page (/merchant or /admin before sign-in)
         await fetchSettingsAndPlans(force);
-      } catch {
-        // Keep graceful local state if schema isn't pushed yet
+      } catch (err) {
+        if (!isAbortError(err)) {
+          // Keep graceful local state if schema isn't pushed yet
+        }
+      } finally {
+        if (hydrateInflightRef.current?.key === inflightKey) {
+          hydrateInflightRef.current = null;
+        }
       }
+      })();
+
+      hydrateInflightRef.current = { key: inflightKey, promise };
+      return promise;
     },
     [
       fetchAdminAuditLogsPage,

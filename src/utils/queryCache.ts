@@ -10,6 +10,15 @@ interface CacheEntry<T> {
 const dataCache = new Map<string, CacheEntry<unknown>>();
 const inflightCache = new Map<string, Promise<unknown>>();
 
+export function isAbortError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const anyErr = err as { name?: string; message?: string; code?: string };
+  if (anyErr.name === 'AbortError') return true;
+  if (anyErr.code === 'ABORT_ERR') return true;
+  const msg = String(anyErr.message || '').toLowerCase();
+  return msg.includes('aborted') || msg.includes('abort');
+}
+
 export function getCachedQueryValue<T>(key: string): T | undefined {
   const entry = dataCache.get(key);
   if (!entry) return undefined;
@@ -27,35 +36,94 @@ export function setCachedQueryValue<T>(key: string, value: T, ttlMs = QUERY_CACH
   });
 }
 
+function createAbortError(): Error {
+  const err = new Error('The operation was aborted.');
+  err.name = 'AbortError';
+  return err;
+}
+
+const inflightMeta = new Map<string, { waiters: number; controller: AbortController }>();
+
 export async function cachedQuery<T>(
   key: string,
-  fetcher: () => Promise<T>,
-  opts?: { ttlMs?: number; force?: boolean }
+  fetcher: (signal?: AbortSignal) => Promise<T>,
+  opts?: { ttlMs?: number; force?: boolean; signal?: AbortSignal }
 ): Promise<T> {
+  const signal = opts?.signal;
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+
   const ttlMs = opts?.ttlMs ?? QUERY_CACHE_TTL_MS;
   if (!opts?.force) {
     const cached = getCachedQueryValue<T>(key);
     if (cached !== undefined) return cached;
   }
 
-  const inflight = inflightCache.get(key);
-  if (inflight) {
-    return inflight as Promise<T>;
+  let basePromise = (!opts?.force ? inflightCache.get(key) : undefined) as Promise<T> | undefined;
+  let meta = (!opts?.force ? inflightMeta.get(key) : undefined);
+
+  if (!basePromise || !meta) {
+    const internalController = new AbortController();
+    meta = { waiters: 0, controller: internalController };
+    inflightMeta.set(key, meta);
+
+    basePromise = fetcher(internalController.signal)
+      .then((result) => {
+        if (!internalController.signal.aborted) {
+          setCachedQueryValue(key, result, ttlMs);
+        }
+        inflightCache.delete(key);
+        inflightMeta.delete(key);
+        return result;
+      })
+      .catch((err) => {
+        inflightCache.delete(key);
+        inflightMeta.delete(key);
+        throw err;
+      });
+
+    inflightCache.set(key, basePromise);
   }
 
-  const promise = fetcher()
-    .then((result) => {
-      setCachedQueryValue(key, result, ttlMs);
-      inflightCache.delete(key);
-      return result;
-    })
-    .catch((err) => {
-      inflightCache.delete(key);
-      throw err;
-    });
+  if (!signal) {
+    meta.waiters += 1;
+    try {
+      return await basePromise;
+    } finally {
+      meta.waiters = Math.max(0, meta.waiters - 1);
+    }
+  }
 
-  inflightCache.set(key, promise);
-  return promise;
+  meta.waiters += 1;
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      meta!.waiters = Math.max(0, meta!.waiters - 1);
+      if (meta!.waiters === 0) meta!.controller.abort();
+      reject(createAbortError());
+      return;
+    }
+    const onAbort = () => {
+      meta!.waiters = Math.max(0, meta!.waiters - 1);
+      if (meta!.waiters === 0) {
+        meta!.controller.abort();
+      }
+      reject(createAbortError());
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    basePromise!.then(
+      (res) => {
+        signal.removeEventListener('abort', onAbort);
+        meta!.waiters = Math.max(0, meta!.waiters - 1);
+        resolve(res);
+      },
+      (err) => {
+        signal.removeEventListener('abort', onAbort);
+        meta!.waiters = Math.max(0, meta!.waiters - 1);
+        reject(err);
+      }
+    );
+  });
 }
 
 export function invalidateCache(prefixOrKey: string): void {

@@ -26,7 +26,7 @@ function ZoomModal({ q, onClose }: { q: Inquiry; onClose: () => void }) {
   const isPdf = Boolean(q.img && q.img.toLowerCase().endsWith('.pdf'));
   return (
     <Modal title={`كشف النظر — ${q.cust}`} onClose={onClose} w="max-w-xl">
-      <div className="rounded-xl overflow-auto max-h-[62vh] bg-slate-100">
+      <div className="rounded-xl overflow-auto max-h-[62dvh] bg-slate-100">
         <div style={{ width: z * 100 + '%' }}>
           {q.img === 'demo' ? (
             <Rx n={q.rxn || 0} />
@@ -470,12 +470,12 @@ function QuickEditProductModal({ p, onClose }: { p: Product; onClose: () => void
         </div>
 
         {/* Field 2: Frame Name & Code */}
-        <div className="grid grid-cols-12 gap-2.5">
-          <div className="col-span-7">
+        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+          <div className="sm:col-span-7">
             <label className="text-xs font-bold text-slate-600 block mb-1">اسم النظارة</label>
             <input className="inp" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
-          <div className="col-span-5">
+          <div className="sm:col-span-5">
             <label className="text-xs font-bold text-slate-600 block mb-1">الكود / الموديل</label>
             <input
               className="inp font-mono"
@@ -487,7 +487,7 @@ function QuickEditProductModal({ p, onClose }: { p: Product; onClose: () => void
         </div>
 
         {/* Field 3: Price & Discount % */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-bold text-slate-600 block mb-1">السعر الأساسي (ج.م)</label>
             <input
@@ -514,7 +514,7 @@ function QuickEditProductModal({ p, onClose }: { p: Product; onClose: () => void
         </div>
 
         {/* Field 4: Category & Frame Shape */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-bold text-slate-600 block mb-1">الفئة</label>
             <select
@@ -685,7 +685,7 @@ export function Modals() {
           <input className="inp" placeholder="اسم صاحب المحل" value={f.o || ''} onChange={set('o')} />
           <input className="inp" dir="ltr" placeholder="رقم واتساب" value={f.wa || ''} onChange={set('wa')} />
           <input className="inp" type="email" dir="ltr" placeholder="بريد صاحب المحل (اختياري)" value={f.em || ''} onChange={set('em')} />
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <select className="inp" value={f.gov || 'القاهرة'} onChange={set('gov')}>
               {EGYPT_GOVERNORATES.map((g) => (
                 <option key={g} value={g}>
@@ -841,7 +841,7 @@ export function Modals() {
     return (
       <Modal title={`تعديل الباقة — ${s.name}`} onClose={close}>
         <div className="space-y-3">
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {dynamicPlans.map((pl) => {
               const isSelected = selectedPlanName === pl.name || f.tierKey === pl.tierKey;
               return (
@@ -1451,7 +1451,7 @@ export function Modals() {
           {deliveryEnabled && (
             <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 space-y-2.5">
               <div className="text-xs font-bold text-[#0F172A]">طريقة الاستلام</div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => setF({ ...f, dlv: 'pickup' })}

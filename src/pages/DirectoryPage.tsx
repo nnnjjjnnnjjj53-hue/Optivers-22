@@ -34,9 +34,9 @@ export function DirectoryPage() {
   }, [shops, search, govFilter]);
 
   return (
-    <div dir="rtl" className="min-h-screen bg-[#F8F9FA] text-[#0F172A] overflow-x-clip">
+    <div dir="rtl" className="min-h-[100dvh] bg-[#F8F9FA] text-[#0F172A] overflow-x-hidden">
       <header className="bg-white/95 backdrop-blur-md border-b border-[#E2E8F0] sticky top-0 z-30">
-        <div className="max-w-6xl mx-auto px-4 py-3.5 sm:py-4 flex items-center justify-between gap-3">
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 py-3 sm:py-4 flex items-center justify-between gap-2 sm:gap-3">
           <a
             href="/"
             dir="ltr"
@@ -44,7 +44,7 @@ export function DirectoryPage() {
               e.preventDefault();
               navigate('/');
             }}
-            className="inline-flex items-center gap-2 font-extrabold text-lg sm:text-xl whitespace-nowrap shrink-0 text-[#0F172A]"
+            className="inline-flex items-center gap-2 min-h-[44px] font-extrabold text-lg sm:text-xl whitespace-nowrap shrink-0 text-[#0F172A]"
           >
             <span>
               Opti<span className="text-[#0284C7]">Verse</span>
@@ -73,7 +73,7 @@ export function DirectoryPage() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-8 sm:py-10 space-y-6">
+      <main className="max-w-7xl mx-auto px-4 py-8 sm:py-10 space-y-6">
         <div className="bg-white rounded-3xl border border-[#E2E8F0] shadow-sm p-6 sm:p-8 text-center">
           <span className="badge b-acc mb-3">
             <I n="map" s={13} /> شبكة المحلات المعتمدة في مصر
@@ -86,7 +86,7 @@ export function DirectoryPage() {
             مع المحل مباشرة على واتساب وخرائط جوجل.
           </p>
 
-          <div className="mt-6 grid sm:grid-cols-3 gap-3 max-w-3xl mx-auto">
+          <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-3xl mx-auto">
             <div className="sm:col-span-2 relative">
               <input
                 type="text"
@@ -160,7 +160,7 @@ export function DirectoryPage() {
             </button>
           </div>
         ) : (
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {activeShops.map((s) => {
               const gov = s.governorate || s.city || 'القاهرة';
               const waHref = `https://wa.me/${waNum(s.wa)}?text=${encodeURIComponent(
@@ -226,7 +226,7 @@ export function DirectoryPage() {
                       <I n="enter" s={16} /> دخول المتجر
                     </button>
 
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {Boolean(s.mapsUrl && /^https?:\/\//i.test(s.mapsUrl)) ? (
                         <a
                           href={s.mapsUrl}

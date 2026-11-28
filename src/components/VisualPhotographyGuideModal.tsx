@@ -29,20 +29,20 @@ export function VisualPhotographyGuideModal({
       }}
     >
       <div
-        className="bg-white rounded-3xl max-w-4xl w-full my-auto shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]"
+        className="bg-white rounded-3xl max-w-[95vw] sm:max-w-4xl w-full my-auto shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90dvh]"
         style={{ backgroundColor: '#FFFFFF' }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 sm:px-7 py-4 border-b border-slate-200 bg-[#F8F9FA] shrink-0">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between px-4 sm:px-7 py-4 border-b border-slate-200 bg-[#F8F9FA] shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
             <span className="w-10 h-10 rounded-2xl bg-sky-50 text-[#0284C7] border border-sky-200 flex items-center justify-center text-xl shrink-0">
               📸
             </span>
-            <div>
+            <div className="min-w-0">
               <h2 className="font-extrabold text-base sm:text-lg text-slate-900 leading-tight">
                 دليل التصوير المصور للإطارات
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-xs text-slate-500 mt-0.5 truncate">
                 إرشادات عملية لتجهيز صور استوديو فائقة الجودة وتجربة افتراضية دقيقة 1:1
               </p>
             </div>
@@ -50,7 +50,7 @@ export function VisualPhotographyGuideModal({
           <button
             type="button"
             onClick={onClose}
-            className="w-9 h-9 rounded-2xl bg-white hover:bg-slate-100 text-slate-500 hover:text-slate-900 border border-slate-200 flex items-center justify-center font-bold text-sm transition cursor-pointer shadow-xs shrink-0"
+            className="w-11 h-11 rounded-2xl bg-white hover:bg-slate-100 text-slate-500 hover:text-slate-900 border border-slate-200 flex items-center justify-center font-bold text-sm transition cursor-pointer shadow-xs shrink-0"
             aria-label="إغلاق"
           >
             ✕

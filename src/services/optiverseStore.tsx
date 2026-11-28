@@ -114,6 +114,9 @@ export function isAdminRole(role?: string | null): boolean {
 
 export function getShopMaxProducts(shop: Shop, settings: PlatformSettings): number {
   if (shop.isDemoAdminStore) return 1000;
+  if (shop.status === 'pending') {
+    return 3;
+  }
   if (shop.status === 'trial') {
     const trialCap = settings.trialMaxProducts ?? 20;
     return trialCap + (shop.topupCredits || 0);
@@ -140,6 +143,14 @@ export function getShopPlanCapabilities(shop: Shop, settings: PlatformSettings):
       turboUploadEnabled: shop.isDemoAdminStore ? true : matchedPlan.turboUploadEnabled,
       cameraPdRulerEnabled: shop.isDemoAdminStore ? true : matchedPlan.cameraPdRulerEnabled,
       featuredBoostEnabled: shop.isDemoAdminStore ? true : matchedPlan.featuredBoostEnabled,
+    };
+  }
+  if (shop.status === 'pending') {
+    return {
+      ...matchedPlan,
+      name: 'بانتظار التأكيد',
+      maxProducts: 3,
+      turboUploadEnabled: false,
     };
   }
   if (shop.status === 'trial') {
@@ -3446,12 +3457,12 @@ export function OptiVerseProvider({ children }: { children: React.ReactNode }) {
     >
       {children}
       {tst && (
-        <div className="fixed z-[120] bottom-24 inset-x-0 flex justify-center pointer-events-none px-4">
-          <div className="pop glass-s px-5 py-3 rounded-2xl font-bold text-sm shadow-2xl border border-teal-400/40 flex items-center gap-2">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" className="tx-acc">
+        <div className="fixed z-[120] bottom-[calc(5.25rem+env(safe-area-inset-bottom))] inset-x-0 flex justify-center pointer-events-none px-3 sm:px-4">
+          <div className="pop glass-s max-w-[calc(100vw-1.5rem)] sm:max-w-md px-4 sm:px-5 py-3 rounded-2xl font-bold text-xs sm:text-sm shadow-2xl border border-teal-400/40 flex items-center gap-2 text-center break-words">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" className="tx-acc shrink-0">
               <path d="M20 6 9 17l-5-5" />
             </svg>
-            {tst}
+            <span className="min-w-0">{tst}</span>
           </div>
         </div>
       )}

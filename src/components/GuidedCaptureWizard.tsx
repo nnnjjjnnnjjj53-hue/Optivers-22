@@ -797,12 +797,12 @@ export function GuidedCaptureWizard({
       onClick={handleClose}
     >
       <div
-        className="pop bg-white text-[#0F172A] border border-slate-200 shadow-2xl w-full max-w-2xl rounded-t-3xl sm:rounded-3xl p-4 sm:p-6 max-h-[90vh] overflow-y-auto"
+        className="pop bg-white text-[#0F172A] border border-slate-200 shadow-2xl w-full max-w-[95vw] sm:max-w-2xl rounded-t-3xl sm:rounded-3xl p-4 sm:p-6 max-h-[90dvh] overflow-y-auto"
         style={{ backgroundColor: '#FFFFFF' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-4 mb-4">
-          <div>
+          <div className="min-w-0">
             <h3 className="font-extrabold text-lg">
               {isEdit ? `تعديل النظارة — ${product?.name}` : 'إضافة نظارة جديدة (صورتان فقط)'}
             </h3>
@@ -812,7 +812,7 @@ export function GuidedCaptureWizard({
           </div>
           <button
             type="button"
-            className="btn btn-g btn-sm !p-2.5 shrink-0"
+            className="btn btn-g btn-sm w-11 h-11 !p-0 flex items-center justify-center shrink-0"
             onClick={handleClose}
             aria-label="إغلاق"
           >

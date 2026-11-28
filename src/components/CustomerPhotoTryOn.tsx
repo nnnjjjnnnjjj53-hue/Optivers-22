@@ -370,7 +370,7 @@ export function CustomerPhotoTryOn({
           <button
             type="button"
             onClick={onClose}
-            className="w-9 h-9 rounded-xl bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 flex items-center justify-center cursor-pointer"
+            className="w-11 h-11 rounded-xl bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 flex items-center justify-center cursor-pointer shrink-0"
             aria-label="إغلاق"
           >
             <I n="x" s={16} />
@@ -518,7 +518,7 @@ export function CustomerPhotoTryOn({
                             scale: Math.max(0.35, Number((p.scale - 0.08).toFixed(2))),
                           }))
                         }
-                        className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-900 font-bold cursor-pointer"
+                        className="w-11 h-11 sm:w-9 sm:h-9 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-900 font-bold cursor-pointer shrink-0"
                       >
                         -
                       </button>
@@ -531,7 +531,7 @@ export function CustomerPhotoTryOn({
                         onChange={(e) =>
                           setTransform((p) => ({ ...p, scale: Number(e.target.value) }))
                         }
-                        className="flex-1 accent-slate-900"
+                        className="flex-1 min-w-0 accent-slate-900"
                       />
                       <button
                         type="button"
@@ -541,7 +541,7 @@ export function CustomerPhotoTryOn({
                             scale: Math.min(2.5, Number((p.scale + 0.08).toFixed(2))),
                           }))
                         }
-                        className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-900 font-bold cursor-pointer"
+                        className="w-11 h-11 sm:w-9 sm:h-9 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-900 font-bold cursor-pointer shrink-0"
                       >
                         +
                       </button>

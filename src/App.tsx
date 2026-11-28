@@ -63,7 +63,7 @@ function AdminFloatingReturnBar() {
       onPointerCancel={handlePointerUp}
       style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0)` }}
       className={`fixed top-3 left-3 z-[80] touch-none select-none flex items-center rounded-full bg-slate-900/92 text-amber-300 border border-amber-400/40 shadow-2xl backdrop-blur-md transition-all ${
-        collapsed ? 'w-10 h-10 justify-center p-0' : 'gap-1 p-1'
+        collapsed ? 'w-11 h-11 justify-center p-0' : 'gap-1 p-1'
       }`}
     >
       {collapsed ? (
@@ -74,7 +74,7 @@ function AdminFloatingReturnBar() {
           }}
           aria-label="إظهار زر العودة للإدارة العليا"
           title="العودة للإدارة العليا"
-          className="w-10 h-10 rounded-full hover:bg-slate-800 text-sm font-extrabold cursor-pointer flex items-center justify-center"
+          className="w-11 h-11 rounded-full hover:bg-slate-800 text-sm font-extrabold cursor-pointer flex items-center justify-center"
         >
           <span>↩</span>
         </button>
@@ -168,7 +168,7 @@ class ErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950 text-white" dir="rtl">
+        <div className="min-h-[100dvh] flex items-center justify-center p-6 bg-slate-950 text-white" dir="rtl">
           <div className="max-w-md w-full bg-slate-900 border border-red-500/40 p-6 rounded-2xl shadow-2xl text-center space-y-4">
             <div className="text-4xl">⚠️</div>
             <h2 className="text-lg font-extrabold text-red-400">عذراً، حدث خطأ غير متوقع في التطبيق</h2>

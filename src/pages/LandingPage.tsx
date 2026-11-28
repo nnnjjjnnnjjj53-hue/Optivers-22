@@ -394,10 +394,10 @@ export function LandingPage() {
   const computeAnnualTotal = (baseMonthly: number) => baseMonthly * paidMonthsPerYear;
 
   return (
-    <div dir="rtl" className="min-h-screen bg-[#F8F9FA] text-[#0F172A] overflow-x-clip">
+    <div dir="rtl" className="min-h-[100dvh] bg-[#F8F9FA] text-[#0F172A] overflow-x-hidden">
       {/* Main Clean Top Bar */}
       <header className="bg-white/95 backdrop-blur-md border-b border-[#E2E8F0] sticky top-0 z-30">
-        <div className="max-w-6xl mx-auto px-4 py-3.5 sm:py-4 flex items-center justify-between gap-3">
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 py-3 sm:py-4 flex items-center justify-between gap-2 sm:gap-3">
           <a
             href="/"
             dir="ltr"
@@ -405,7 +405,7 @@ export function LandingPage() {
               e.preventDefault();
               navigate('/');
             }}
-            className="inline-flex items-center gap-2 font-extrabold text-lg sm:text-xl whitespace-nowrap shrink-0 text-[#0F172A]"
+            className="inline-flex items-center gap-2 min-h-[44px] font-extrabold text-lg sm:text-xl whitespace-nowrap shrink-0 text-[#0F172A]"
           >
             <span>
               Opti<span className="text-[#0284C7]">Verse</span>
@@ -415,11 +415,11 @@ export function LandingPage() {
             </span>
           </a>
 
-          <nav className="hidden md:flex items-center gap-6 text-sm font-bold text-slate-600">
-            <a href="#how-it-works" className="hover:text-[#0F172A] transition-colors whitespace-nowrap shrink-0">
+          <nav className="hidden md:flex items-center gap-5 text-sm font-bold text-slate-600">
+            <a href="#how-it-works" className="inline-flex items-center min-h-[44px] px-1 hover:text-[#0F172A] transition-colors whitespace-nowrap shrink-0">
               كيف تعمل؟
             </a>
-            <a href="#features" className="hover:text-[#0F172A] transition-colors whitespace-nowrap shrink-0">
+            <a href="#features" className="inline-flex items-center min-h-[44px] px-1 hover:text-[#0F172A] transition-colors whitespace-nowrap shrink-0">
               المميزات
             </a>
             {directoryEnabled && (
@@ -429,12 +429,12 @@ export function LandingPage() {
                   e.preventDefault();
                   navigate('/stores');
                 }}
-                className="hover:text-[#0284C7] transition-colors whitespace-nowrap shrink-0"
+                className="inline-flex items-center min-h-[44px] px-1 hover:text-[#0284C7] transition-colors whitespace-nowrap shrink-0"
               >
                 دليل المحلات
               </a>
             )}
-            <a href="#pricing" className="hover:text-[#0F172A] transition-colors whitespace-nowrap shrink-0">
+            <a href="#pricing" className="inline-flex items-center min-h-[44px] px-1 hover:text-[#0F172A] transition-colors whitespace-nowrap shrink-0">
               الباقات
             </a>
             <a
@@ -443,7 +443,7 @@ export function LandingPage() {
                 e.preventDefault();
                 navigate(`/shop/${demoSlug}`);
               }}
-              className="hover:text-[#0284C7] transition-colors whitespace-nowrap shrink-0"
+              className="inline-flex items-center min-h-[44px] px-1 hover:text-[#0284C7] transition-colors whitespace-nowrap shrink-0"
             >
               متجر تجريبي
             </a>
@@ -471,7 +471,7 @@ export function LandingPage() {
       </header>
 
       {/* Hero Section */}
-      <section className="max-w-6xl mx-auto px-4 pt-8 sm:pt-12 pb-16 grid lg:grid-cols-2 gap-10 lg:gap-12 items-center">
+      <section className="max-w-7xl mx-auto px-4 pt-8 sm:pt-12 pb-16 grid lg:grid-cols-2 gap-10 lg:gap-12 items-center">
         <div className="fade">
           <span className="badge b-acc mb-4">
             <I n="spark" s={13} />
@@ -617,13 +617,13 @@ export function LandingPage() {
               <button
                 type="button"
                 onClick={() => navigate(`/shop/${demoSlug}?tryon=1`)}
-                className="w-full py-3 px-4 rounded-2xl bg-[#0284C7] hover:bg-[#0369A1] text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 shadow-md transition cursor-pointer"
+                className="w-full min-h-[44px] py-3 px-4 rounded-2xl bg-[#0284C7] hover:bg-[#0369A1] text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 shadow-md transition cursor-pointer"
               >
                 <span>افتح الكاميرا وجرّبها على وجهك الحقيقي الآن 📸</span>
               </button>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 p-3 bg-white">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-3 bg-white">
               {previewFrames.slice(0, 6).map((f) => (
                 <button
                   key={f.id}
@@ -654,7 +654,7 @@ export function LandingPage() {
       </section>
 
       {/* 5-Step Journey */}
-      <section id="how-it-works" className="max-w-6xl mx-auto px-4 pb-16">
+      <section id="how-it-works" className="max-w-7xl mx-auto px-4 pb-16">
         <div className="bg-white border border-[#E2E8F0] shadow-sm rounded-3xl p-5 sm:p-8">
           <div className="text-center max-w-2xl mx-auto mb-7">
             <span className="badge b-acc mb-2">
@@ -692,7 +692,7 @@ export function LandingPage() {
       </section>
 
       {/* 6 Core SaaS Features */}
-      <section id="features" className="max-w-6xl mx-auto px-4 pb-16 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+      <section id="features" className="max-w-7xl mx-auto px-4 pb-16 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
         {feats.map((f, i) => (
           <div
             key={i}
@@ -708,7 +708,7 @@ export function LandingPage() {
       </section>
 
       {/* Dynamic 3-Tier Pricing Section */}
-      <section id="pricing" className="max-w-6xl mx-auto px-4 pb-16">
+      <section id="pricing" className="max-w-7xl mx-auto px-4 pb-16">
         <div className="text-center max-w-2xl mx-auto mb-8">
           <h2 className="text-2xl sm:text-3xl font-extrabold mb-2 text-[#0F172A]">باقات مرنة تناسب حجم محلك</h2>
           <p className="text-sm text-slate-600 mb-5">
@@ -720,7 +720,7 @@ export function LandingPage() {
               type="button"
               onClick={() => setBilling('monthly')}
               className={
-                'px-4 py-2 rounded-xl text-xs sm:text-sm font-extrabold transition cursor-pointer ' +
+                'min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-extrabold transition cursor-pointer inline-flex items-center justify-center ' +
                 (billing === 'monthly' ? 'bg-[#0F172A] text-white shadow-sm' : 'text-slate-600 hover:text-[#0F172A]')
               }
             >
@@ -730,7 +730,7 @@ export function LandingPage() {
               type="button"
               onClick={() => setBilling('annual')}
               className={
-                'px-4 py-2 rounded-xl text-xs sm:text-sm font-extrabold transition cursor-pointer flex items-center gap-2 ' +
+                'min-h-[44px] px-4 py-2 rounded-xl text-xs sm:text-sm font-extrabold transition cursor-pointer inline-flex items-center justify-center gap-2 ' +
                 (billing === 'annual' ? 'bg-[#059669] text-white shadow-sm' : 'text-slate-600 hover:text-[#0F172A]')
               }
             >
@@ -749,7 +749,7 @@ export function LandingPage() {
           </div>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {activePlans.map((p, planIdx) => {
             const isPopular = p.tierKey === 'pro';
             const isPremium = p.tierKey === 'premium';
@@ -837,7 +837,7 @@ export function LandingPage() {
         </div>
       </section>
 
-      <footer className="border-t border-[#E2E8F0] bg-white pt-6 pb-24 sm:pb-24 px-4 text-center text-xs text-slate-500">
+      <footer className="border-t border-[#E2E8F0] bg-white pt-6 pb-[calc(6.5rem+env(safe-area-inset-bottom))] px-4 text-center text-xs text-slate-500">
         © 2026{' '}
         <span dir="ltr" className="inline-block font-bold">
           OptiVerse
@@ -849,7 +849,7 @@ export function LandingPage() {
             ·{' '}
             <button
               type="button"
-              className="text-[#0284C7] font-bold hover:underline cursor-pointer"
+              className="inline-flex items-center min-h-[44px] px-2 text-[#0284C7] font-bold hover:underline cursor-pointer"
               onClick={() => navigate('/stores')}
             >
               دليل المحلات المعتمدة
@@ -863,7 +863,7 @@ export function LandingPage() {
         <div
           aria-hidden={!showBottomPricingBar}
           className={
-            'fixed bottom-2 sm:bottom-3 inset-x-0 z-40 transition-all duration-300 ease-out px-2 sm:px-4 ' +
+            'fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] inset-x-0 z-40 transition-all duration-300 ease-out px-2 sm:px-4 ' +
             (showBottomPricingBar
               ? 'translate-y-0 opacity-100 pointer-events-auto'
               : 'translate-y-full opacity-0 pointer-events-none')
@@ -905,7 +905,7 @@ export function LandingPage() {
               type="button"
               onClick={scrollToPricing}
               aria-label="الانتقال إلى تفاصيل الباقات"
-              className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-slate-900/90 hover:bg-slate-900 border border-amber-400/50 text-amber-400 shadow-lg cursor-pointer transition hover:scale-[1.03]"
+              className="inline-flex items-center justify-center gap-1.5 min-h-[44px] px-4 py-2 rounded-full bg-slate-900/90 hover:bg-slate-900 border border-amber-400/50 text-amber-400 shadow-lg cursor-pointer transition hover:scale-[1.03]"
             >
               <span className="text-[0.65rem] font-extrabold text-amber-200 tracking-wide">تفاصيل الباقات</span>
               <span className="inline-flex flex-col items-center -space-y-2 leading-none" aria-hidden="true">

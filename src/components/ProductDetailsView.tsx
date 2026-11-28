@@ -250,7 +250,7 @@ export function ProductDetailsView({
         <button
           type="button"
           onClick={onToggleFavorite}
-          className="w-10 h-10 rounded-xl border border-slate-200 bg-white flex items-center justify-center cursor-pointer hover:bg-slate-100 transition shrink-0"
+          className="w-11 h-11 rounded-xl border border-slate-200 bg-white flex items-center justify-center cursor-pointer hover:bg-slate-100 transition shrink-0"
           style={{ color: isFavorite ? '#e11d48' : '#0f172a' }}
           aria-label="إضافة للمفضلة"
         >
@@ -458,7 +458,7 @@ export function ProductDetailsView({
                 {formatOpticalDimensions(opticalDims)} mm
               </span>
             </div>
-            <div className="grid grid-cols-4 gap-1.5 text-center">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-center">
               {[
                 ['العدسة', `${opticalDims.lensWidthMm}mm`],
                 ['الجسر', `${opticalDims.bridgeWidthMm}mm`],
@@ -538,11 +538,11 @@ export function ProductDetailsView({
           {/* Action Buttons: Clean 2-Group Layout */}
           <div className="space-y-2.5 pt-2">
             {/* Group 1: Live 3D Camera (Primary) + Try on Photo */}
-            <div className="grid grid-cols-12 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
               <button
                 type="button"
                 onClick={() => onTryOn(selectedColor, selectedSize)}
-                className="col-span-7 py-3.5 px-3 rounded-xl bg-[#0284C7] hover:bg-[#0369A1] text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm"
+                className="sm:col-span-7 min-h-[44px] py-3 px-3 rounded-xl bg-[#0284C7] hover:bg-[#0369A1] text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm"
               >
                 <I n="camera" s={17} />
                 <span>جرّب على وجهك الآن (كاميرا 3D) 👓</span>
@@ -551,18 +551,18 @@ export function ProductDetailsView({
               <button
                 type="button"
                 onClick={() => setActiveCanvasPanel((curPanel) => (curPanel === 'tryon' ? null : 'tryon'))}
-                className="col-span-5 py-3.5 px-2.5 rounded-xl bg-[#F8F9FA] hover:bg-slate-200 border border-[#E2E8F0] text-[#0F172A] font-extrabold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer"
+                className="sm:col-span-5 min-h-[44px] py-3 px-2.5 rounded-xl bg-[#F8F9FA] hover:bg-slate-200 border border-[#E2E8F0] text-[#0F172A] font-extrabold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer"
               >
                 <span>جرّب على صورتك 📷</span>
               </button>
             </div>
 
             {/* Group 2: WhatsApp Order + Add to Cart */}
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => onGoCheckout(selectedColor, selectedSize)}
-                className="py-3 px-3 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-sm"
+                className="min-h-[44px] py-3 px-3 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-sm"
               >
                 <I n="msg" s={15} />
                 <span>اطلب الآن عبر واتساب</span>
@@ -571,7 +571,7 @@ export function ProductDetailsView({
               <button
                 type="button"
                 onClick={() => onAddToCart(selectedColor, selectedSize)}
-                className="py-3 px-3 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+                className="min-h-[44px] py-3 px-3 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap"
               >
                 <I n="bag" s={15} />
                 <span>إضافة للسلة</span>
@@ -711,7 +711,7 @@ export function ProductDetailsView({
       {relatedProducts.length > 0 && (
         <div className="mt-8 pt-6 border-t border-slate-200">
           <h2 className="text-base font-extrabold text-slate-900 mb-4">موديلات مشابهة قد تعجبك</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {relatedProducts.slice(0, 4).map((rp) => (
               <button
                 key={rp.id}

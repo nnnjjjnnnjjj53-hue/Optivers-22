@@ -303,12 +303,12 @@ export function VisualEyewearSearchModal({ isOpen, onClose }: VisualEyewearSearc
       }}
     >
       <div
-        className="pop bg-white rounded-3xl max-w-4xl w-full my-auto shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh] text-[#0F172A]"
+        className="pop bg-white rounded-3xl max-w-[95vw] sm:max-w-4xl w-full my-auto shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90dvh] text-[#0F172A]"
         style={{ backgroundColor: '#FFFFFF' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between gap-3 px-5 sm:px-6 py-4 border-b border-slate-200 bg-[#F8F9FA] shrink-0">
+        <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-slate-200 bg-[#F8F9FA] shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <span className="w-10 h-10 rounded-2xl bg-sky-50 text-[#0284C7] border border-sky-200 flex items-center justify-center text-xl shrink-0">
               📷
@@ -326,7 +326,7 @@ export function VisualEyewearSearchModal({ isOpen, onClose }: VisualEyewearSearc
             type="button"
             onClick={onClose}
             aria-label="إغلاق"
-            className="w-9 h-9 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 hover:text-slate-900 font-extrabold flex items-center justify-center cursor-pointer shrink-0"
+            className="w-11 h-11 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 hover:text-slate-900 font-extrabold flex items-center justify-center cursor-pointer shrink-0"
           >
             ✕
           </button>
@@ -476,7 +476,7 @@ export function VisualEyewearSearchModal({ isOpen, onClose }: VisualEyewearSearc
           {/* Results Grid or Smart Empty State */}
           {!loading && analysis && (
             filteredMatches.length > 0 ? (
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredMatches.map(({ product, shop, score }) => {
                   const thumb = resolveStoreFrontUrl(product);
                   const shopGov = shop.governorate || shop.city || 'القاهرة';

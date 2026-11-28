@@ -98,10 +98,42 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
     : '';
   const queryParams = new URLSearchParams(queryString);
   const isMerchantPreview = queryParams.get('preview') === 'merchant';
+  const isPendingBlocked = Boolean(shop && shop.status === 'pending');
 
-  if (!shop || (!isMerchantPreview && (shop.status === 'pending' || shop.status === 'paused' || shop.status === 'expired'))) {
+  useEffect(() => {
+    if (isPendingBlocked) {
+      toast('المتجر غير مفعّل حتى تأكيد الإدارة');
+      navigate('/');
+    }
+  }, [isPendingBlocked, navigate, toast]);
+
+  if (isPendingBlocked) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950 text-white" dir="rtl">
+      <div className="min-h-[100dvh] flex items-center justify-center p-6 bg-slate-950 text-white" dir="rtl">
+        <div className="max-w-md w-full bg-slate-900 border border-amber-500/30 p-8 rounded-3xl shadow-2xl text-center space-y-6">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/10 border border-amber-400/30 flex items-center justify-center text-3xl">
+            ⏳
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-xl font-extrabold text-amber-300">المتجر غير مفعّل حتى تأكيد الإدارة</h2>
+            <p className="text-xs text-slate-300 opacity-90 leading-relaxed">
+              هذا المتجر قيد المراجعة الإدارية حالياً ولا يمكن معاينته أو تصفحه قبل التفعيل.
+            </p>
+          </div>
+          <button
+            onClick={() => navigate('/')}
+            className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-sm transition-all cursor-pointer shadow-lg shadow-amber-500/20"
+          >
+            العودة للرئيسية
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!shop || (!isMerchantPreview && (shop.status === 'paused' || shop.status === 'expired'))) {
+    return (
+      <div className="min-h-[100dvh] flex items-center justify-center p-6 bg-slate-950 text-white" dir="rtl">
         <div className="max-w-md w-full bg-slate-900 border border-amber-500/30 p-8 rounded-3xl shadow-2xl text-center space-y-6">
           <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/10 border border-amber-400/30 flex items-center justify-center text-3xl">
             👓
@@ -486,7 +518,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
 
   if (!shop) {
     return (
-      <div dir="rtl" className="min-h-screen bg-[#F8F9FA] flex flex-col items-center justify-center p-6 text-center">
+      <div dir="rtl" className="min-h-[100dvh] bg-[#F8F9FA] flex flex-col items-center justify-center p-6 text-center">
         <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 shadow-sm flex items-center justify-center text-3xl mb-4">
           👓
         </div>
@@ -508,7 +540,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   if (isShopExpiredOrPaused(shop)) {
     const isExpired = shop.status === 'expired' || shop.status === 'trial';
     return (
-      <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="min-h-[100dvh] flex items-center justify-center p-4">
         <div className="glass rounded-3xl p-8 max-w-md text-center space-y-3">
           <span className="w-16 h-16 rounded-full b-warn inline-flex items-center justify-center">
             <I n="pause" s={28} />
@@ -527,7 +559,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
   if (!cur) {
     return (
       <div
-        className="min-h-screen flex items-center justify-center p-4"
+        className="min-h-[100dvh] flex items-center justify-center p-4"
         style={{ '--acc': theme.accent, backgroundColor: theme.pageBg, color: theme.text } as React.CSSProperties}
       >
         <div className="glass rounded-3xl p-8 max-w-md text-center space-y-3">
@@ -874,7 +906,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
         e.stopPropagation();
         setFav((f) => (f.includes(p.id) ? f.filter((x) => x !== p.id) : [...f, p.id]));
       }}
-      className="w-9 h-9 rounded-full bg-white/85 hover:bg-white border border-stone-200/80 shadow-xs backdrop-blur-sm flex items-center justify-center cursor-pointer transition-transform duration-150 active:scale-[0.97]"
+      className="w-11 h-11 rounded-full bg-white/85 hover:bg-white border border-stone-200/80 shadow-xs backdrop-blur-sm flex items-center justify-center cursor-pointer transition-transform duration-150 active:scale-[0.97]"
       style={{ color: fav.includes(p.id) ? '#f43f5e' : '#334155' }}
       aria-label="المفضلة"
     >
@@ -907,7 +939,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
 
   return (
     <div
-      className="pb-28 min-h-screen overflow-x-hidden"
+      className="pb-[calc(6.5rem+env(safe-area-inset-bottom))] min-h-[100dvh] overflow-x-hidden"
       style={
         {
           '--acc': theme.accent,
@@ -919,14 +951,14 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
       {/* Merchant Preview Return Bar (Strictly visible ONLY when ?preview=merchant) */}
       {showPreviewBar && (
         <div className="bg-slate-900 text-amber-400 border-b border-amber-400/25 px-4 py-2">
-          <div className="max-w-5xl mx-auto flex items-center justify-between gap-2 text-xs sm:text-sm">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 text-xs sm:text-sm">
             <span className="font-bold flex items-center gap-1.5 truncate">
               <I n="eye" s={15} /> أنت الآن في وضع المعاينة كعميل
             </span>
             <button
               type="button"
               onClick={() => navigate('/merchant')}
-              className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold text-xs whitespace-nowrap shrink-0 cursor-pointer transition-transform duration-150 active:scale-[0.97]"
+              className="min-h-[44px] px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold text-xs whitespace-nowrap shrink-0 cursor-pointer transition-transform duration-150 active:scale-[0.97]"
             >
               العودة للوحة التحكم ↩
             </button>
@@ -945,12 +977,12 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
 
       {/* Translucent Frosted Glass Store Header */}
       <header className="sticky top-0 z-30 backdrop-blur-md bg-white/85 border-b border-stone-200/75">
-        <div className="max-w-5xl mx-auto px-4 sm:px-5 py-2.5 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-          <div className="justify-self-start flex items-center">
+        <div className="max-w-7xl mx-auto px-3 sm:px-5 py-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+          <div className="justify-self-start flex items-center min-w-0">
             {directoryEnabled && (
               <button
                 type="button"
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#FAF8F5] hover:bg-stone-100 border border-stone-200/85 text-xs font-bold text-[#0F172A] whitespace-nowrap cursor-pointer transition-transform duration-150 active:scale-[0.97]"
+                className="inline-flex items-center justify-center gap-1 min-h-[44px] min-w-[44px] px-2.5 py-1.5 rounded-xl bg-[#FAF8F5] hover:bg-stone-100 border border-stone-200/85 text-xs font-bold text-[#0F172A] whitespace-nowrap cursor-pointer transition-transform duration-150 active:scale-[0.97]"
                 onClick={() => navigate('/stores')}
               >
                 <I n="map" s={14} /> <span className="hidden sm:inline">دليل المحلات</span>
@@ -958,7 +990,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
             )}
           </div>
 
-          <div className="justify-self-center flex items-center justify-center gap-2.5 min-w-0 max-w-[220px] sm:max-w-sm">
+          <div className="justify-self-center flex items-center justify-center gap-2 min-w-0 max-w-[185px] sm:max-w-sm">
             <span
               className="w-9 h-9 rounded-xl text-white text-base flex items-center justify-center shadow-xs shrink-0 overflow-hidden border border-stone-200/60"
               style={{ backgroundColor: theme.primary }}
@@ -986,14 +1018,14 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                 href={shop.mapsUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#FAF8F5] hover:bg-stone-100 border border-stone-200/85 text-xs font-bold text-[#0F172A] transition-transform duration-150 active:scale-[0.97]"
+                className="hidden sm:inline-flex items-center gap-1 min-h-[44px] px-2.5 py-1.5 rounded-xl bg-[#FAF8F5] hover:bg-stone-100 border border-stone-200/85 text-xs font-bold text-[#0F172A] transition-transform duration-150 active:scale-[0.97]"
               >
                 <I n="map" s={13} /> الخريطة
               </a>
             )}
             <button
               type="button"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#0F172A] text-[#FAF8F5] text-xs font-extrabold whitespace-nowrap shrink-0 cursor-pointer transition-transform duration-150 active:scale-[0.97] shadow-xs"
+              className="inline-flex items-center justify-center gap-1.5 min-h-[44px] min-w-[44px] px-3 py-1.5 rounded-xl bg-[#0F172A] text-[#FAF8F5] text-xs font-extrabold whitespace-nowrap shrink-0 cursor-pointer transition-transform duration-150 active:scale-[0.97] shadow-xs"
               onClick={() => setTab('cart')}
               aria-label="السلة"
             >
@@ -1003,7 +1035,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
         </div>
       </header>
 
-      <div className="max-w-5xl mx-auto px-4 sm:px-5 pt-4 pb-28">
+      <div className="max-w-7xl mx-auto px-3 sm:px-5 pt-4 pb-8">
 
         {/* Optional Business Hours & Quick Contact Bar */}
         {shop.showBusinessHoursBar && (() => {
@@ -1055,7 +1087,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
               <div className="flex items-center gap-2">
                 <a
                   href={`tel:${shop.wa}`}
-                  className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-extrabold inline-flex items-center gap-1 transition"
+                  className="min-h-[44px] px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-extrabold inline-flex items-center gap-1 transition"
                 >
                   📞 اتصال
                 </a>
@@ -1063,7 +1095,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                   href={`https://wa.me/${waNum(shop.wa)}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold inline-flex items-center gap-1 transition"
+                  className="min-h-[44px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold inline-flex items-center gap-1 transition"
                 >
                   <I n="msg" s={13} /> واتساب
                 </a>
@@ -1302,7 +1334,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                       setColorFilter('all');
                       setSearchQuery('');
                     }}
-                    className="px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-bold cursor-pointer"
+                    className="min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold cursor-pointer inline-flex items-center justify-center"
                   >
                     إظهار جميع النظارات ✕
                   </button>
@@ -1317,7 +1349,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="ابحث باسم الموديل أو الكود أو الشكل..."
-                    className="w-full rounded-2xl bg-white border border-slate-200 focus:border-[#0284C7] ps-10 pe-4 py-2.5 text-sm text-[#0F172A] outline-none shadow-sm transition"
+                    className="w-full min-h-[44px] rounded-2xl bg-white border border-slate-200 focus:border-[#0284C7] ps-10 pe-4 py-2.5 text-base text-[#0F172A] outline-none shadow-sm transition"
                   />
                   <span className="absolute start-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
                     🔍
@@ -1341,7 +1373,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                       type="button"
                       onClick={() => setCat(id)}
                       className={
-                        'px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap border transition-all duration-150 active:scale-[0.97] cursor-pointer shrink-0 ' +
+                        'min-h-[44px] min-w-[44px] inline-flex items-center justify-center px-4 py-2 rounded-full text-xs font-extrabold whitespace-nowrap border transition-all duration-150 active:scale-[0.97] cursor-pointer shrink-0 ' +
                         (cat === id
                           ? 'bg-[#0F172A] text-[#FAF8F5] border-[#0F172A] shadow-sm'
                           : 'bg-[#FAF8F5] text-[#0F172A] border-stone-200/90 hover:border-stone-400')
@@ -1353,7 +1385,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 sm:gap-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
                 {list.slice(0, storeVisibleCount).map((p) => {
                   const modelKey = (p.modelCode || '').trim().toLowerCase();
                   const groupVariants = shop.groupColorsInStore && modelKey ? groupedVariantMap.get(modelKey) || [p] : [p];
@@ -1416,7 +1448,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                           setDetailId(null);
                           setCamOn(true);
                         }}
-                        className="mt-3 w-full py-2.5 px-3 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#FAF8F5] text-xs font-extrabold shadow-xs cursor-pointer transition-all duration-150 active:scale-[0.97] flex items-center justify-center gap-1.5"
+                        className="mt-3 w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-[#0F172A] hover:bg-slate-800 text-[#FAF8F5] text-xs font-extrabold shadow-xs cursor-pointer transition-all duration-150 active:scale-[0.97] flex items-center justify-center gap-1.5"
                       >
                         <I n="camera" s={14} />
                         <span>جرّب على وجهك</span>
@@ -1434,7 +1466,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                   {list.length > storeVisibleCount && (
                     <button
                       type="button"
-                      className="px-3.5 py-1.5 rounded-xl bg-[#0F172A] text-[#FAF8F5] font-bold cursor-pointer transition-transform duration-150 active:scale-[0.97]"
+                      className="min-h-[44px] px-4 py-2 rounded-xl bg-[#0F172A] text-[#FAF8F5] font-bold cursor-pointer transition-transform duration-150 active:scale-[0.97]"
                       onClick={() => setStoreVisibleCount((c) => c + STORE_PAGE_SIZE)}
                     >
                       عرض المزيد (+{Math.min(STORE_PAGE_SIZE, list.length - storeVisibleCount)})
@@ -1489,7 +1521,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                             setDetailId(null);
                             setCamOn(true);
                           }}
-                          className="text-[0.68rem] font-extrabold text-[#0F172A] hover:underline cursor-pointer transition-transform duration-150 active:scale-[0.97]"
+                          className="min-h-[44px] min-w-[44px] px-2.5 inline-flex items-center justify-center text-[0.72rem] font-extrabold text-[#0F172A] hover:underline cursor-pointer transition-transform duration-150 active:scale-[0.97]"
                         >
                           جرّب الآن
                         </button>
@@ -1503,7 +1535,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
             {/* Section 3: تسوّق حسب شكل الإطار */}
             <section className="space-y-3">
               <h2 className="text-lg sm:text-xl font-extrabold text-[#0F172A]">تسوّق حسب شكل الإطار</h2>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
                 {(
                   [
                     { key: 'round', label: 'دائري (Round)', icon: 'round' as const },
@@ -1560,7 +1592,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                           scrollToElement('catalog-all');
                         }}
                         className={
-                          'py-2.5 px-3 rounded-xl border text-xs font-extrabold cursor-pointer transition ' +
+                          'min-h-[44px] flex items-center justify-center py-2.5 px-3 rounded-xl border text-xs font-extrabold cursor-pointer transition ' +
                           (cat === k
                             ? 'bg-[#0F172A] text-white border-[#0F172A]'
                             : 'bg-[#F8F9FA] text-[#0F172A] border-[#E2E8F0] hover:border-[#0284C7]')
@@ -1591,7 +1623,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                           scrollToElement('catalog-all');
                         }}
                         className={
-                          'py-2.5 px-3 rounded-xl border text-xs font-extrabold cursor-pointer transition flex items-center gap-2 ' +
+                          'min-h-[44px] py-2.5 px-3 rounded-xl border text-xs font-extrabold cursor-pointer transition flex items-center gap-2 ' +
                           (colorFilter === ck
                             ? 'bg-[#0F172A] text-white border-[#0F172A]'
                             : 'bg-[#F8F9FA] text-[#0F172A] border-[#E2E8F0] hover:border-[#0284C7]')
@@ -1819,7 +1851,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                       </div>
                     )}
 
-                    <div className="grid grid-cols-2 gap-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                       <input
                         className="inp"
                         placeholder="اسمك"
@@ -1834,7 +1866,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                         onChange={(e) => setCphone(e.target.value)}
                       />
                     </div>
-                    <div className="grid grid-cols-2 gap-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                       <input
                         className="inp"
                         dir="ltr"
@@ -2285,7 +2317,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                       </div>
                     )}
 
-                    <div className="grid grid-cols-2 gap-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                       <input
                         className="inp"
                         placeholder="اسمك"
@@ -2389,7 +2421,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                 on={() => setTab('shop')}
               />
             ) : (
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {products
                   .filter((p) => fav.includes(p.id))
                   .map((p) => (
@@ -2561,7 +2593,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
 
       {/* Floating 2-Frame Comparison Bottom Bar */}
       {compareIds.length > 0 && tab === 'shop' && !detailProduct && (
-        <div className="fixed bottom-16 inset-x-0 z-40 px-4 pointer-events-none">
+        <div className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] inset-x-0 z-40 px-4 pointer-events-none">
           <div className="max-w-xl mx-auto pointer-events-auto rounded-2xl bg-slate-900 text-white shadow-xl border border-slate-700 px-3.5 py-2.5 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-xs font-extrabold text-amber-300 whitespace-nowrap">
@@ -2657,7 +2689,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {[cmpA, cmpB].map((item, idx) => {
                 const imgUrl =
                   cmpViewAngle === 'angled45' && resolveAngled45Url(item)
@@ -2922,7 +2954,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
             )}
 
             {/* Customer Contact & Submit */}
-            <div className="grid grid-cols-2 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <input
                 className="inp"
                 placeholder="اسمك *"
@@ -2938,7 +2970,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <input
                 className="inp"
                 dir="ltr"
@@ -2967,7 +2999,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
         </Modal>
       )}
 
-      <nav className="fixed bottom-0 inset-x-0 z-40 glass-s border-x-0 border-b-0">
+      <nav className="fixed bottom-0 inset-x-0 z-40 glass-s border-x-0 border-b-0 pb-[env(safe-area-inset-bottom)]">
         {(() => {
           const midIdx = Math.floor(nav.length / 2);
           const firstHalf = nav.slice(0, midIdx);
@@ -2981,7 +3013,7 @@ export function StorefrontPage({ slug, initialFrameId }: { slug: string; initial
                 if (n[0] === 'shop') setDetailId(null);
               }}
               className={
-                'relative flex-1 flex flex-col items-center justify-center gap-0.5 py-1.5 rounded-xl text-[.66rem] font-bold transition-all duration-150 active:scale-[0.97] cursor-pointer ' +
+                'relative flex-1 min-h-[44px] flex flex-col items-center justify-center gap-0.5 py-1.5 rounded-xl text-[.66rem] font-bold transition-all duration-150 active:scale-[0.97] cursor-pointer ' +
                 (tab === n[0] ? 'text-[#0284C7]' : 'text-slate-500 hover:text-[#0F172A]')
               }
             >

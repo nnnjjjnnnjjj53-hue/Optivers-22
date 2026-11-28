@@ -326,6 +326,26 @@ export function MerchantPage() {
     }
   }, [authLoading, session, activeShop?.isDemoAdminStore, navigate]);
 
+  // Block direct access to preview or VIP assistant when shop status is pending
+  useEffect(() => {
+    if (!activeShop?.id || activeShop.status !== 'pending') return;
+    const curUrl =
+      typeof window !== 'undefined' ? window.location.pathname + window.location.search : route;
+    const lower = curUrl.toLowerCase();
+    if (
+      vipModeOpen ||
+      lower.includes('preview=merchant') ||
+      lower.includes('/preview') ||
+      lower.includes('/vip') ||
+      lower.includes('vip=1') ||
+      lower.includes('mode=vip')
+    ) {
+      setVipModeOpen(false);
+      toast('المتجر غير مفعّل حتى تأكيد الإدارة');
+      navigate('/');
+    }
+  }, [activeShop?.id, activeShop?.status, vipModeOpen, route, navigate, toast]);
+
   // Dispatch Service Worker notifications strictly for today's due CRM reminders (never for chats/orders)
   useEffect(() => {
     if (!session || !activeShop?.id || !activeShop.reminderNotificationsEnabled) return;
@@ -362,7 +382,7 @@ export function MerchantPage() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-6 text-sm opacity-75">
+      <div className="min-h-[100dvh] flex items-center justify-center p-6 text-sm opacity-75">
         جاري تحميل الحساب...
       </div>
     );
@@ -453,8 +473,8 @@ export function MerchantPage() {
 
   if (!session || (session.role !== 'merchant' && !isAdminRole(session.role))) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-[#F8F9FA]">
-        <div className="glass rounded-3xl p-6 sm:p-8 w-full max-w-md space-y-5 fade">
+      <div className="min-h-[100dvh] flex items-center justify-center p-4 bg-[#F8F9FA]">
+        <div className="glass rounded-3xl p-5 sm:p-8 w-full max-w-md space-y-5 fade">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 font-extrabold text-xl text-[#0F172A]">
               <span className="w-9 h-9 rounded-xl bg-[#0F172A] text-white flex items-center justify-center">
@@ -476,7 +496,7 @@ export function MerchantPage() {
               type="button"
               onClick={() => setAuthMode('login')}
               className={
-                'py-2 rounded-lg text-xs font-bold cursor-pointer transition ' +
+                'min-h-[44px] flex items-center justify-center py-2 px-1 rounded-lg text-xs font-bold cursor-pointer transition ' +
                 (authMode === 'login' ? 'bg-[#0F172A] text-white shadow-sm' : 'text-slate-600 hover:text-[#0F172A]')
               }
             >
@@ -486,7 +506,7 @@ export function MerchantPage() {
               type="button"
               onClick={() => setAuthMode('signup')}
               className={
-                'py-2 rounded-lg text-xs font-bold cursor-pointer transition ' +
+                'min-h-[44px] flex items-center justify-center py-2 px-1 rounded-lg text-xs font-bold cursor-pointer transition ' +
                 (authMode === 'signup' ? 'bg-[#D97706] text-white shadow-sm' : 'text-slate-600 hover:text-[#0F172A]')
               }
             >
@@ -496,7 +516,7 @@ export function MerchantPage() {
               type="button"
               onClick={() => setAuthMode('phone')}
               className={
-                'py-2 rounded-lg text-xs font-bold cursor-pointer transition ' +
+                'min-h-[44px] flex items-center justify-center py-2 px-1 rounded-lg text-xs font-bold cursor-pointer transition ' +
                 (authMode === 'phone' ? 'bg-[#0284C7] text-white shadow-sm' : 'text-slate-600 hover:text-[#0F172A]')
               }
             >
@@ -522,7 +542,7 @@ export function MerchantPage() {
                   });
                   toast('تم فتح لوحة التاجر ومعالجة الصور في وضع المعاينة ✨');
                 }}
-                className="w-full py-2 px-3 rounded-lg bg-[#0284C7] hover:bg-[#0369A1] text-white font-extrabold text-xs cursor-pointer transition shadow-xs"
+                className="w-full min-h-[44px] py-2.5 px-3 rounded-lg bg-[#0284C7] hover:bg-[#0369A1] text-white font-extrabold text-xs cursor-pointer transition shadow-xs"
               >
                 دخول فوري لمعالجة الصور ولوحة التاجر (وضع المعاينة بدون تسجيل) ✨
               </button>
@@ -536,7 +556,7 @@ export function MerchantPage() {
                   type="button"
                   disabled={submitting}
                   onClick={handleGoogle}
-                  className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl bg-white border border-[#E2E8F0] text-[#0F172A] font-bold text-sm hover:bg-slate-50 transition cursor-pointer shadow-xs"
+                  className="w-full min-h-[44px] flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl bg-white border border-[#E2E8F0] text-[#0F172A] font-bold text-sm hover:bg-slate-50 transition cursor-pointer shadow-xs"
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24">
                     <path
@@ -563,7 +583,7 @@ export function MerchantPage() {
                   type="button"
                   disabled={submitting}
                   onClick={handleApple}
-                  className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl bg-[#0F172A] text-white font-bold text-sm hover:bg-slate-800 transition cursor-pointer"
+                  className="w-full min-h-[44px] flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl bg-[#0F172A] text-white font-bold text-sm hover:bg-slate-800 transition cursor-pointer"
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                     <path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43Zm4.565 15.71c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45Z" />
@@ -613,7 +633,7 @@ export function MerchantPage() {
                       onChange={(e) => setShopName(e.target.value)}
                       required
                     />
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <input
                         className="inp"
                         dir="ltr"
@@ -746,8 +766,8 @@ export function MerchantPage() {
     };
 
     return (
-      <div dir="rtl" className="min-h-screen flex items-center justify-center p-4 bg-[#F8F9FA]">
-        <div className="glass rounded-3xl p-6 sm:p-8 w-full max-w-lg space-y-5 fade">
+      <div dir="rtl" className="min-h-[100dvh] flex items-center justify-center p-4 bg-[#F8F9FA]">
+        <div className="glass rounded-3xl p-5 sm:p-8 w-full max-w-lg space-y-5 fade">
           <div className="flex items-center justify-between gap-3">
             <div>
               <span className="badge b-info mb-1">خطوة واحدة لبدء متجرك</span>
@@ -843,6 +863,12 @@ export function MerchantPage() {
   const newCount = shopInq.filter((q) => q.status === 'new').length;
   const trialDaysLeft = getShopDaysLeft(activeShop);
   const expiredOrPaused = isShopExpiredOrPaused(activeShop);
+  const isPendingShop = activeShop.status === 'pending';
+  const canShowStoreAccess =
+    Boolean(activeShop.isDemoAdminStore) ||
+    activeShop.status === 'trial' ||
+    activeShop.status === 'active' ||
+    activeShop.status === 'soon';
 
   const rxEnabled = Boolean(
     platformSettings.enableLensesSystem ?? platformSettings.enablePrescriptionLenses
@@ -1441,38 +1467,59 @@ export function MerchantPage() {
       headerAction={
         <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-end">
           <PWAInstallButton />
-          <button
-            type="button"
-            className="btn btn-sm bg-[#0F172A] hover:bg-slate-800 text-amber-300 border border-amber-400/30 whitespace-nowrap shrink-0 shadow-xs"
-            onClick={() => setVipModeOpen(true)}
-          >
-            🪄 وضع المساعد داخل المحل
-          </button>
-          <button
-            type="button"
-            className="btn btn-tryon btn-sm whitespace-nowrap shrink-0"
-            onClick={() => navigate(`/?shop=${encodeURIComponent(activeShop.slug)}&preview=merchant`)}
-          >
-            <I n="eye" s={14} /> معاينة المتجر
-          </button>
+          {canShowStoreAccess && (
+            <>
+              <button
+                type="button"
+                className="btn btn-sm bg-[#0F172A] hover:bg-slate-800 text-amber-300 border border-amber-400/30 whitespace-nowrap shrink-0 shadow-xs"
+                onClick={() => setVipModeOpen(true)}
+              >
+                🪄 وضع المساعد داخل المحل
+              </button>
+              <button
+                type="button"
+                className="btn btn-tryon btn-sm whitespace-nowrap shrink-0"
+                onClick={() => navigate(`/?shop=${encodeURIComponent(activeShop.slug)}&preview=merchant`)}
+              >
+                <I n="eye" s={14} /> معاينة المتجر
+              </button>
+            </>
+          )}
         </div>
       }
     >
-      {activeShop.status === 'pending' && (
+      {isPendingShop && (
         <div className="mb-4 rounded-2xl p-4 bg-amber-50 border-2 border-amber-300 shadow-sm flex flex-wrap items-center justify-between gap-3">
-          <div className="font-extrabold text-amber-950 text-sm sm:text-base">
-            ⏳ حسابك بانتظار تأكيد الإدارة — هنتواصل معاك قريبًا
+          <div className="space-y-0.5">
+            <div className="font-extrabold text-amber-950 text-sm sm:text-base">
+              ⏳ حسابك بانتظار تأكيد الإدارة — هنتواصل معاك قريبًا
+            </div>
+            <div className="text-xs text-amber-800">
+              يمكنك حالياً تجهيز ورفع حتى 3 نظارات تجريبية في الكتالوج لحين تفعيل متجرك من الإدارة.
+            </div>
           </div>
-          <a
-            className="btn !bg-[#059669] hover:!bg-[#047857] !text-white btn-sm shrink-0"
-            href={`https://wa.me/${import.meta.env.VITE_ADMIN_WA || '201000000000'}?text=${encodeURIComponent(
-              `مرحباً إدارة OptiVerse، تم تسجيل متجر "${activeShop.name}" وهو بانتظار تأكيد التفعيل.`
-            )}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <I n="msg" s={14} /> تواصل مع الإدارة عبر واتساب
-          </a>
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            <button
+              type="button"
+              className="btn btn-g btn-sm !border-amber-300 !text-amber-950 hover:!bg-amber-100"
+              onClick={async () => {
+                await refreshUserSessionAndShop();
+                toast('تم تحديث حالة المتجر ✓');
+              }}
+            >
+              <I n="refresh" s={13} /> تحديث الحالة
+            </button>
+            <a
+              className="btn !bg-[#059669] hover:!bg-[#047857] !text-white btn-sm shrink-0"
+              href={`https://wa.me/${import.meta.env.VITE_ADMIN_WA || '201000000000'}?text=${encodeURIComponent(
+                `مرحباً إدارة OptiVerse، تم تسجيل متجر "${activeShop.name}" وهو بانتظار تأكيد التفعيل.`
+              )}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <I n="msg" s={14} /> تواصل مع الإدارة عبر واتساب
+            </a>
+          </div>
         </div>
       )}
       {sec === 'home' && (
@@ -1596,8 +1643,8 @@ export function MerchantPage() {
 
           <Head t={`أهلاً بك، ${activeShop.name} 👋`} sub="ملخص نشاط متجرك وتفاعل العملاء لحظياً" />
 
-          {/* Compact Horizontal Row of 3 Clickable Summary Cards (zero text truncation) */}
-          <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-5">
+          {/* Compact Responsive Row of 3 Clickable Summary Cards (1 col mobile, 3 cols sm+) */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3 mb-5">
             <button
               type="button"
               onClick={() => setSec('prods')}
@@ -1897,7 +1944,7 @@ export function MerchantPage() {
           {/* Quick Search + Inventory Filter + Delete by Code + Customer Stock Toggles */}
           <div className="glass rounded-2xl p-4 mb-4 space-y-3">
             <div className="flex flex-wrap items-center gap-2.5">
-              <div className="relative flex-1 min-w-[220px]">
+              <div className="relative flex-1 min-w-[200px] w-full sm:w-auto">
                 <input
                   type="search"
                   value={prodSearch}
@@ -1913,9 +1960,9 @@ export function MerchantPage() {
                 </span>
               </div>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 w-full sm:w-auto">
                 <input
-                  className="inp !w-36 font-mono text-xs"
+                  className="inp flex-1 sm:!w-36 min-w-0 font-mono text-xs"
                   dir="ltr"
                   placeholder="حذف بكود FR-1001"
                   value={code}
@@ -1924,7 +1971,7 @@ export function MerchantPage() {
                     if (e.key === 'Enter') delByCode();
                   }}
                 />
-                <button type="button" className="btn btn-d btn-sm whitespace-nowrap" onClick={delByCode}>
+                <button type="button" className="btn btn-d btn-sm whitespace-nowrap shrink-0" onClick={delByCode}>
                   <I n="trash" s={14} /> حذف
                 </button>
               </div>
@@ -2112,7 +2159,7 @@ export function MerchantPage() {
                               disabled={st <= 0}
                               onClick={() => void updateProductStock(p.id, -1)}
                               aria-label="إنقاص المخزون"
-                              className="w-7 h-7 rounded-lg bg-white hover:bg-rose-50 text-slate-900 hover:text-rose-700 border border-slate-200 font-extrabold text-sm flex items-center justify-center cursor-pointer disabled:opacity-40"
+                              className="w-11 h-11 sm:w-9 sm:h-9 rounded-lg bg-white hover:bg-rose-50 text-slate-900 hover:text-rose-700 border border-slate-200 font-extrabold text-sm flex items-center justify-center cursor-pointer disabled:opacity-40"
                             >
                               -
                             </button>
@@ -2123,7 +2170,7 @@ export function MerchantPage() {
                               type="button"
                               onClick={() => void updateProductStock(p.id, 1)}
                               aria-label="زيادة المخزون"
-                              className="w-7 h-7 rounded-lg bg-[#0F172A] hover:bg-slate-800 text-white font-extrabold text-sm flex items-center justify-center cursor-pointer"
+                              className="w-11 h-11 sm:w-9 sm:h-9 rounded-lg bg-[#0F172A] hover:bg-slate-800 text-white font-extrabold text-sm flex items-center justify-center cursor-pointer"
                             >
                               +
                             </button>
@@ -2139,13 +2186,15 @@ export function MerchantPage() {
                             >
                               <I n="edit" s={13} /> تعديل
                             </button>
-                            <button
-                              type="button"
-                              className="btn btn-tryon btn-sm flex-1"
-                              onClick={() => navigate(`/s/${activeShop.slug}/f/${p.id}?preview=merchant`)}
-                            >
-                              <I n="eye" s={13} /> معاينة
-                            </button>
+                            {canShowStoreAccess && (
+                              <button
+                                type="button"
+                                className="btn btn-tryon btn-sm flex-1"
+                                onClick={() => navigate(`/s/${activeShop.slug}/f/${p.id}?preview=merchant`)}
+                              >
+                                <I n="eye" s={13} /> معاينة
+                              </button>
+                            )}
                             <button
                               type="button"
                               className="btn btn-d btn-sm !px-2.5 shrink-0"
@@ -2156,16 +2205,18 @@ export function MerchantPage() {
                               <I n="trash" s={13} />
                             </button>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setAdTone('catchy');
-                              setAdModalProduct(p);
-                            }}
-                            className="w-full py-2 px-3 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition"
-                          >
-                            <span>✨ اكتب إعلان للنظارة</span>
-                          </button>
+                          {canShowStoreAccess && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAdTone('catchy');
+                                setAdModalProduct(p);
+                              }}
+                              className="w-full py-2 px-3 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition"
+                            >
+                              <span>✨ اكتب إعلان للنظارة</span>
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
@@ -2223,7 +2274,7 @@ export function MerchantPage() {
                   </div>
                 ) : (
                   <>
-                    <div className="grid sm:grid-cols-2 gap-3 max-h-[52vh] overflow-y-auto p-1">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[52dvh] overflow-y-auto p-1">
                       {outOfStockProducts.map((p, idx) => {
                         const dimsText = formatOpticalDimensions(resolveProductOpticalDimensions(p));
                         const thumbUrl = resolveStoreFrontUrl(p);
@@ -2357,7 +2408,7 @@ export function MerchantPage() {
             </Modal>
           )}
 
-          {adModalProduct && (() => {
+          {adModalProduct && canShowStoreAccess && (() => {
             const tryCamLink = `${origin}/s/${activeShop.slug}?try=${adModalProduct.id}`;
             const thumbUrl = resolveStoreFrontUrl(adModalProduct);
             return (
@@ -2767,11 +2818,11 @@ export function MerchantPage() {
                         </div>
                         {qBadge(q.status)}
                       </div>
-                      <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex items-center gap-3 mb-2">
-                        <div className="grid-bg rounded-lg p-1.5 border border-[#E2E8F0]">
+                      <div className="rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] p-3 flex flex-wrap items-center gap-3 mb-2">
+                        <div className="grid-bg rounded-lg p-1.5 border border-[#E2E8F0] shrink-0">
                           <MiniGlasses type={q.type} frame={q.frame} lens={q.lens} w={78} />
                         </div>
-                        <div className="flex-1 text-sm">
+                        <div className="flex-1 min-w-[140px] text-sm">
                           <div className="font-bold text-[#0F172A]">{q.frameName}</div>
                           <div className="text-xs text-slate-600">
                             العدسة: {q.lensName}
@@ -2779,7 +2830,7 @@ export function MerchantPage() {
                           </div>
                           <div className="text-xs text-slate-600">الإضافات: {q.extrasTxt}</div>
                         </div>
-                        <div className="text-end">
+                        <div className="text-end shrink-0">
                           <div className="text-[.7rem] text-slate-500">
                             {q.status === 'confirmed' ? 'السعر النهائي' : 'السعر المبدئي'}
                           </div>
@@ -2805,7 +2856,7 @@ export function MerchantPage() {
                         </button>
                         {q.status === 'confirmed' && (
                           <select
-                            className="inp !w-auto !py-1.5 text-xs"
+                            className="inp w-full sm:!w-auto !py-1.5 text-xs"
                             value={q.stage || 'review'}
                             onChange={async (e) => {
                               const v = e.target.value as OrderStage;
@@ -3240,52 +3291,65 @@ export function MerchantPage() {
       )}
 
       {sec === 'store' && (
-        <div className="pb-28">
+        <div className="pb-6">
           <Head
             t="إعدادات المحل"
             sub="رابط المتجر وكود QR، بيانات المحل، اللوجو، الواتساب، والباقة"
           />
 
-          {/* Top Card: Store Link & Printable A5 QR Poster */}
-          <div className="glass rounded-2xl p-5 mb-4 min-w-0">
-            <div className="grid lg:grid-cols-2 gap-5 items-center">
-              <div className="min-w-0">
-                <h3 className="font-extrabold text-[#0F172A] mb-2">رابط المتجر وكود QR</h3>
-                <p className="text-xs text-slate-500 mb-3">
-                  شارك رابط متجرك المباشر مع عملائك أو اطبع بوستر QR جاهز مقاس A5 على كاونتر المحل
-                </p>
-                <div className="flex items-center gap-2 p-3 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] mb-3 min-w-0">
-                  <I n="link" s={18} c="text-[#0284C7] shrink-0" />
-                  <span className="font-mono text-xs sm:text-sm text-[#0F172A] flex-1 min-w-0 break-all text-start" dir="ltr">
-                    {link}
-                  </span>
-                </div>
-                <div className="flex gap-2">
-                  <button type="button" className="btn btn-g flex-1" onClick={copy}>
-                    <I n="copy" s={15} /> نسخ الرابط
-                  </button>
-                  <button type="button" className="btn btn-g flex-1" onClick={() => setModal({ t: 'share', link })}>
-                    <I n="share" s={15} /> مشاركة
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-4 rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-4">
-                <div ref={qrWrapRef} className="shrink-0">
-                  <QR seed={activeShop.slug} />
-                </div>
-                <div className="min-w-0 space-y-2">
-                  <div className="font-extrabold text-[#0F172A] text-sm">بوستر QR دعائي للطباعة (A5)</div>
-                  <p className="text-xs text-slate-600 leading-5">
-                    تصميم جاهز باسم المحل وعبارة: «امسح الكود وجرّب كل نظارات {activeShop.name} على وجهك بالكاميرا 3D»
+          {/* Top Card: Store Link & Printable A5 QR Poster (hidden for pending or non-active stores) */}
+          {canShowStoreAccess ? (
+            <div className="glass rounded-2xl p-4 sm:p-5 mb-4 min-w-0">
+              <div className="grid lg:grid-cols-2 gap-5 items-center">
+                <div className="min-w-0">
+                  <h3 className="font-extrabold text-[#0F172A] mb-2">رابط المتجر وكود QR</h3>
+                  <p className="text-xs text-slate-500 mb-3">
+                    شارك رابط متجرك المباشر مع عملائك أو اطبع بوستر QR جاهز مقاس A5 على كاونتر المحل
                   </p>
-                  <button type="button" className="btn btn-p btn-sm" onClick={downloadQrPng}>
-                    <I n="dl" s={14} /> تحميل بوستر QR (A5)
-                  </button>
+                  <div className="flex items-center gap-2 p-3 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] mb-3 min-w-0">
+                    <I n="link" s={18} c="text-[#0284C7] shrink-0" />
+                    <span className="font-mono text-xs sm:text-sm text-[#0F172A] flex-1 min-w-0 break-all text-start" dir="ltr">
+                      {link}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" className="btn btn-g flex-1 min-w-[110px]" onClick={copy}>
+                      <I n="copy" s={15} /> نسخ الرابط
+                    </button>
+                    <button type="button" className="btn btn-g flex-1 min-w-[110px]" onClick={() => setModal({ t: 'share', link })}>
+                      <I n="share" s={15} /> مشاركة
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-center gap-4 rounded-2xl bg-[#F8F9FA] border border-[#E2E8F0] p-4 text-center sm:text-start">
+                  <div ref={qrWrapRef} className="shrink-0">
+                    <QR seed={activeShop.slug} />
+                  </div>
+                  <div className="min-w-0 space-y-2">
+                    <div className="font-extrabold text-[#0F172A] text-sm">بوستر QR دعائي للطباعة (A5)</div>
+                    <p className="text-xs text-slate-600 leading-5">
+                      تصميم جاهز باسم المحل وعبارة: «امسح الكود وجرّب كل نظارات {activeShop.name} على وجهك بالكاميرا 3D»
+                    </p>
+                    <button type="button" className="btn btn-p btn-sm w-full sm:w-auto" onClick={downloadQrPng}>
+                      <I n="dl" s={14} /> تحميل بوستر QR (A5)
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="glass rounded-2xl p-5 mb-4 border border-amber-200 bg-amber-50/60">
+              <div className="font-extrabold text-[#0F172A] text-sm mb-1">
+                🔒 رابط المتجر العام وكود QR غير متاحين حالياً
+              </div>
+              <p className="text-xs text-slate-600 leading-5">
+                {isPendingShop
+                  ? 'سيتم إتاحة رابط المتجر العام وزر المعاينة وكود QR للطباعة تلقائياً فور تأكيد وتفعيل الإدارة لمتجرك.'
+                  : 'تم إيقاف رابط المتجر العام وكود QR مؤقتاً بسبب انتهاء أو إيقاف الاشتراك.'}
+              </p>
+            </div>
+          )}
 
           {/* Plan & AI Credits Summary Card */}
           <div className="glass rounded-2xl p-5 mb-4 space-y-4">
@@ -3304,7 +3368,15 @@ export function MerchantPage() {
                       متبقي في اشتراكك: <span dir="ltr">{trialDaysLeft}</span> يوماً
                     </span>
                     <span className="text-xs text-slate-500">
-                      {activeShop.status === 'trial' ? 'فترة تجريبية مجانية' : 'اشتراك مفعل'}
+                      {activeShop.status === 'trial'
+                        ? 'فترة تجريبية مجانية'
+                        : activeShop.status === 'pending'
+                        ? 'بانتظار تأكيد الإدارة'
+                        : activeShop.status === 'paused'
+                        ? 'موقوف مؤقتاً'
+                        : activeShop.status === 'expired'
+                        ? 'اشتراك منتهي'
+                        : 'اشتراك مفعل'}
                     </span>
                   </div>
                 </div>
@@ -3499,7 +3571,7 @@ export function MerchantPage() {
               <label className="text-xs font-extrabold text-[#0F172A] block mb-2">
                 سمات المتجر الفاخرة (تظهر فوراً للعملاء)
               </label>
-              <div className="grid grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {STORE_THEMES.map((th) => {
                   const active = (activeShop.themeKey || 'royal_classic') === th.key;
                   return (
@@ -3745,7 +3817,7 @@ export function MerchantPage() {
             <button
               type="button"
               onClick={handleExportBackupCsv}
-              className="btn bg-[#059669] hover:bg-[#047857] text-white btn-sm sm:!px-4 sm:!py-2.5 whitespace-nowrap shrink-0 shadow-xs"
+              className="btn bg-[#059669] hover:bg-[#047857] text-white btn-sm sm:!px-4 sm:!py-2.5 w-full sm:w-auto shrink-0 shadow-xs"
             >
               📥 تحميل نسخة احتياطية من العملاء والنظارات (Excel / CSV)
             </button>
@@ -3786,7 +3858,7 @@ export function MerchantPage() {
         </div>
       )}
 
-      {vipModeOpen && (
+      {vipModeOpen && canShowStoreAccess && (
         <VipInStoreConsultantModal
           shop={activeShop}
           products={shopProducts}

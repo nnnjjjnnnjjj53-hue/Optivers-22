@@ -1280,11 +1280,11 @@ export function FaceTryOnStage({
             <div className="text-xs font-extrabold text-[#0F172A]">
               اختر طريقة المعاينة المباشرة على وجهك الحقيقي:
             </div>
-            <div className="grid grid-cols-2 gap-2 w-full max-w-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-sm">
               <button
                 type="button"
                 onClick={startLiveCamera}
-                className="btn bg-[#0284C7] hover:bg-[#0369A1] text-white !px-2.5 !py-2.5 shadow-sm text-xs sm:text-sm font-bold justify-center whitespace-nowrap active:scale-[0.97] transition-transform duration-150"
+                className="btn bg-[#0284C7] hover:bg-[#0369A1] text-white !px-2.5 !py-2.5 min-h-[44px] shadow-sm text-xs sm:text-sm font-bold justify-center whitespace-nowrap active:scale-[0.97] transition-transform duration-150"
               >
                 <I n="camera" s={15} />{' '}
                 <span>
@@ -1294,12 +1294,12 @@ export function FaceTryOnStage({
               <button
                 type="button"
                 onClick={() => setPhotoCanvasModalOpen(true)}
-                className="px-2.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-[#0F172A] border border-[#E2E8F0] shadow-sm text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap active:scale-[0.97] transition-transform duration-150"
+                className="px-2.5 py-2.5 min-h-[44px] rounded-xl bg-white hover:bg-slate-50 text-[#0F172A] border border-[#E2E8F0] shadow-sm text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap active:scale-[0.97] transition-transform duration-150"
               >
                 <I n="upload" s={15} /> <span>جرّب على صورتك</span>
               </button>
             </div>
-            <label className="text-xs font-bold text-[#0F172A] hover:text-[#0284C7] bg-white px-3.5 py-1 rounded-full border border-[#E2E8F0] shadow-sm cursor-pointer whitespace-nowrap">
+            <label className="min-h-[44px] inline-flex items-center text-xs font-bold text-[#0F172A] hover:text-[#0284C7] bg-white px-4 py-2 rounded-full border border-[#E2E8F0] shadow-sm cursor-pointer whitespace-nowrap">
               أو ارفع صورة سريعاً
               <input
                 type="file"
@@ -1319,8 +1319,8 @@ export function FaceTryOnStage({
         )}
 
         {photoCanvasModalOpen && (
-          <div className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-sm p-3 sm:p-6 overflow-y-auto flex items-center justify-center">
-            <div className="w-full max-w-2xl my-auto">
+          <div className="fixed inset-0 z-[90] bg-black/75 backdrop-blur-sm p-2.5 sm:p-6 overflow-y-auto flex items-center justify-center">
+            <div className="w-full max-w-[95vw] sm:max-w-2xl max-h-[90dvh] overflow-y-auto my-auto rounded-3xl">
               <CustomerPhotoTryOn
                 product={product}
                 initialSubMode="tryon"
@@ -1664,12 +1664,12 @@ export function FaceTryOnStage({
             <button
               type="button"
               onClick={startLiveCamera}
-              className="h-10 px-3 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+              className="h-11 min-w-[44px] px-3 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
             >
               <I n="camera" s={15} /> الكاميرا
             </button>
           ) : (
-            <label className="h-10 px-3 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer">
+            <label className="h-11 min-w-[44px] px-3 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer">
               <I n="upload" s={15} /> صورة
               <input
                 type="file"
@@ -1771,9 +1771,9 @@ export function FaceTryOnStage({
       {/* Instant Screenshot Preview Sheet (Save, Share, Retake, or Order Directly) */}
       {capturedShot && (
         <div className="fixed inset-0 z-50 h-[100dvh] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-4 overflow-y-auto">
-          <div className="w-full max-w-md space-y-3 my-auto">
-            <div className="relative rounded-3xl overflow-hidden border border-white/15 bg-slate-950 max-h-[58vh] flex items-center justify-center">
-              <img src={capturedShot.url} alt="لقطة التجربة" className="w-full h-full object-contain max-h-[58vh]" />
+          <div className="w-full max-w-[95vw] sm:max-w-md space-y-3 my-auto">
+            <div className="relative rounded-3xl overflow-hidden border border-white/15 bg-slate-950 max-h-[58dvh] flex items-center justify-center">
+              <img src={capturedShot.url} alt="لقطة التجربة" className="w-full h-full object-contain max-h-[58dvh]" />
             </div>
 
             {shotToast && (
@@ -1793,7 +1793,7 @@ export function FaceTryOnStage({
               </button>
             )}
 
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <button type="button" onClick={() => handleSaveScreenshot()} className="btn btn-g !py-2.5 text-xs">
                 <I n="dl" s={15} /> حفظ الصورة
               </button>

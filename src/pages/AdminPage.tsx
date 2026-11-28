@@ -256,7 +256,7 @@ export function AdminPage() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-6 text-sm opacity-75">
+      <div className="min-h-[100dvh] flex items-center justify-center p-6 text-sm opacity-75">
         جاري التحقق من جلسة الإدارة...
       </div>
     );
@@ -371,8 +371,8 @@ export function AdminPage() {
   // Strict Admin Gate (NO public signup for admin role)
   if (!session || !isAdminRole(session.role) || session.mfaVerified === false) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-[#F8F9FA]">
-        <div className="glass rounded-3xl p-6 sm:p-8 w-full max-w-md space-y-5 fade">
+      <div className="min-h-[100dvh] flex items-center justify-center p-4 bg-[#F8F9FA]">
+        <div className="glass rounded-3xl p-5 sm:p-8 w-full max-w-md space-y-5 fade">
           <div className="flex items-center gap-3">
             <span className="w-11 h-11 rounded-2xl bg-[#0F172A] text-white flex items-center justify-center">
               <I n="lock" s={22} />
@@ -631,11 +631,50 @@ export function AdminPage() {
     }
   };
 
+  const handleActivateShop = async (s: Shop, dLeft: number) => {
+    if (supabase && s.status === 'pending') {
+      const { error } = await supabase.rpc('admin_activate_shop', { p_shop_id: s.id });
+      if (error) {
+        const msg = String(error.message || '').toUpperCase();
+        if (msg.includes('NOT_AUTHORIZED')) {
+          toast('ليس لديك صلاحية تفعيل المحل');
+          return;
+        }
+        if (msg.includes('SHOP_NOT_FOUND')) {
+          toast('المحل غير موجود');
+          return;
+        }
+        // Fallback if RPC name or signature differs in older environments
+        if (msg.includes('COULD NOT FIND') || msg.includes('DOES NOT EXIST')) {
+          await updateShop(s.id, {
+            status: 'active',
+            days: Math.max(30, dLeft),
+            exp: 'مفعل (شهر)',
+          });
+        } else {
+          console.error('[admin_activate_shop] RPC error:', error);
+          toast('تعذّر تفعيل المحل، حاول مرة أخرى');
+          return;
+        }
+      } else {
+        await hydrateFromSupabase();
+      }
+    } else {
+      await updateShop(s.id, {
+        status: 'active',
+        days: Math.max(30, dLeft),
+        exp: 'مفعل (شهر)',
+      });
+    }
+    await logAudit('تفعيل الاشتراك', `تم تفعيل اشتراك ${s.name}`, s.id);
+    toast(`تم تفعيل اشتراك ${s.name} ✓`);
+  };
+
   const Table = ({ list }: { list: typeof shops }) => (
     <>
-      {/* Desktop Table */}
-      <div className="hidden md:block glass rounded-2xl overflow-x-auto">
-        <table className="w-full text-sm min-w-[1140px]">
+      {/* Desktop Table (1024px+) */}
+      <div className="hidden lg:block glass rounded-2xl overflow-x-auto">
+        <table className="w-full text-sm min-w-[1040px]">
           <thead className="text-xs text-slate-500">
             <tr className="border-b border-[#E2E8F0]">
               {[
@@ -771,15 +810,7 @@ export function AdminPage() {
                       {(s.status === 'pending' || s.status === 'trial' || s.status === 'expired' || s.status === 'paused') && (
                         <button
                           className="btn btn-p btn-sm"
-                          onClick={async () => {
-                            await updateShop(s.id, {
-                              status: 'active',
-                              days: Math.max(30, dLeft),
-                              exp: 'مفعل (شهر)',
-                            });
-                            await logAudit('تفعيل الاشتراك', `تم تفعيل اشتراك ${s.name}`, s.id);
-                            toast(`تم تفعيل اشتراك ${s.name} ✓`);
-                          }}
+                          onClick={() => void handleActivateShop(s, dLeft)}
                         >
                           <I n="check" s={13} /> تفعيل
                         </button>
@@ -844,8 +875,8 @@ export function AdminPage() {
         </table>
       </div>
 
-      {/* Mobile Cards View */}
-      <div className="md:hidden space-y-3">
+      {/* Mobile (1 col) & Tablet (2 cols) Cards View */}
+      <div className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-3">
         {list.map((s) => {
           const dLeft = getShopDaysLeft(s);
           const shopPath = `/s/${s.slug}`;
@@ -855,16 +886,17 @@ export function AdminPage() {
           const waHref = `https://wa.me/${waNum(s.wa)}?text=${encodeURIComponent(
             `مرحباً، معك إدارة منصة OptiVerse بخصوص محل "${s.name}".`
           )}`;
+          const telDigits = String(s.wa || '').replace(/[^\d+]/g, '');
           return (
-            <div key={s.id} className="glass rounded-2xl p-4 space-y-3 border border-[#E2E8F0]">
+            <div key={s.id} className="glass rounded-2xl p-4 space-y-3 border border-[#E2E8F0] min-w-0 flex flex-col">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="font-extrabold text-base text-[#0F172A] flex items-center gap-1.5 flex-wrap">
-                    <span>{s.name}</span>
+                    <span className="break-words">{s.name}</span>
                     {s.isFeatured && <span title="متجر مميز">⭐</span>}
                     {s.isDemoAdminStore && <span className="badge b-info text-[0.65rem]">ديمو</span>}
                   </div>
-                  <div className="text-xs text-slate-500 mt-0.5">
+                  <div className="text-xs text-slate-500 mt-0.5 break-words">
                     {gov} · المالك: {s.ownerName || 'غير محدد'}
                   </div>
                 </div>
@@ -875,32 +907,40 @@ export function AdminPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] text-xs">
-                <div>
+                <div className="min-w-0">
                   <div className="text-slate-500 text-[0.68rem]">الباقة والاشتراك</div>
-                  <div className="font-extrabold text-[#0F172A]">
+                  <div className="font-extrabold text-[#0F172A] truncate">
                     {s.plan} · {s.price} ج.م/ش
                   </div>
                 </div>
-                <div>
+                <div className="min-w-0">
                   <div className="text-slate-500 text-[0.68rem]">استهلاك AI</div>
-                  <div className="font-extrabold text-[#0284C7] tabular-nums">
-                    المستهلك {creditsUsed} / {creditsCap} صورة
+                  <div className="font-extrabold text-[#0284C7] tabular-nums truncate">
+                    {creditsUsed} / {creditsCap} صورة
                   </div>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                {telDigits && (
+                  <a
+                    href={`tel:${telDigits}`}
+                    className="btn btn-g btn-sm flex-1 min-w-[96px] justify-center"
+                  >
+                    📞 اتصال
+                  </a>
+                )}
                 <a
                   href={waHref}
                   target="_blank"
                   rel="noreferrer"
-                  className="btn btn-g btn-sm !text-[#059669] !border-emerald-200 flex-1 justify-center"
+                  className="btn btn-g btn-sm !text-[#059669] !border-emerald-200 flex-1 min-w-[115px] justify-center"
                 >
-                  <I n="msg" s={14} /> 💬 واتساب التاجر
+                  <I n="msg" s={14} /> واتساب
                 </a>
                 <button
                   type="button"
-                  className="btn btn-g btn-sm"
+                  className="btn btn-g btn-sm flex-1 min-w-[105px] justify-center"
                   onClick={() => {
                     const full = `${window.location.origin}${shopPath}`;
                     navigator.clipboard?.writeText(full).then(() => toast('تم نسخ رابط المتجر ✓')).catch(() => toast(full));
@@ -910,7 +950,7 @@ export function AdminPage() {
                 </button>
               </div>
 
-              <div className="flex items-center justify-between gap-3 py-1.5 border-y border-slate-100 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-3 py-1.5 border-y border-slate-100 text-xs">
                 <div className="flex items-center gap-2">
                   <span className="text-slate-600">توصيل</span>
                   <Switch
@@ -935,10 +975,10 @@ export function AdminPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-1.5">
+              <div className="flex flex-wrap gap-1.5 mt-auto">
                 <button
                   type="button"
-                  className="btn btn-g btn-sm col-span-2 !border-teal-200 !text-teal-800 hover:!bg-teal-50 justify-center"
+                  className="btn btn-g btn-sm w-full !border-teal-200 !text-teal-800 hover:!bg-teal-50 justify-center"
                   onClick={() => adminTopUpShopAiCredits(s.id, 50)}
                 >
                   ➕ شحن رصيد AI (+50 صورة)
@@ -946,32 +986,24 @@ export function AdminPage() {
                 {(s.status === 'pending' || s.status === 'trial' || s.status === 'expired' || s.status === 'paused') && (
                   <button
                     type="button"
-                    className="btn btn-p btn-sm justify-center"
-                    onClick={async () => {
-                      await updateShop(s.id, {
-                        status: 'active',
-                        days: Math.max(30, dLeft),
-                        exp: 'مفعل (شهر)',
-                      });
-                      await logAudit('تفعيل الاشتراك', `تم تفعيل اشتراك ${s.name}`, s.id);
-                      toast(`تم تفعيل اشتراك ${s.name} ✓`);
-                    }}
+                    className="btn btn-p btn-sm flex-1 min-w-[100px] justify-center"
+                    onClick={() => void handleActivateShop(s, dLeft)}
                   >
                     <I n="check" s={13} /> تفعيل
                   </button>
                 )}
-                <button type="button" className="btn btn-g btn-sm justify-center" onClick={() => setModal({ t: 'renew', s })}>
+                <button type="button" className="btn btn-g btn-sm flex-1 min-w-[100px] justify-center" onClick={() => setModal({ t: 'renew', s })}>
                   <I n="refresh" s={13} /> تجديد
                 </button>
-                <button type="button" className="btn btn-g btn-sm justify-center" onClick={() => setModal({ t: 'editplan', s })}>
+                <button type="button" className="btn btn-g btn-sm flex-1 min-w-[100px] justify-center" onClick={() => setModal({ t: 'editplan', s })}>
                   <I n="edit" s={13} /> الباقة
                 </button>
-                <button type="button" className="btn btn-g btn-sm justify-center" onClick={() => setModal({ t: 'addpayment', s })}>
+                <button type="button" className="btn btn-g btn-sm flex-1 min-w-[100px] justify-center" onClick={() => setModal({ t: 'addpayment', s })}>
                   <I n="receipt" s={13} /> دفع
                 </button>
                 <button
                   type="button"
-                  className="btn btn-g btn-sm justify-center"
+                  className="btn btn-g btn-sm flex-1 min-w-[100px] justify-center"
                   onClick={async () => {
                     const next = s.status === 'paused' ? 'active' : 'paused';
                     await updateShop(s.id, { status: next });
@@ -986,13 +1018,13 @@ export function AdminPage() {
                   <I n={s.status === 'paused' ? 'play' : 'pause'} s={13} />{' '}
                   {s.status === 'paused' ? 'استئناف' : 'إيقاف'}
                 </button>
-                <button type="button" className="btn btn-p btn-sm col-span-2 justify-center" onClick={() => enterShopAsMerchant(s)}>
+                <button type="button" className="btn btn-p btn-sm w-full justify-center" onClick={() => enterShopAsMerchant(s)}>
                   <I n="enter" s={13} /> دخول كمتجر
                 </button>
                 {!s.isDemoAdminStore && (
                   <button
                     type="button"
-                    className="btn btn-sm col-span-2 justify-center !bg-rose-50 hover:!bg-rose-100 !text-rose-700 !border-rose-300"
+                    className="btn btn-sm w-full justify-center !bg-rose-50 hover:!bg-rose-100 !text-rose-700 !border-rose-300"
                     onClick={() => openDeleteModal(s)}
                   >
                     🗑️ حذف الحساب نهائيًا
@@ -1003,7 +1035,7 @@ export function AdminPage() {
           );
         })}
         {!list.length && (
-          <div className="glass rounded-2xl p-8 text-center text-sm opacity-60">
+          <div className="sm:col-span-2 glass rounded-2xl p-8 text-center text-sm opacity-60">
             لا توجد محلات مسجلة مطابقة للبحث
           </div>
         )}
@@ -1029,7 +1061,7 @@ export function AdminPage() {
         </button>
       }
     >
-      <div className="pb-24">
+      <div className="pb-6">
       {sec === 'over' && (
         <>
           <Head t="نظرة عامة والإيرادات" sub="لوحة مالك منصة OptiVerse">
@@ -1057,7 +1089,7 @@ export function AdminPage() {
               </button>
             </div>
           )}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
             <Stat
               icon="store"
               label="إجمالي المحلات"
@@ -1196,7 +1228,7 @@ export function AdminPage() {
           {/* Global Commerce Rules */}
           <div className="glass rounded-2xl p-5 mb-5">
             <h3 className="font-bold text-[#0F172A] mb-3">الإعدادات التجارية العامة (الفترة التجريبية + السنوي + Top-Up)</h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
               <div>
                 <label className="text-xs text-slate-600">شهور الخصم السنوي</label>
                 <input
@@ -1271,7 +1303,7 @@ export function AdminPage() {
             </button>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {draftPlans.map((p) => (
               <div key={p.id} className="glass rounded-2xl p-5 flex flex-col gap-3">
                 <div className="flex justify-between items-start">
@@ -1392,12 +1424,12 @@ export function AdminPage() {
               <I n="dl" s={16} /> تصدير CSV
             </button>
           </Head>
-          <div className="grid grid-cols-3 gap-3 mb-5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
             <Stat icon="check" label="مُحصّل" value={<Egp v={collectedTotal} />} />
             <Stat icon="bell" tone="b-warn" label="معلّق" value={<Egp v={pendingTotal} />} />
             <Stat icon="x" tone="b-bad" label="متأخر" value={<Egp v={lateTotal} />} />
           </div>
-          <div className="hidden md:block glass rounded-2xl overflow-x-auto">
+          <div className="hidden lg:block glass rounded-2xl overflow-x-auto">
             <table className="w-full text-sm min-w-[640px]">
               <thead className="text-xs text-slate-500">
                 <tr className="border-b border-[#E2E8F0]">
@@ -1438,7 +1470,7 @@ export function AdminPage() {
             </table>
           </div>
 
-          <div className="md:hidden space-y-2.5">
+          <div className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             {payments.map((r) => (
               <div key={r.id} className="glass rounded-2xl p-3.5 border border-[#E2E8F0] space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
@@ -1487,7 +1519,7 @@ export function AdminPage() {
         return (
           <>
             <Head t="إحصائيات التجربة بالذكاء الاصطناعي" sub="بيانات حية من قاعدة البيانات دون أي أرقام افتراضية" />
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
               <Stat icon="eye" label="تجارب اليوم" value={fmt(todayTryonsCount)} />
               <Stat icon="box" label="نظارات مجهزة بالذكاء الاصطناعي" value={fmt(totalAiProcessedFrames)} />
               <Stat icon="share" label="مشاركات للأصدقاء" value={fmt(totalSharesCount)} />
@@ -1531,14 +1563,14 @@ export function AdminPage() {
               تكون مغلقة افتراضياً (OFF) لتبسيط الواجهة ويمكن تفعيلها فورياً لكل التجار والمتاجر من هنا
             </p>
             <div className="divide-y divide-slate-100">
-              <div className="flex items-center justify-between gap-4 py-3">
-                <div>
+              <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+                <div className="min-w-0 flex-1">
                   <div className="font-bold text-sm text-[#0F172A]">تفعيل نظام العدسات الطبية والرعاة</div>
                   <div className="text-xs text-slate-500">
                     إظهار مصفوفة العدسات والرعاة ورفع كشف النظر في متاجر العملاء ولوحات التجار (أو إظهارها كـ قريباً ✨ للتجار عند الإيقاف)
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <button
                     type="button"
                     className="btn btn-g btn-sm text-xs"
@@ -1974,9 +2006,10 @@ export function AdminPage() {
                 )}
               </div>
             </div>
-            <div className="glass rounded-2xl p-5">
+            <div className="glass rounded-2xl p-5 min-w-0">
               <h3 className="font-bold text-[#0F172A] mb-3">الصلاحيات</h3>
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[320px]">
                 <thead className="text-xs text-slate-500">
                   <tr>
                     <th className="text-start p-2">الدور</th>
@@ -1990,7 +2023,7 @@ export function AdminPage() {
                     <tr key={roleName} className="border-t border-slate-100">
                       <td className="p-2 font-bold">{roleName}</td>
                       {vals.map((v, i) => (
-                        <td key={i} className="text-center">
+                        <td key={i} className="text-center py-1">
                           <button
                             type="button"
                             onClick={() =>
@@ -2003,7 +2036,7 @@ export function AdminPage() {
                               }))
                             }
                             className={
-                              'w-7 h-7 rounded-lg inline-flex items-center justify-center cursor-pointer ' +
+                              'w-11 h-11 rounded-lg inline-flex items-center justify-center cursor-pointer ' +
                               (v ? 'b-acc' : 'bg-[#F8F9FA] border border-[#E2E8F0] text-slate-400')
                             }
                           >
@@ -2015,6 +2048,7 @@ export function AdminPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
               <button
                 className="btn btn-p mt-4"
                 onClick={async () => {
@@ -2031,11 +2065,11 @@ export function AdminPage() {
             <h3 className="font-bold text-[#0F172A] mb-3">سجل العمليات الحساسة (Audit Log)</h3>
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {auditLogs.map((log) => (
-                <div key={log.id} className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] gap-3">
-                  <div>
+                <div key={log.id} className="flex flex-wrap items-center justify-between text-xs p-2.5 rounded-xl bg-[#F8F9FA] border border-[#E2E8F0] gap-2">
+                  <div className="min-w-0 flex-1 break-words">
                     <b className="text-[#0284C7]">{log.action}</b> — <span>{log.details}</span>
                   </div>
-                  <span className="text-slate-500 whitespace-nowrap">{log.createdAt}</span>
+                  <span className="text-slate-500 whitespace-nowrap shrink-0">{log.createdAt}</span>
                 </div>
               ))}
               {!auditLogs.length && (
@@ -2083,10 +2117,10 @@ export function AdminPage() {
               />
             </div>
 
-            <div className="flex items-center gap-2 pt-2">
+            <div className="flex flex-wrap items-center gap-2 pt-2">
               <button
                 type="button"
-                className="btn btn-g flex-1 justify-center"
+                className="btn btn-g flex-1 min-w-[110px] justify-center"
                 onClick={closeDeleteModal}
                 disabled={isDeletingShop}
               >
@@ -2094,7 +2128,7 @@ export function AdminPage() {
               </button>
               <button
                 type="button"
-                className="btn flex-1 justify-center !bg-rose-600 hover:!bg-rose-700 !text-white font-extrabold disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+                className="btn flex-1 min-w-[130px] justify-center !bg-rose-600 hover:!bg-rose-700 !text-white font-extrabold disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
                 disabled={deleteConfirmInput.trim() !== shopToDelete.name.trim() || isDeletingShop}
                 onClick={handleConfirmDeleteShop}
               >

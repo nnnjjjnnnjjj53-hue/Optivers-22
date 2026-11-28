@@ -2998,12 +2998,12 @@ export function BulkFrameUploader({
             onClick={() => setIsQueueModalOpen(false)}
           >
             <div
-              className="pop bg-white rounded-3xl max-w-2xl w-full my-auto shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[88vh] text-[#0F172A]"
+              className="pop bg-white rounded-3xl max-w-[95vw] sm:max-w-2xl w-full my-auto shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90dvh] text-[#0F172A]"
               style={{ backgroundColor: '#FFFFFF' }}
               onClick={(e) => e.stopPropagation()}
             >
               {/* Modal Header with clear X minimize button */}
-              <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-200 bg-[#F8F9FA] shrink-0">
+              <div className="flex items-center justify-between gap-3 px-4 sm:px-5 py-4 border-b border-slate-200 bg-[#F8F9FA] shrink-0">
                 <div className="flex items-center gap-2.5 min-w-0">
                   {processing ? (
                     <span className="w-5 h-5 rounded-full border-[2.5px] border-[#0284C7] border-t-transparent animate-spin shrink-0" />
@@ -3031,7 +3031,7 @@ export function BulkFrameUploader({
                   type="button"
                   onClick={() => setIsQueueModalOpen(false)}
                   aria-label="تصغير نافذة المعالجة"
-                  className="w-9 h-9 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-extrabold flex items-center justify-center cursor-pointer shrink-0 shadow-xs"
+                  className="w-11 h-11 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-extrabold flex items-center justify-center cursor-pointer shrink-0 shadow-xs"
                 >
                   ✕
                 </button>
@@ -3146,8 +3146,8 @@ export function BulkFrameUploader({
                 queueAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
               }, 80);
             }}
-            style={{ position: 'fixed', bottom: 84, right: 16, zIndex: 9990 }}
-            className="px-4 py-2.5 rounded-full bg-[#0F172A] hover:bg-slate-800 text-white border border-sky-400/50 shadow-2xl flex items-center gap-2 text-xs font-extrabold cursor-pointer transition active:scale-95"
+            style={{ position: 'fixed', bottom: 'calc(5.25rem + env(safe-area-inset-bottom))', right: 16, zIndex: 9990 }}
+            className="min-h-[44px] px-4 py-2.5 rounded-full bg-[#0F172A] hover:bg-slate-800 text-white border border-sky-400/50 shadow-2xl flex items-center gap-2 text-xs font-extrabold cursor-pointer transition active:scale-95"
           >
             <span className="w-3.5 h-3.5 rounded-full border-2 border-amber-300 border-t-transparent animate-spin shrink-0" />
             <span>

@@ -988,20 +988,56 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
         style={{ transform: 'scaleX(-1)' }}
       />
 
-      {/* Arabic True-to-Scale 1:1 Smart Fit Match Indicator */}
-      {active && fitIndicator && showDebugBadge && (
-        <div className="absolute top-16 end-3 z-20 pointer-events-none">
-          <span
-            className={
-              'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-extrabold backdrop-blur-md border shadow-lg ' +
-              (fitIndicator.status === 'ideal'
-                ? 'bg-[#059669]/95 border-emerald-300 text-white'
-                : 'bg-[#D97706]/95 border-amber-300 text-white')
-            }
-          >
-            <span className="w-2 h-2 rounded-full shrink-0 bg-white" />
-            <span>{fitIndicator.label}</span>
-          </span>
+      {/* Combined Top Fit & Face Detection Row (Zero overlap on 360px mobile) */}
+      {active && showDebugBadge && (
+        <div
+          dir="rtl"
+          className="absolute top-16 inset-x-3 z-20 flex flex-wrap items-start justify-between gap-1.5 pointer-events-none"
+        >
+          <div className="flex flex-col items-start gap-1.5 pointer-events-auto max-w-full">
+            <button
+              type="button"
+              onClick={() => setDebugOpen((o) => !o)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 min-h-[36px] rounded-lg bg-black/65 backdrop-blur-md border border-white/15 text-[0.7rem] font-semibold text-white cursor-pointer max-w-full"
+            >
+              <span
+                className={
+                  'w-2 h-2 rounded-full shrink-0 ' +
+                  (debugStats.faceDetected ? 'bg-emerald-400' : 'bg-amber-400')
+                }
+              />
+              <span className="truncate">
+                {debugStats.faceDetected ? 'تم اكتشاف الوجه ✓' : 'وجّه الكاميرا لوجهك في إضاءة واضحة 👓'}
+              </span>
+            </button>
+
+            {debugOpen && (
+              <div dir="ltr" className="px-2.5 py-2 rounded-lg bg-slate-950/88 border border-white/15 text-[0.68rem] font-mono text-slate-200 space-y-0.5 shadow-lg">
+                <div>renderer: {debugStats.backend}</div>
+                <div>delegate: {debugStats.delegate}</div>
+                <div>
+                  video: {debugStats.videoW}x{debugStats.videoH}
+                </div>
+                <div>FPS: {debugStats.fps}</div>
+                <div>landmarks: {debugStats.landmarksCount}</div>
+                <div>lastError: {debugStats.lastError}</div>
+              </div>
+            )}
+          </div>
+
+          {fitIndicator && (
+            <span
+              className={
+                'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-extrabold backdrop-blur-md border shadow-lg max-w-full ' +
+                (fitIndicator.status === 'ideal'
+                  ? 'bg-[#059669]/95 border-emerald-300 text-white'
+                  : 'bg-[#D97706]/95 border-amber-300 text-white')
+              }
+            >
+              <span className="w-2 h-2 rounded-full shrink-0 bg-white" />
+              <span className="truncate">{fitIndicator.label}</span>
+            </span>
+          )}
         </div>
       )}
 
@@ -1009,14 +1045,14 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
       {active && product.frameType === 'clip_on' && Boolean(product.clipOnImagePath) && (
         <div
           className={
-            'absolute inset-x-0 z-20 flex justify-center pointer-events-none ' +
-            (showControlsOverlay ? 'bottom-52' : 'bottom-3')
+            'absolute inset-x-0 z-20 flex justify-center pointer-events-none px-3 ' +
+            (showControlsOverlay ? 'bottom-56 sm:bottom-52' : 'bottom-3')
           }
         >
           <button
             type="button"
             onClick={() => setClipOnActive((v) => !v)}
-            className="pointer-events-auto px-4 py-2 rounded-xl bg-white/95 hover:bg-white text-slate-900 border border-slate-200 shadow-lg text-xs font-extrabold flex items-center gap-2 transition-transform duration-150 active:scale-[0.97] cursor-pointer"
+            className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-xl bg-white/95 hover:bg-white text-slate-900 border border-slate-200 shadow-lg text-xs font-extrabold flex items-center gap-2 transition-transform duration-150 active:scale-[0.97] cursor-pointer"
           >
             <span>{clipOnActive ? 'إزالة الغيار 👓' : 'تركيب غيار الشمس 🕶️'}</span>
           </button>
@@ -1027,13 +1063,13 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
       {showControlsOverlay && carouselProducts && carouselProducts.length > 0 && (
         <div className="absolute bottom-0 inset-x-0 z-30 pt-10 pb-[max(1rem,env(safe-area-inset-bottom))] px-3 bg-gradient-to-t from-black/70 via-black/25 to-transparent flex flex-col items-center gap-3 pointer-events-none">
           {active && (onCaptureShot || onQuickShare || onOrderProduct) && (
-            <div className="pointer-events-auto flex items-center justify-center gap-2.5 sm:gap-3.5">
+            <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 sm:gap-3.5">
               {onQuickShare && (
                 <button
                   type="button"
                   disabled={shotBusy}
                   onClick={onQuickShare}
-                  className="h-10 px-3.5 rounded-full bg-black/45 hover:bg-black/65 disabled:opacity-60 backdrop-blur-md border border-white/25 text-white font-bold text-xs shadow-lg flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition-transform duration-150 active:scale-[0.97]"
+                  className="h-11 min-w-[44px] px-3.5 rounded-full bg-black/45 hover:bg-black/65 disabled:opacity-60 backdrop-blur-md border border-white/25 text-white font-bold text-xs shadow-lg flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap transition-transform duration-150 active:scale-[0.97]"
                 >
                   <I n="share" s={14} /> <span>مشاركة</span>
                 </button>
@@ -1057,7 +1093,7 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
                 <button
                   type="button"
                   onClick={() => onOrderProduct(product.id)}
-                  className="h-10 px-3.5 rounded-full bg-[#FAF8F5] hover:bg-white text-[#0F172A] border border-white/40 font-extrabold text-xs shadow-lg flex items-center gap-1.5 cursor-pointer whitespace-nowrap transition-transform duration-150 active:scale-[0.97]"
+                  className="h-11 min-w-[44px] px-3.5 rounded-full bg-[#FAF8F5] hover:bg-white text-[#0F172A] border border-white/40 font-extrabold text-xs shadow-lg flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap transition-transform duration-150 active:scale-[0.97]"
                 >
                   <I n="bag" s={14} /> <span>اطلب الآن</span>
                 </button>
@@ -1118,38 +1154,6 @@ export const VideoTryOnCanvas = forwardRef<VideoTryOnHandle, VideoTryOnCanvasPro
         </div>
       )}
 
-      {showDebugBadge && active && (
-        <div className="absolute top-16 start-3 z-20 flex flex-col items-start gap-1.5" dir="rtl">
-          <button
-            type="button"
-            onClick={() => setDebugOpen((o) => !o)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-black/65 backdrop-blur-md border border-white/15 text-[0.7rem] font-semibold text-white cursor-pointer"
-          >
-            <span
-              className={
-                'w-2 h-2 rounded-full shrink-0 ' +
-                (debugStats.faceDetected ? 'bg-emerald-400' : 'bg-amber-400')
-              }
-            />
-            <span>
-              {debugStats.faceDetected ? 'تم اكتشاف الوجه ✓' : 'وجّه الكاميرا لوجهك في إضاءة واضحة 👓'}
-            </span>
-          </button>
-
-          {debugOpen && (
-            <div dir="ltr" className="px-2.5 py-2 rounded-lg bg-slate-950/88 border border-white/15 text-[0.68rem] font-mono text-slate-200 space-y-0.5 shadow-lg">
-              <div>renderer: {debugStats.backend}</div>
-              <div>delegate: {debugStats.delegate}</div>
-              <div>
-                video: {debugStats.videoW}x{debugStats.videoH}
-              </div>
-              <div>FPS: {debugStats.fps}</div>
-              <div>landmarks: {debugStats.landmarksCount}</div>
-              <div>lastError: {debugStats.lastError}</div>
-            </div>
-          )}
-        </div>
-      )}
     </>
   );
 });
